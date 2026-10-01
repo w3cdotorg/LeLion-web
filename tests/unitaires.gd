@@ -50,6 +50,7 @@ func _run() -> void:
 	_tester_placement_pseudos()
 	_tester_bilan_manche()
 	_tester_manches_enchainees()
+	_tester_transport_enet()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2440,6 +2441,90 @@ func _signature_protocole() -> PackedStringArray:
 		Territoire.OCTETS_PAR_CHANGEMENT])
 	lignes.append("balise " + load("res://Scripts/Decouverte.gd").encoder_balise("V", 1, 2, 3, true, 0, "P").get_string_from_utf8())
 	return lignes
+
+
+## Phase 1 du jeu en ligne : le transport ENet, seul (sans `Reseau` ni `SceneMultiplayer`) : son code,
+## l'ouverture du canal, le délai d'un client sans hôte, la libération d'un pair figé (I1), le départ
+## (DISCONNECT après la file, servi par `servir()`), la fermeture immédiate.
+func _tester_transport_enet() -> void:
+	print("-- Transport ENet (phase 1)")
+	_check(TransportENet.lire_code(" 127.000.0.1 :17785") == {"ip": "127.0.0.1", "port": 17785}
+		and TransportENet.lire_code("192.168.1.10") == {"ip": "192.168.1.10", "port": TransportENet.PORT},
+		"un code ENet : une IPv4 normalisée et son port, ou le port par défaut")
+	var mauvais := ["", "lelion.local:7777", "192.168.1:7777", "::1", "[::1]:7777", "127.0.0.1:", "127.0.0.1:0",
+		"127.0.0.1:65536", "127.0.0.1:77a", "127.0.0.1:-5", "127.0.0.1:1:2", "0.0.0.0:7777"]
+	_check(mauvais.all(func(c: String) -> bool: return TransportENet.lire_code(c).is_empty()),
+		"refusés : un nom d'hôte, une IPv4 incomplète ou injoignable, une IPv6, un port vide, nul, trop grand ou non numérique")
+	var refuse := TransportENet.new()
+	_check(refuse.rejoindre("lelion.local") == ERR_INVALID_PARAMETER and refuse.pair() == null and not refuse.servir(),
+		"un code refusé n'ouvre rien (aucune résolution de nom)")
+
+	var port := 17785
+	var hote := TransportENet.new(port, 2)
+	var codes: Array[String] = []
+	hote.pret.connect(func(code: String) -> void: codes.append(code))
+	_check(hote.heberger() == OK and codes == ["127.0.0.1:%d" % port] and hote.pair() is ENetMultiplayerPeer and hote.servir(),
+		"l'hôte ouvre sa session : « pret » part avec le code de ce poste (%s)" % [codes])
+	var occupe := TransportENet.new(port, 2)
+	_check(occupe.heberger() != OK and occupe.pair() == null, "un port déjà pris : l'erreur d'ENet, rien d'ouvert (ligne ERROR attendue)")
+	var connectes: Array[int] = []
+	var partis: Array[int] = []
+	hote.pair().peer_connected.connect(func(id: int) -> void: connectes.append(id))
+	hote.pair().peer_disconnected.connect(func(id: int) -> void: partis.append(id))
+
+	var fige := TransportENet.new()
+	var ouverts := [0]
+	fige.connecte.connect(func() -> void: ouverts[0] += 1)
+	_check(fige.rejoindre("127.0.0.1:%d" % port) == OK, "(pré-condition) un client part vers l'hôte")
+	_check(_servir_transports([hote, fige], func() -> bool: return ouverts[0] == 1 and connectes.size() == 1, 2.0),
+		"le canal s'ouvre : « connecte » chez le client, le pair chez l'hôte")
+	# I1 : le client ne répond plus du tout (ni servi ni relevé) ; l'hôte le libère : il part sur-le-champ
+	hote.liberer(connectes[0])
+	_check(partis == [connectes[0]], "un pair libéré qui ne répond plus part pendant l'appel, sans accusé de réception (I1)")
+	fige.clore()
+	_check(fige.pair() == null and not fige.servir(), "clore() ferme tout de suite")
+
+	var partant := TransportENet.new()
+	partant.rejoindre("127.0.0.1:%d" % port)
+	_check(_servir_transports([hote, partant], func() -> bool: return connectes.size() == 2, 2.0), "(pré-condition) un autre client est connecté")
+	partant.quitter()
+	_check(partant.servir() and partant.pair() != null, "quitter() : le départ part en arrière-plan, servi par servir()")
+	var depart_a := Time.get_ticks_msec()
+	_check(_servir_transports([hote, partant], func() -> bool: return partis.size() == 2 and partant.pair() == null, 1.5),
+		"l'hôte reçoit le départ ; le client se ferme une fois le départ reçu (%d ms)" % (Time.get_ticks_msec() - depart_a))
+
+	var seul := TransportENet.new()
+	seul.delai_canal = 0.3
+	var echecs: Array[String] = []
+	seul.echec.connect(func(raison: String) -> void: echecs.append(raison))
+	_check(seul.rejoindre("127.0.0.1:%d" % (port + 1)) == OK, "(pré-condition) un client part vers un port sans hôte")
+	_servir_transports([seul], func() -> bool: return not echecs.is_empty(), 1.0)
+	_check(echecs == [Transport.ECHEC_DELAI], "sans hôte : « echec » (délai du canal) (%s)" % [echecs])
+	seul.quitter()
+	var muet := TransportENet.new()
+	muet.delai_canal = 0.1
+	muet.echec.connect(func(raison: String) -> void: echecs.append(raison))
+	muet.rejoindre("127.0.0.1:%d" % (port + 1))
+	muet.quitter()
+	_servir_transports([muet], func() -> bool: return false, 0.3)
+	_check(echecs.size() == 1 and muet.pair() == null and seul.pair() == null,
+		"quitter() pendant l'attente du canal : fermé aussitôt, plus aucun signal ensuite")
+	hote.quitter()
+	_check(not hote.servir() and hote.pair() == null, "un hôte sans client connecté se ferme aussitôt")
+
+
+## Sert les transports `transports` (leur pair relevé, `servir()`) jusqu'à ce que `condition` soit
+## vraie, `delai` secondes au plus ; renvoie sa dernière valeur.
+func _servir_transports(transports: Array, condition: Callable, delai: float) -> bool:
+	var fin := Time.get_ticks_msec() + int(delai * 1000.0)
+	while not condition.call() and Time.get_ticks_msec() < fin:
+		for t: Transport in transports:
+			var p := t.pair()
+			if p != null and p.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+				p.poll()
+			t.servir()
+		OS.delay_msec(5)
+	return condition.call()
 
 
 ## Les fichiers du dossier `dossier` qui finissent par `suffixe`, triés.
