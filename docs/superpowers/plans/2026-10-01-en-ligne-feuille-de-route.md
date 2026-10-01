@@ -107,3 +107,38 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
   par identifiant ; plafonner la dépense ou poser des alertes si une carte est exigée.
 - Workers Logs : un événement par invocation du Durable Object, sur 200 000 par jour.
 - Le job CI du Worker n'a pas encore tourné sur GitHub avant le push de la phase 2.
+
+### Notes de la revue de la phase 3 (pour les phases 3 bis, 4 et 6)
+
+**Phase 3 bis** (retrait de la découverte) :
+
+- Décider si `adresses_hote` passe dans `TransportENet` (l'hôte ENet du desktop afficherait ses
+  adresses locales, au lieu de `127.0.0.1:7777` qui ne vaut que pour lui) plutôt que d'être supprimé
+  avec `Decouverte`.
+
+**Phase 4** (`TransportWebRTC`) :
+
+- Traiter `erreur delai` côté client (arrivée non ouverte en 30 s) et le `depart` qui suit côté hôte.
+- Échec de création côté hôte avant `pret` (`erreur quota|debit|origine`, Worker injoignable) : le
+  contrat actuel (`Transport.echec` « chez un client », `_sur_transport_echec` seulement si
+  `_connexion_en_cours`) ne le route pas. Permettre `echec` chez l'hôte jusqu'à `pret`, et le router en
+  `connexion_echouee` + `raison_echec` (§9 : « Trop de parties en ce moment »), docstrings à jour.
+- `en_ligne()` (pair ≠ Offline) est faux pour un client WebRTC entre `rejoindre_partie` et `bienvenue`
+  (pair posé tard) ; l'écran ne doit pas s'y fier pendant la connexion.
+- Sur le Web, un code `ip:port` doit être refusé proprement (ERR_INVALID_PARAMETER, message de format).
+- `EcranEnLigne.creer_partie` ouvre le salon dès que `heberger` rend OK : avec WebRTC, un état
+  CRÉATION qui attend `pret` (le salon n'écoute pas `connexion_echouee`) ; émettre `salon_change` sur
+  `pret` (le salon relit `code_partie` à chaque affichage).
+- *Copier le lien* sous Safari/WebKit : Godot traite le clic hors du gestionnaire d'événement du
+  navigateur, `writeText` peut être refusé faute de geste de l'utilisateur ; à tester sous WebKit
+  (Playwright).
+
+**Phase 6** (mobiles) :
+
+- Le focus de l'accueil va à `bouton_creer`, caché sur mobile : passer par une aide qui choisit le
+  premier contrôle visible.
+- À 844×390, l'échelle est 0,35 : Rejoindre et Copier le lien font environ 22 à 25 px de haut (moins
+  que les 44 px d'une cible tactile).
+- Le clavier virtuel couvre le champ du code et le message.
+- La rangée d'invitation du salon touche le bas de l'écran (zone sûre).
+- Coller dans un champ Godot sur mobile est peu fiable : le lien d'invitation est le chemin principal.
