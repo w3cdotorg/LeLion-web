@@ -1,11 +1,14 @@
 extends Control
 ## Écran titre : difficulté et niveau se choisissent (mémorisés), Jouer lance la partie,
-## Multijoueur ouvre l'écran Réseau. Les niveaux affichent le record pour la difficulté choisie.
+## Multijoueur ouvre l'écran En ligne. Les niveaux affichent le record pour la difficulté choisie.
 ## `_ready` remet aussi ce poste hors réseau et le solo (`GameState.configurer_solo()` et l'écran
-## 2000×648), même au retour d'une bataille ou de l'écran Réseau.
+## 2000×648), même au retour d'une bataille ou de l'écran En ligne. Une page ouverte sur un lien
+## d'invitation (`?salle=`, spec §4.4 du jeu en ligne) passe tout de suite à l'écran En ligne, le code
+## rempli, une seule fois par lancement.
 
 const SCENE_JEU := "res://Scenes/Main.tscn"
-const SCENE_RESEAU := "res://Scenes/EcranReseau.tscn"
+const SCENE_EN_LIGNE := "res://Scenes/EcranEnLigne.tscn"
+const _EcranEnLigne := preload("res://Scripts/EcranEnLigne.gd")
 const DELAI_DEMO := 15.0
 const SCENE_REGLAGES := preload("res://Scenes/Reglages.tscn")
 
@@ -25,7 +28,7 @@ var demo_autorisee := true
 
 func _ready() -> void:
 	get_tree().paused = false
-	# Retour depuis l'écran Réseau, le salon ou une manche quittée par le menu local, sans signal de
+	# Retour depuis l'écran En ligne, le salon ou une manche quittée par le menu local, sans signal de
 	# `Reseau` : ce poste revient hors réseau AVANT de remettre le solo. Sinon un ancien client
 	# relancerait un solo où `multiplayer.is_server()` est faux (ennemis, pastilles, gerbe et chocs
 	# inertes), et un ancien hôte émettrait encore sa balise et accepterait des joueurs.
@@ -59,6 +62,10 @@ func _ready() -> void:
 	choisir_difficulte(GameState.difficulte_courante)
 	choisir_niveau(GameState.niveau_courant)
 	bouton_jouer.grab_focus()
+	var code := CodeSalle.prendre_code_de_la_page()
+	if not code.is_empty():
+		_EcranEnLigne.code_a_l_arrivee = code
+		ouvrir_en_ligne.call_deferred()
 
 
 ## Attract mode : sans action pendant DELAI_DEMO secondes, le jeu se lance en démo.
@@ -91,15 +98,15 @@ func _creer_bouton_multijoueur() -> Button:
 	bouton.offset_bottom = -24.0
 	bouton.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	bouton.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	bouton.pressed.connect(ouvrir_reseau)
+	bouton.pressed.connect(ouvrir_en_ligne)
 	add_child(bouton)
 	bouton_jouer.focus_neighbor_right = bouton_jouer.get_path_to(bouton)
 	bouton.focus_neighbor_left = bouton.get_path_to(bouton_jouer)
 	return bouton
 
 
-func ouvrir_reseau() -> void:
-	get_tree().change_scene_to_file(SCENE_RESEAU)
+func ouvrir_en_ligne() -> void:
+	get_tree().change_scene_to_file(SCENE_EN_LIGNE)
 
 
 func lancer_demo(changer_scene := true) -> void:

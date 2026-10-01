@@ -1,0 +1,133 @@
+[gd_scene load_steps=4 format=3 uid="uid://dlelionenligne"]
+
+[ext_resource type="Script" path="res://Scripts/EcranEnLigne.gd" id="1_enligne"]
+
+[sub_resource type="Gradient" id="Gradient_ciel"]
+offsets = PackedFloat32Array(0, 0.55, 1)
+colors = PackedColorArray(0.09, 0.1, 0.24, 1, 0.42, 0.25, 0.43, 1, 0.9, 0.5, 0.32, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_ciel"]
+gradient = SubResource("Gradient_ciel")
+fill_to = Vector2(0, 1)
+
+[node name="EcranEnLigne" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_enligne")
+
+[node name="Ciel" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = SubResource("GradientTexture2D_ciel")
+
+[node name="Centre" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Colonne" type="VBoxContainer" parent="Centre"]
+layout_mode = 2
+theme_override_constants/separation = 28
+alignment = 1
+
+[node name="Titre" type="Label" parent="Centre/Colonne"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
+theme_override_font_sizes/font_size = 110
+text = "EN_LIGNE"
+horizontal_alignment = 1
+
+[node name="RangeePseudo" type="HBoxContainer" parent="Centre/Colonne"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="Etiquette" type="Label" parent="Centre/Colonne/RangeePseudo"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 0.75)
+theme_override_font_sizes/font_size = 30
+text = "RESEAU_PSEUDO"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="Pseudo" type="LineEdit" parent="Centre/Colonne/RangeePseudo"]
+custom_minimum_size = Vector2(520, 72)
+layout_mode = 2
+theme_override_font_sizes/font_size = 34
+max_length = 12
+
+[node name="Creer" type="Button" parent="Centre/Colonne"]
+custom_minimum_size = Vector2(520, 80)
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 38
+text = "ENLIGNE_CREER"
+
+[node name="Ou" type="Label" parent="Centre/Colonne"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 0.75)
+theme_override_font_sizes/font_size = 30
+text = "ENLIGNE_OU"
+horizontal_alignment = 1
+
+[node name="RangeeCode" type="HBoxContainer" parent="Centre/Colonne"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="Etiquette" type="Label" parent="Centre/Colonne/RangeeCode"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 0.75)
+theme_override_font_sizes/font_size = 30
+text = "ENLIGNE_CODE"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="Code" type="LineEdit" parent="Centre/Colonne/RangeeCode"]
+custom_minimum_size = Vector2(420, 72)
+layout_mode = 2
+theme_override_font_sizes/font_size = 34
+max_length = 21
+
+[node name="Rejoindre" type="Button" parent="Centre/Colonne/RangeeCode"]
+custom_minimum_size = Vector2(260, 72)
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "RESEAU_REJOINDRE"
+
+[node name="Message" type="Label" parent="Centre/Colonne"]
+custom_minimum_size = Vector2(1400, 90)
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0.1, 0.05, 0.12, 0.85)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 30
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="BoutonRetour" type="Button" parent="."]
+layout_mode = 1
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 284.0
+offset_bottom = 100.0
+theme_override_font_sizes/font_size = 26
+text = "RETOUR"
+
+[connection signal="pressed" from="BoutonRetour" to="." method="retour"]
+[connection signal="pressed" from="Centre/Colonne/Creer" to="." method="creer_partie"]
+[connection signal="text_submitted" from="Centre/Colonne/RangeePseudo/Pseudo" to="." method="_sur_pseudo_valide"]
+[connection signal="pressed" from="Centre/Colonne/RangeeCode/Rejoindre" to="." method="rejoindre"]
+[connection signal="text_submitted" from="Centre/Colonne/RangeeCode/Code" to="." method="rejoindre" unbinds=1]
