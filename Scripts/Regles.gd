@@ -44,7 +44,7 @@ func taille_ecran() -> Vector2i:
 
 ## Met l'écran à `taille` (`content_scale_size`, spec §7) et, dans une fenêtre (ni plein écran, ni
 ## maximisée, ni headless) : quand l'écran change de format, règle la hauteur de la fenêtre sur le
-## nouveau format en gardant sa largeur (hors du solo, écran Réseau, salon, bataille en 16:9, l'écran ne
+## nouveau format en gardant sa largeur (hors du solo, écran En ligne, salon, bataille en 16:9, l'écran ne
 ## s'affiche plus avec des bandes dans la fenêtre du solo : 1400×454 devient 1400×788, et le titre la
 ## rend au solo) ; puis, toujours, la garde dans la zone utile de son écran (M7 de la revue finale 14 :
 ## sans la barre des tâches, barre de titre comprise), réduite au même format et recentrée au besoin (une
