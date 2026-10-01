@@ -85,7 +85,10 @@ gamepad, with the solo controls; Esc opens a local menu that does not pause the 
 
 Until online play lands (in the browser, by room code or invitation link), run the game from the
 editor (`godot .`) on each computer: **Multiplayer** opens the Online screen, where one player
-creates a game and the others join it with the host's address as the code (`192.168.1.20:7777`).
+creates a game and the others join it with the host's address as the code: the host's local IP
+address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
+followed by `:7777` (`192.168.1.20:7777`). The host's lobby shows `127.0.0.1:7777`, which only works
+on the host's own computer.
 Ready-made Windows, macOS and Linux builds of the LAN version are on
 [LeLion-multi's releases](https://github.com/w3cdotorg/LeLion-multi/releases/latest) (version 0.19).
 
