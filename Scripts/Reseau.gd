@@ -464,10 +464,11 @@ func exclure(id: int) -> void:
 	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_liberer.bind(id, _generation))
 
 
-## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la même session
-## (`generation`) : son silence n'est plus écouté, et son transport le ferme sur-le-champ, sans attendre
-## d'accusé de réception (I1, revue finale phase 14 : un pair figé, qui charge ou compile ses shaders,
-## ou mort n'en enverra pas) ; son départ part aussitôt par `peer_disconnected` (`_sur_pair_deconnecte`).
+## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la
+## même session (`generation`) : son silence n'est plus écouté, et son transport le ferme sur-le-champ,
+## sans attendre d'accusé de réception (I1, revue finale phase 14 : un pair figé, qui charge ou compile
+## ses shaders, ou mort n'en enverra pas) ; son départ part aussitôt par `peer_disconnected`
+## (`_sur_pair_deconnecte`).
 func _liberer(id: int, generation: int) -> void:
 	if generation != _generation or _transport == null or not multiplayer.is_server() or not multiplayer.get_peers().has(id):
 		return

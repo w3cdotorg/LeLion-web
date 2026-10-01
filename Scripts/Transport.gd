@@ -8,7 +8,9 @@ extends RefCounted
 ## `TransportWebRTC` (l'export Web, phase 4).
 ##
 ## Contrat commun : `heberger()` ou `rejoindre()` une seule fois par objet ; `servir()` à chaque
-## image tant qu'il renvoie vrai (session ouverte, ou départ en cours après `quitter()`) ; après
+## image tant qu'il renvoie vrai (session ouverte, ou départ en cours après `quitter()`) ; `servir()`
+## faux sans `quitter()` ni `clore()` : la session est perdue (le transport s'est fermé de lui-même),
+## `Reseau` la traite comme la perte de l'hôte (un échec de connexion avant l'inscription). Après
 ## `quitter()` ou `clore()`, plus aucun signal.
 
 ## Chez l'hôte : la session existe, `code` est ce qu'un client donne à `rejoindre()`.
@@ -16,7 +18,8 @@ signal pret(code: String)
 ## Chez un client : le canal vers l'hôte est ouvert, la poignée de main de `SceneMultiplayer` peut
 ## partir.
 signal connecte()
-## Chez un client : le canal ne s'ouvrira pas ; `raison` est une des constantes ECHEC_*.
+## Chez un client : le canal ne s'ouvrira pas ; `raison` est une des constantes ECHEC_*. Le transport ne
+## se ferme pas seul : l'appelant le quitte ensuite (`quitter()`).
 signal echec(raison: String)
 
 ## Le canal vers l'hôte ne s'est pas ouvert dans le délai du transport.
@@ -28,7 +31,8 @@ const ECHEC_DELAI := "delai"
 @abstract func heberger() -> Error
 
 
-## Rejoint l'hôte désigné par `code` ; `connecte` ou `echec` suit. Un code mal formé :
+## Rejoint l'hôte désigné par `code` ; `connecte` ou `echec` suit, jamais pendant l'appel (`Reseau` ne
+## branche ses signaux qu'au retour, une fois le code accepté). Un code mal formé :
 ## ERR_INVALID_PARAMETER, sans rien tenter.
 @abstract func rejoindre(code: String) -> Error
 
@@ -43,7 +47,9 @@ const ECHEC_DELAI := "delai"
 
 
 ## Le pair que `Reseau` donne à `SceneMultiplayer` (null avant `heberger()` / `rejoindre()` réussis,
-## et après la fermeture).
+## et après la fermeture). Valide (en connexion ou connecté) dès le retour d'un `heberger()` ou d'un
+## `rejoindre()` réussi : `Reseau` le pose aussitôt. Un client WebRTC ne le pourra pas (son identifiant
+## vient de la signalisation) : contrat à revoir en phase 4.
 @abstract func pair() -> MultiplayerPeer
 
 
