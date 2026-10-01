@@ -58,7 +58,7 @@ qui change est sous `Reseau` : le transport devient une unité à part, avec deu
 | `Transport` (interface `@abstract`, `RefCounted`) | `heberger() -> Error`, `rejoindre(code: String) -> Error`, `quitter()` (ferme une fois envoyé ce qui est en file, en arrière-plan), `clore()` (tout de suite), `pair() -> MultiplayerPeer`, `liberer(id)` (chez l'hôte : ferme sur-le-champ le canal d'un pair parti, muet ou exclu, sans attendre de réponse ; son `peer_disconnected` part pendant l'appel), `servir() -> bool` (à chaque image ; faux une fois fermé) ; signaux `pret(code)` (chez l'hôte : la salle existe), `connecte()` (chez le client : canal ouvert, la poignée de main peut partir), `echec(raison)`. Ne sait rien du salon ni du jeu. | rien |
 | `TransportWebRTC` | Le transport livré : la signalisation (§4), un `WebRTCPeerConnection` par client chez l'hôte, la configuration ICE reçue du Worker, les canaux (§5). | `Transport`, `WebSocketPeer` |
 | `TransportENet` | Le transport ENet de LeLion-multi, extrait de `Reseau.gd`, gardé pour la **version desktop de développement et les tests headless** (les 13 scénarios réseau, le relais de latence). Jamais choisi dans l'export Web. Le « code » y est `ip:port`. | `Transport` |
-| `EcranEnLigne` (remplace `EcranReseau`) | Pseudo (mémorisé dans `Scores`), *Créer une partie* (absent sur mobile), *Rejoindre* avec un champ de code (pré-rempli par `?salle=`), messages d'erreur (§9). Le salon affiche le code et *Copier le lien*. | `Reseau` |
+| `EcranEnLigne` (remplace `EcranReseau`) | Pseudo (mémorisé dans `Scores`), *Créer une partie* (absent sur mobile), *Rejoindre* avec un champ de code (pré-rempli par `?salle=`), messages d'erreur (§9). Le salon de l'hôte affiche le code et *Copier le lien*. Le code (`CodeSalle`) : un code de salle sur le Web ; l'adresse `ip:port` d'un hôte `TransportENet` sur le desktop de développement. Passe par `Reseau.creer_partie()` et `Reseau.rejoindre_partie(code)`, qui choisissent le transport. | `Reseau`, `CodeSalle` |
 | `signalisation/` (Worker + Durable Object `Salle`, JavaScript) | Crée les salles, relaie offres, réponses et candidats entre l'hôte et chaque arrivant, fournit les identifiants TURN, applique les plafonds (§8). Ne lit pas le contenu WebRTC. Six modules (`index`, `origine`, `code`, `protocole`, `ice`, `salle`, environ 440 lignes), avec ses tests `vitest` dans l'environnement local de Cloudflare (`@cloudflare/vitest-plugin`). | API TURN de Cloudflare |
 
 Le choix du transport : `TransportWebRTC` quand `OS.has_feature("web")`, `TransportENet` sinon (ou
@@ -127,7 +127,10 @@ d'une transition). La version du jeu reste vérifiée par la poignée de main.
 `?salle=K7Q2XM` est lu au démarrage par `JavaScriptBridge` (`location.search`). S'il est présent et
 valide, le jeu ouvre l'écran En ligne sur *Rejoindre*, code rempli ; il ne rejoint qu'après le pseudo
 validé. *Copier le lien* passe par `DisplayServer.clipboard_set` (sur le Web, l'API du presse-papiers,
-qui exige le geste du clic : le bouton le fournit).
+qui exige le geste du clic : le bouton le fournit). Le lien part de l'adresse de la page ouverte
+(origine et chemin, sans paramètres : `https://w3cdotorg.github.io/LeLion-web/` une fois publiée), ou,
+hors du Web, du réglage de projet `lelion/page/url`. Le lien ne sert qu'une fois par lancement (un
+retour au titre ne rouvre pas l'écran En ligne).
 
 ## 5. En jeu
 
@@ -232,7 +235,7 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 
 | Situation | Comportement |
 |---|---|
-| Code mal formé | Refusé à la saisie : « Un code fait 6 caractères (ex. K7Q-2XM). » |
+| Code mal formé | Refusé à la saisie : « Un code fait 6 caractères (ex. K7Q-2XM). » ; un 0, O, 1, I ou L, jamais remplacé en silence : « Un code n'a ni 0, ni O, ni 1, ni I, ni L (ex. K7Q-2XM). » |
 | Code inconnu, salle fermée | « Aucune partie avec ce code. » |
 | Worker injoignable (5 s) | « Service de connexion indisponible, réessaie dans un instant. » |
 | Origine refusée, débit dépassé | « Service de connexion indisponible, réessaie dans un instant. » (journal : raison exacte) |
