@@ -13,12 +13,15 @@ extends Node
 ## `OfflineMultiplayerPeer` : ce poste est son propre hôte (`multiplayer.is_server()` vrai), et
 ## `quitter()` y revient toujours.
 ##
-## Départs et silences (M6) : `quitter()` part proprement (un DISCONNECT fiable d'ENet, renvoyé
-## jusqu'à son accusé de réception, DELAI_DEPART au plus, en arrière-plan : `_partants`), pas par
-## un seul datagramme qu'une perte Wi-Fi ferait passer inaperçu ; un pair muet est considéré parti
-## après SILENCE_SESSION (au lieu des 5 à 30 s d'ENet), sauf pendant le chargement de la manche
-## (SILENCE_CHARGEMENT : un poste qui charge sa scène ou compile ses shaders ne répond plus). Le
-## relais du serveur est coupé (`server_relay`) : tout passe par l'hôte.
+## Battement et silences (phase 1 du jeu en ligne) : chaque poste en session envoie un battement par
+## seconde (`_battement`, non fiable) ; tout ce que ce script reçoit d'un pair, battement ou RPC, remet
+## son silence à zéro (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte
+## comme chez un client, SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa
+## scène ou compile ses shaders ne répond plus). Chez l'hôte, un client muet ou exclu est libéré
+## (`_liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs. `quitter()` part
+## proprement (M6 : un DISCONNECT fiable d'ENet, renvoyé jusqu'à son accusé de réception, DELAI_DEPART
+## au plus, en arrière-plan : `_partants`), pas par un seul datagramme qu'une perte Wi-Fi ferait passer
+## inaperçu. Le relais du serveur est coupé (`server_relay`) : tout passe par l'hôte.
 ##
 ## La poignée de main passe par l'authentification de `SceneMultiplayer` : des octets bruts
 ## (`var_to_bytes` d'un dictionnaire), échangés avant tout RPC, si bien que deux versions
@@ -108,23 +111,31 @@ const REFUS_DEMANDE := "RESEAU_REFUS_DEMANDE"
 ## plus), ou il a exclu ce poste (barrière de chargement, phase 18).
 const PERTE_HOTE := "RESEAU_HOTE_PERDU"
 const PERTE_EXCLU := "RESEAU_EXCLU"
-## Entre l'annonce de son exclusion à un joueur et sa déconnexion, en secondes : le temps que
-## l'annonce arrive, renvoyée au besoin par ENet (une déconnexion vide la file d'envoi).
+## Entre l'annonce de son exclusion à un joueur et sa libération par l'hôte, en secondes : le temps que
+## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même.
 const DELAI_EXCLUSION := 0.5
 ## Pourquoi l'hôte ne peut pas encore démarrer la partie (`raison_attente`), en clés de traduction.
 const ATTENTE_JOUEURS := "SALON_ATTENTE_JOUEURS"
 const ATTENTE_ARRIVEE := "SALON_ATTENTE_ARRIVEE"
 const ATTENTE_PRETS := "SALON_ATTENTE_PRETS"
-## Silence d'un pair ENet au-delà duquel il est considéré parti (`ENetPacketPeer.set_timeout`, en
-## millisecondes : minimum, maximum ; ENet le décide entre les deux selon le temps d'aller-retour).
-## Au salon et en manche : un poste planté ou en veille part en 8 s au plus, au lieu des 5 à 30 s
-## par défaut d'ENet.
-const SILENCE_SESSION := Vector2i(3000, 8000)
+## Période du battement, en secondes : chaque poste en session en envoie un à chacun de ses pairs.
+const PERIODE_BATTEMENT := 1.0
+## Silence d'un pair, en secondes, au-delà duquel il est déclaré parti (spec §2) : au salon et en
+## manche, chez l'hôte comme chez un client (un poste planté, en veille, un onglet caché).
+const SILENCE_SESSION := 10.0
 ## Pendant le chargement de la manche, du lancement à l'intro : un poste qui charge sa scène de jeu
 ## (ou compile ses shaders, sous Windows) ne répond plus, parfois plus de 5 s.
-const SILENCE_CHARGEMENT := Vector2i(20000, 30000)
+const SILENCE_CHARGEMENT := 30.0
+## Une image plus longue que ce délai (ms) : ce poste était lui-même figé, et ce qu'il a reçu pendant
+## ce temps ne sera relevé qu'à l'image suivante ; son verdict sur les silences attend jusque-là
+## (`_ecouter`).
+const GEL_LOCAL := 250
 ## Essais de renvoi d'ENet avant de compter le silence (son défaut).
 const ESSAIS_SILENCE := 32
+## Silence d'un pair au-delà duquel ENet l'abandonne lui-même (`ENetPacketPeer.set_timeout`, en ms :
+## minimum, maximum) : bien au-delà de SILENCE_CHARGEMENT, pour que ce soit toujours le battement qui
+## décide.
+const SILENCE_ENET := Vector2i(45000, 60000)
 ## Délai laissé à un départ volontaire pour être reçu (accusé de réception du DISCONNECT), en
 ## millisecondes.
 const DELAI_DEPART := 1000
@@ -193,8 +204,7 @@ var couleur_locale := Color.TRANSPARENT
 ## Chez l'hôte, pendant une manche : les identifiants des joueurs dont la scène de jeu est chargée,
 ## dans l'ordre (l'hôte compris) ; vidé au lancement de chaque manche et hors réseau.
 var scenes_chargees: Array[int] = []
-## Silence toléré des pairs de cette session (SILENCE_SESSION ou SILENCE_CHARGEMENT), posé sur
-## chaque pair connecté et sur chaque nouveau venu.
+## Silence toléré des pairs de cette session, en secondes (SILENCE_SESSION ou SILENCE_CHARGEMENT).
 var silence := SILENCE_SESSION
 
 ## Vrai dès que l'issue d'une connexion est décidée (refus, échec, hôte perdu) : un seul signal
@@ -213,6 +223,14 @@ var _partants: Array[Dictionary] = []
 ## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
 ## perte de l'hôte qui suit.
 var _exclu := false
+## Les pairs dont ce poste écoute le silence : par identifiant, l'instant (ms) où il a reçu d'eux pour
+## la dernière fois. Chez l'hôte, chaque client arrivé (sa poignée de main finie) ; chez un client,
+## l'hôte, une fois inscrit. Vide hors réseau.
+var _entendus: Dictionary[int, int] = {}
+## L'instant (ms) du prochain battement de ce poste.
+var _prochain_battement := 0
+## L'instant (ms) de la dernière écoute des silences (`_ecouter`).
+var _derniere_ecoute := 0
 
 
 func _ready() -> void:
@@ -296,6 +314,7 @@ func quitter() -> void:
 	table_salon.clear()
 	scenes_chargees.clear()
 	silence = SILENCE_SESSION
+	_entendus.clear()
 	niveau_salon = 0
 	places_salon = EtatPartie.NB_JOUEURS_MAX
 	places_reservees = 0
@@ -328,10 +347,13 @@ func _partir(pair: ENetMultiplayerPeer) -> void:
 	_partants.append({"pair": pair, "paquets": paquets, "fin": Time.get_ticks_msec() + DELAI_DEPART})
 
 
-## Sert les départs en cours ; ferme ceux qui sont reçus ou dont le délai est passé.
+## En session, le battement et l'écoute des silences ; puis les départs en cours, fermés une fois reçus
+## ou leur délai passé.
 func _process(_delta: float) -> void:
-	if _partants.is_empty():
-		return
+	if en_ligne():
+		var maintenant := Time.get_ticks_msec()
+		_battre(maintenant)
+		_ecouter(maintenant)
 	for partant: Dictionary in _partants.duplicate():
 		partant.pair.poll()
 		var recus: bool = partant.paquets.all(func(p: ENetPacketPeer) -> bool: return p.get_state() == ENetPacketPeer.STATE_DISCONNECTED)
@@ -347,46 +369,113 @@ func _clore_partants() -> void:
 	_partants.clear()
 
 
-## Pose `bornes` (SILENCE_SESSION ou SILENCE_CHARGEMENT) comme silence toléré de chaque pair connecté
-## de cette session, et de chaque nouveau venu (`silence`). Hors réseau, ne fait que le retenir.
-func definir_silence(bornes: Vector2i) -> void:
-	silence = bornes
+## Le silence toléré des pairs de cette session devient `secondes` (SILENCE_SESSION ou
+## SILENCE_CHARGEMENT). Le silence déjà écoulé compte : passer de SILENCE_CHARGEMENT à SILENCE_SESSION
+## déclare parti à la prochaine écoute un pair muet depuis plus de SILENCE_SESSION.
+func definir_silence(secondes: float) -> void:
+	silence = secondes
+
+
+## Le battement de ce poste, une fois par PERIODE_BATTEMENT : chez l'hôte, à chaque client arrivé ;
+## chez un client, à l'hôte, une fois inscrit (avant, aucune RPC ne passe).
+func _battre(maintenant: int) -> void:
+	if maintenant < _prochain_battement:
+		return
+	_prochain_battement = maintenant + int(PERIODE_BATTEMENT * 1000.0)
+	if multiplayer.is_server():
+		if not multiplayer.get_peers().is_empty():
+			_battement.rpc()
+	elif _entendus.has(MultiplayerPeer.TARGET_PEER_SERVER):
+		_battement.rpc_id(MultiplayerPeer.TARGET_PEER_SERVER)
+
+
+## L'écoute des silences, à `maintenant` (ms) : chez l'hôte, chaque client muet depuis plus de `silence`
+## est libéré ; chez un client, l'hôte muet est perdu. Après une image plus longue que GEL_LOCAL, ce poste
+## sort lui-même d'un gel : les paquets arrivés pendant ce temps ne sont relevés qu'à la prochaine image
+## (`SceneTree` relève les paquets avant les `_process`), le verdict attend donc une image.
+func _ecouter(maintenant: int) -> void:
+	var ecart := maintenant - _derniere_ecoute
+	_derniere_ecoute = maintenant
+	if ecart > GEL_LOCAL:
+		return
+	for id in pairs_muets(_entendus, maintenant, int(silence * 1000.0)):
+		_entendus.erase(id)
+		if multiplayer.is_server():
+			_liberer(id, _generation)
+		else:
+			_decider("hote_perdu")
+
+
+## Les identifiants de `entendus` (identifiant → instant, en ms, du dernier paquet reçu) dont le silence
+## dépasse `silence_ms` à `maintenant`, dans l'ordre croissant.
+static func pairs_muets(entendus: Dictionary[int, int], maintenant: int, silence_ms: int) -> Array[int]:
+	var muets: Array[int] = []
+	for id: int in entendus:
+		if maintenant - entendus[id] > silence_ms:
+			muets.append(id)
+	muets.sort()
+	return muets
+
+
+## Un paquet de `Reseau` reçu du pair `id` (battement ou RPC) : son silence repart de zéro. Sans effet
+## pour un pair dont ce poste n'écoute pas le silence.
+func _entendre(id: int) -> void:
+	if _entendus.has(id):
+		_entendus[id] = Time.get_ticks_msec()
+
+
+## Le battement d'un pair (non fiable, canal 0 : spec §5).
+@rpc("any_peer", "call_remote", "unreliable")
+func _battement() -> void:
+	_entendre(multiplayer.get_remote_sender_id())
+
+
+## Pose SILENCE_ENET sur chaque pair ENet connecté, le nouveau venu compris : ENet ne doit jamais
+## décider avant le battement.
+func _reculer_silence_enet() -> void:
 	var pair := multiplayer.multiplayer_peer
 	if pair is ENetMultiplayerPeer and pair.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED \
 			and pair.host != null:
 		for p: ENetPacketPeer in pair.host.get_peers():
 			if p.get_state() == ENetPacketPeer.STATE_CONNECTED:
-				p.set_timeout(ESSAIS_SILENCE, bornes.x, bornes.y)
+				p.set_timeout(ESSAIS_SILENCE, SILENCE_ENET.x, SILENCE_ENET.y)
 
 
 ## Chez l'hôte : le joueur `id` n'a pas chargé sa scène de jeu à temps (la barrière de la manche,
 ## `Manche._exclure`) : il apprend son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU, pas
-## « L'hôte a quitté la partie »), puis il est déconnecté DELAI_EXCLUSION plus tard (proprement : son
-## départ arrive par `joueur_parti`). I1 (revue finale phase 14) : un pair figé (chargement,
-## compilation des shaders) n'acquitte jamais ni l'annonce ni le DISCONNECT ; sans un silence court
-## (1 à 2 s, posé tout de suite), ENet ne l'abandonnerait qu'à son silence de chargement
-## (SILENCE_CHARGEMENT, 20 à 30 s), et la barrière l'attendrait tout ce temps.
+## « L'hôte a quitté la partie ») et s'en va de lui-même ; DELAI_EXCLUSION plus tard, l'hôte le libère
+## s'il est encore là (`_liberer` : figé, il n'a pas lu l'annonce) : son départ arrive par
+## `joueur_parti`.
 func exclure(id: int) -> void:
 	if not multiplayer.is_server() or not multiplayer.get_peers().has(id):
 		return
-	var pair := multiplayer.multiplayer_peer as ENetMultiplayerPeer
-	if pair != null:
-		pair.get_peer(id).set_timeout(ESSAIS_SILENCE, 1000, 2000)
 	_recevoir_exclusion.rpc_id(id)
-	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_deconnecter.bind(id, _generation))
+	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_liberer.bind(id, _generation))
 
 
-## Chez l'hôte : déconnecte l'exclu `id`, s'il l'est encore, dans la même session (`generation`).
-func _deconnecter(id: int, generation: int) -> void:
-	if generation == _generation and multiplayer.get_peers().has(id):
-		multiplayer.multiplayer_peer.disconnect_peer(id)
+## Chez l'hôte : libère le client `id` (muet ou exclu), s'il est encore là dans la même session
+## (`generation`) : son silence n'est plus écouté, et son pair est fermé sur-le-champ, sans attendre
+## d'accusé de réception (I1, revue finale phase 14 : un pair figé, qui charge ou compile ses shaders,
+## ou mort n'en enverra pas) ; son départ part aussitôt par `peer_disconnected` (`_sur_pair_deconnecte`).
+func _liberer(id: int, generation: int) -> void:
+	if generation != _generation or not multiplayer.is_server() or not multiplayer.get_peers().has(id):
+		return
+	_entendus.erase(id)
+	var pair := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	var paquet := pair.get_peer(id) if pair != null else null
+	if paquet != null and paquet.is_active():
+		paquet.peer_disconnect_now()  # un seul DISCONNECT, non fiable : sa place se libère tout de suite
+		pair.poll()  # ENet rend compte du pair fermé : `peer_disconnected` part maintenant
 
 
-## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps) ; la perte de
-## l'hôte qui suit le dira (`raison_perte`).
+## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps) ; ce poste s'en va
+## aussitôt, et la perte de l'hôte le dit (`raison_perte` : PERTE_EXCLU). L'annonce est fiable, la
+## libération par l'hôte qui suit ne l'est pas (`_liberer`).
 @rpc("authority", "call_remote", "reliable")
 func _recevoir_exclusion() -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	_exclu = true
+	_decider("hote_perdu")
 
 
 ## Les fiches dont dépend le démarrage (`raison_attente`) : chez l'hôte, ses inscrits (places réservées
@@ -749,6 +838,7 @@ func _diffuser_salon() -> void:
 ## Chez l'hôte : un client demande une autre couleur.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_couleur(sens: Variant) -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	if sens is int:
 		changer_couleur(multiplayer.get_remote_sender_id(), sens)
 
@@ -756,6 +846,7 @@ func _demande_couleur(sens: Variant) -> void:
 ## Chez l'hôte : un client demande à être prêt, ou plus.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_pret(pret: Variant) -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	if pret is bool:
 		definir_pret(multiplayer.get_remote_sender_id(), pret)
 
@@ -764,6 +855,7 @@ func _demande_pret(pret: Variant) -> void:
 ## que la dernière posée), avec le niveau, les places, les places seulement réservées et son numéro.
 @rpc("authority", "call_remote", "reliable")
 func _recevoir_salon(table: Variant, niveau: Variant, nb_places: Variant, reservees: Variant, numero: Variant) -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	if _poser_salon(table, niveau, nb_places, reservees, numero) == Pose.ILLISIBLE:
 		push_warning("Reseau : table du salon illisible, ignorée")
 
@@ -803,6 +895,7 @@ func _poser_salon(table: Variant, niveau: Variant, nb_places: Variant, reservees
 ## SILENCE_CHARGEMENT.
 @rpc("authority", "call_remote", "reliable", CANAL_ORDONNE)
 func _recevoir_manche(table: Variant, niveau: Variant, nb_places: Variant, reservees: Variant, numero: Variant) -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	var fiches: Array[Dictionary] = []
 	if _poser_salon(table, niveau, nb_places, reservees, numero) != Pose.ILLISIBLE:
 		fiches = fiches_de_manche(lire_table(table), multiplayer.get_unique_id())
@@ -822,6 +915,7 @@ func _recevoir_manche(table: Variant, niveau: Variant, nb_places: Variant, reser
 ## (M6) ; le retour a lieu dans les deux cas.
 @rpc("authority", "call_remote", "reliable", CANAL_ORDONNE)
 func _recevoir_retour_salon(table: Variant, niveau: Variant, nb_places: Variant, reservees: Variant, numero: Variant) -> void:
+	_entendre(multiplayer.get_remote_sender_id())
 	if _poser_salon(table, niveau, nb_places, reservees, numero) == Pose.ILLISIBLE:
 		push_warning("Reseau : table du retour au salon illisible, ignorée")
 	manche_en_cours = false
@@ -833,6 +927,7 @@ func _recevoir_retour_salon(table: Variant, niveau: Variant, nb_places: Variant,
 @rpc("any_peer", "call_remote", "reliable")
 func _scene_chargee() -> void:
 	var id := multiplayer.get_remote_sender_id()
+	_entendre(id)
 	if multiplayer.is_server() and manche_en_cours and inscrits.has(id):
 		_noter_scene_chargee(id)
 
@@ -918,7 +1013,8 @@ func _sur_echec_poignee_de_main(id: int) -> void:
 ## au salon et la table lui est envoyée avec celle des autres.
 func _sur_pair_connecte(id: int) -> void:
 	if multiplayer.is_server() and inscrits.has(id):
-		definir_silence(silence)  # le nouveau venu aussi
+		_reculer_silence_enet()  # le nouveau venu aussi
+		_entendus[id] = Time.get_ticks_msec()
 		inscrits[id].arrive = true
 		_diffuser_salon()
 		joueur_arrive.emit(id)
@@ -926,6 +1022,7 @@ func _sur_pair_connecte(id: int) -> void:
 
 ## Chez l'hôte : un arrivé est parti ; sa carte se libère chez tous (spec §4).
 func _sur_pair_deconnecte(id: int) -> void:
+	_entendus.erase(id)
 	if multiplayer.is_server() and inscrits.erase(id):
 		_diffuser_salon()
 		joueur_parti.emit(id)
@@ -933,7 +1030,8 @@ func _sur_pair_deconnecte(id: int) -> void:
 
 func _sur_connecte_a_l_hote() -> void:
 	_delai.stop()
-	definir_silence(silence)
+	_reculer_silence_enet()
+	_entendus[MultiplayerPeer.TARGET_PEER_SERVER] = Time.get_ticks_msec()
 	inscrit.emit(index_local, couleur_locale)
 
 

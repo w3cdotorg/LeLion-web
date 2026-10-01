@@ -392,11 +392,11 @@ terminer "manche : barrière de chargement (hôte figé, muet exclu), commandes 
 [ "$(compter "^PARTI" b9)" -eq 1 ] && [ "$(compter "^EXCLU" c9)" -eq 1 ] || echec "manche : Bruno doit partir, le muet être exclu"
 
 # 10. I1 (revue finale phase 14) : un muet dont le fil principal se fige tout entier (ENet muet,
-#     comme un poste qui compile ses shaders) après le lancement de la manche. Le correctif
-#     d'_exclure (silence ENet raccourci avant disconnect_peer, sans force) doit faire passer la
-#     barrière bien avant le silence de chargement par défaut (20 à 30 s) : l'hôte chronomètre
-#     lui-même l'écart entre l'exclusion et la barrière (--mesurer-exclusion, ECART_EXCLUSION en
-#     ms). Aucune manche n'est jouée ici : les deux postes sont arrêtés dès la mesure prise.
+#     comme un poste qui compile ses shaders) après le lancement de la manche. Sa libération
+#     (`Reseau._liberer` : fermé sur-le-champ, sans attendre d'accusé de réception) doit faire passer
+#     la barrière bien avant le silence de chargement (30 s) : l'hôte chronomètre lui-même l'écart
+#     entre l'exclusion et la barrière (--mesurer-exclusion, ECART_EXCLUSION en ms). Aucune manche
+#     n'est jouée ici : les deux postes sont arrêtés dès la mesure prise.
 DELAI_CHARGEMENT10=3
 P=$((PORT_BASE + 10))
 B=$((PORT_BASE + 1010))
@@ -410,7 +410,7 @@ if attendre_hote hote10; then
 		ecart=$(grep -o "ECART_EXCLUSION [0-9]*" "$JOURNAUX/hote10.log" | head -1 | awk '{print $2}')
 		echo "  (I1) écart exclusion -> barrière : ${ecart} ms"
 		[ -n "$ecart" ] && [ "$ecart" -lt 2000 ] 2>/dev/null \
-			|| echec "I1 : écart exclusion -> barrière de ${ecart:-?} ms (attendu bien sous 2000 ms : le correctif doit raccourcir le silence ENet du pair figé avant de le déconnecter)"
+			|| echec "I1 : écart exclusion -> barrière de ${ecart:-?} ms (attendu bien sous 2000 ms : la libération ne doit pas attendre l'accusé de réception du pair figé)"
 	fi
 fi
 tuer hote10 muet10
@@ -421,8 +421,9 @@ tuer hote10 muet10
 #     commandes au hasard, tirées de sa graine). Après 20 s de jeu, l'hôte orchestre les rencontres
 #     (pastilles ramassées au vol, étoile, soucoupe, sa gerbe sur un client, celle d'un client sur lui,
 #     un choc) ; puis le client qui tient le plus de territoire est arraché (KILL, sans un paquet de
-#     plus) : l'hôte doit le voir partir au bout du silence de session d'ENet (SILENCE_SESSION, 3 à
-#     8 s ; ECART_DEPART), son lion disparaître chez tous, ses cellules rester. Le jeu reprend jusqu'au
+#     plus) : l'hôte doit le voir partir au bout du silence de son battement (Reseau.SILENCE_SESSION,
+#     10 s depuis le dernier battement reçu, 0 à 1 s avant l'arrachement ; ECART_DEPART), pas avant
+#     (ENet ne décide plus), son lion disparaître chez tous, ses cellules rester. Le jeu reprend jusqu'au
 #     calme, 4 s avant la fin ; la manche arrivée à son terme, l'hôte la fige : l'hôte et les deux
 #     clients restés écrivent la même empreinte (territoire, scores, suite des tampons, lions,
 #     apparitions, niveau, réactions de chaque joueur).
@@ -490,8 +491,8 @@ for nom in $restes11; do
 done
 ecart11=$(grep -o "ECART_DEPART [0-9]*" "$JOURNAUX/hote11.log" 2>/dev/null | head -1 | awk '{print $2}')
 echo "  (bout en bout) départ arraché vu par l'hôte au bout de ${ecart11:-?} ms"
-[ -n "$ecart11" ] && [ "$ecart11" -le 10000 ] 2>/dev/null \
-	|| echec "de bout en bout : départ arraché vu au bout de ${ecart11:-?} ms (attendu au plus 10000 : le silence de session d'ENet, 8 s au plus, et la marge d'une image)"
+[ -n "$ecart11" ] && [ "$ecart11" -ge 8500 ] && [ "$ecart11" -le 11000 ] 2>/dev/null \
+	|| echec "de bout en bout : départ arraché vu au bout de ${ecart11:-?} ms (attendu de 8500 à 11000 : les 10 s du battement depuis son dernier, reçu 0 à 1 s avant l'arrachement, et la marge d'une image sous la charge de la CI)"
 
 # 12. Prédiction sous latence simulée (phase 16), par les vraies scènes : un hôte et deux clients, les
 #     clients derrière le relais (80 ms d'aller-retour, 40 ms de gigue, 5 % de pertes dans chaque

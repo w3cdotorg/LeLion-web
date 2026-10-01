@@ -4,8 +4,8 @@ extends SceneTree
 
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
-const PROTOCOLE_VERSION := "0.19"
-const PROTOCOLE_EMPREINTE := 2537463811
+const PROTOCOLE_VERSION := "0.20"
+const PROTOCOLE_EMPREINTE := 322872843
 
 
 func _init() -> void:
@@ -51,6 +51,7 @@ func _run() -> void:
 	_tester_bilan_manche()
 	_tester_manches_enchainees()
 	_tester_transport_enet()
+	await _tester_battement()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2511,6 +2512,104 @@ func _tester_transport_enet() -> void:
 		"quitter() pendant l'attente du canal : fermé aussitôt, plus aucun signal ensuite")
 	hote.quitter()
 	_check(not hote.servir() and hote.pair() == null, "un hôte sans client connecté se ferme aussitôt")
+
+
+## Phase 1 du jeu en ligne : le battement et les silences de `Reseau`, d'abord en logique pure, puis
+## entre l'autoload, hôte, et un second poste client dans ce même processus : un second `Reseau` (le
+## script chargé : l'autoload n'est pas nommé) sous sa propre `SceneMultiplayer`, posée par
+## `set_multiplayer` sur un nœud à lui (le `SceneTree` la relève aussi). Les silences y sont raccourcis
+## (`definir_silence`) ; un poste se tait par `set_process(false)` (plus de battement, mais sa
+## `SceneMultiplayer` et son ENet tournent encore : seul le battement peut le déclarer parti).
+func _tester_battement() -> void:
+	print("-- Battement et silences (phase 1)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var entendus: Dictionary[int, int] = {12: 2400, 5: 1000, 9: 4000}
+	_check(hote.pairs_muets(entendus, 4500, 2000) == [5, 12] and hote.pairs_muets(entendus, 3000, 2000).is_empty()
+		and hote.pairs_muets(entendus, 3001, 2000) == [5],
+		"un pair est muet au-delà du silence toléré, pas à sa limite, dans l'ordre des identifiants (%s)" % [hote.pairs_muets(entendus, 4500, 2000)])
+	var port := 17786
+	_check(hote.heberger(port) == OK, "(pré-condition) ce poste héberge")
+	var maintenant := Time.get_ticks_msec()
+	hote._entendus[77] = maintenant - 20000  # un pair muet depuis 20 s (inconnu de SceneMultiplayer)
+	hote._derniere_ecoute = maintenant - 2000  # ce poste sort lui-même d'un gel de 2 s
+	hote._ecouter(maintenant)
+	var suspendu: bool = hote._entendus.has(77)
+	hote._ecouter(maintenant + 16)
+	_check(suspendu and not hote._entendus.has(77),
+		"au sortir d'un gel de ce poste, le verdict attend une image (ce qu'il a reçu pendant le gel n'est pas encore relevé), puis tombe")
+	hote.quitter()
+
+	var noeud := Node.new()
+	noeud.name = "PosteClient"
+	root.add_child(noeud)
+	var chemin := noeud.get_path()
+	set_multiplayer(SceneMultiplayer.new(), chemin)
+	var client: Node = load("res://Scripts/Reseau.gd").new()
+	client.name = "Reseau"  # vu de sa propre API, au même chemin que l'autoload : les RPC s'y retrouvent
+	noeud.add_child(client)
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Client"
+
+	# Le battement tient la session : chacun a entendu l'autre il y a moins d'une période et demie
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id_client: int = arrives[0] if arrives.size() == 1 else -1
+	await create_timer(2.5).timeout
+	var ecart_hote: int = Time.get_ticks_msec() - hote._entendus.get(id_client, 0)
+	var ecart_client: int = Time.get_ticks_msec() - client._entendus.get(1, 0)
+	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 1500 and ecart_client <= 1500,
+		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms" % [ecart_hote, ecart_client])
+
+	# Un client muet : l'hôte le déclare parti au bout du silence toléré, pas avant
+	hote.definir_silence(1.5)
+	client.set_process(false)
+	var client_muet_depuis: int = hote._entendus.get(id_client, 0)
+	_check(await _attendre(func() -> bool: return partis.size() == 1, 5.0), "l'hôte voit partir un client muet (son ENet répondait encore)")
+	var vu_apres: int = Time.get_ticks_msec() - client_muet_depuis
+	_check(partis == [id_client] and vu_apres >= 1500 and vu_apres <= 2500,
+		"... %d ms après son dernier battement : son silence de 1,5 s, pas avant" % vu_apres)
+	client.set_process(true)
+	_check(await _attendre(func() -> bool: return pertes.size() == 1, 3.0) and not client.en_ligne(),
+		"le client libéré se retrouve hors réseau, l'hôte perdu")
+
+	# L'hôte muet : le client le déclare perdu au bout de son silence toléré
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint de nouveau")
+	_check(await _attendre(func() -> bool: return arrives.size() == 2 and client._entendus.has(1), 3.0), "(pré-condition) le client est de nouveau arrivé")
+	client.definir_silence(1.5)
+	hote.set_process(false)
+	var hote_muet_depuis: int = client._entendus.get(1, 0)
+	_check(await _attendre(func() -> bool: return pertes.size() == 2, 5.0), "le client perd un hôte muet")
+	var perdu_apres: int = Time.get_ticks_msec() - hote_muet_depuis
+	hote.set_process(true)
+	_check(perdu_apres >= 1500 and perdu_apres <= 2500 and pertes.size() == 2 and pertes[1] == client.PERTE_HOTE and not client.en_ligne(),
+		"... %d ms après son dernier battement (silence de 1,5 s) : « L'hôte a quitté la partie »" % perdu_apres)
+
+	hote.quitter()
+	client.quitter()
+	await _attendre(func() -> bool: return hote._partants.is_empty() and client._partants.is_empty(), 2.0)
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	noeud.queue_free()
+	set_multiplayer(null, chemin)
+	hote.pseudo = ""
+
+
+## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
+## valeur.
+func _attendre(condition: Callable, delai: float) -> bool:
+	var fin := Time.get_ticks_msec() + int(delai * 1000.0)
+	while not condition.call() and Time.get_ticks_msec() < fin:
+		await process_frame
+	return condition.call()
 
 
 ## Sert les transports `transports` (leur pair relevé, `servir()`) jusqu'à ce que `condition` soit

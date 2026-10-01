@@ -1531,7 +1531,7 @@ func _animer_bout_hote(main: Node, manche: Node, gs: Node, programme: Programme)
 	print("RENCONTRES")
 
 	# Un client arraché en pleine manche (KILL : ni DISCONNECT ni aucun autre paquet), comme un PC
-	# planté ou un Wi-Fi coupé : l'hôte le voit partir au bout du silence de session d'ENet.
+	# planté ou un Wi-Fi coupé : l'hôte le voit partir au bout du silence de son battement (10 s).
 	# Le client arraché est celui qui tient le plus de territoire à cet instant : « ses cellules
 	# restent » doit porter sur des cellules. Un client désigné d'avance n'en tient pas toujours (ses
 	# commandes au hasard, les étourdissements : mesuré, 0 cellule une fois sur quinze passages).
