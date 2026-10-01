@@ -6,9 +6,10 @@ extends Node
 ## n'envoie que ses commandes et affiche ce que l'hôte décide.
 ## - Barrière de chargement : chaque poste signale sa scène de jeu chargée
 ##   (`Reseau.signaler_scene_chargee`) ; l'hôte attend tous les joueurs de la manche encore là, au
-##   plus `delai_chargement` secondes de jeu, puis exclut les absents (il les déconnecte : leur
-##   départ est un départ comme un autre) ; alors seulement (`barriere_passee`, chez l'hôte puis
-##   chez chaque client) les lions apparaissent, le Spawner démarre et l'intro se lance chez tous.
+##   plus `delai_chargement` secondes de jeu, puis exclut les absents (l'exclu part de lui-même à
+##   l'annonce, l'hôte ne le libère qu'en secours : son départ est un départ comme un autre) ; alors
+##   seulement (`barriere_passee`, chez l'hôte puis chez chaque client) les lions apparaissent, le
+##   Spawner démarre et l'intro se lance chez tous.
 ## - Commandes (phase 16) : chaque client envoie à chaque tick physique la commande que la prédiction
 ##   de son lion vient de lire, numérotée, avec les 3 précédentes (`PredictionLocale.paquet`, RPC
 ##   `unreliable`, non ordonnée : un Wi-Fi ou un relais qui réordonne une rafale de rattrapage ne doit
@@ -232,7 +233,8 @@ func _attendus() -> Array[int]:
 
 
 ## Passe la barrière quand chaque joueur encore là a chargé sa scène. Délai passé, les absents sont
-## exclus (déconnectés) : la barrière attend alors leur départ, qui les retire des attendus.
+## exclus (chacun part de lui-même à l'annonce, l'hôte ne le libère qu'en secours) : la barrière attend
+## alors leur départ, qui les retire des attendus.
 func _verifier_barriere() -> void:
 	if barriere or not actif:
 		return
@@ -264,8 +266,9 @@ func _verifier_barriere() -> void:
 		_envoyer(&"_recevoir_depart", [index])
 
 
-## Chez l'hôte : `id` n'a pas chargé sa scène à temps. Il apprend son exclusion, puis il est déconnecté
-## (`Reseau.exclure` : il voit « exclu », pas « L'hôte a quitté la partie ») ; son départ arrive ici par
+## Chez l'hôte : `id` n'a pas chargé sa scène à temps. Il apprend son exclusion et part de lui-même
+## (`Reseau.exclure` : il voit « exclu », pas « L'hôte a quitté la partie ») ; l'hôte ne le libère qu'en
+## secours, s'il est encore là peu après (figé, il n'a pas lu l'annonce). Son départ arrive ici par
 ## `Reseau.joueur_parti`.
 func _exclure(id: int) -> void:
 	if _exclus.has(id):

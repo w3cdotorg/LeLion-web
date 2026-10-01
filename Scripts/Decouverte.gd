@@ -393,24 +393,7 @@ static func adresses_hote(interfaces: Array) -> PackedStringArray:
 	return hote
 
 
-## L'adresse IPv4 saisie `texte` sous sa forme normale (« 192.168.001.010 » → « 192.168.1.10 »), ou
-## une chaîne vide si ce n'est pas une adresse joignable : quatre nombres de 0 à 255 d'un à trois
-## chiffres, ni 0.x.x.x, ni multidiffusion ou réservée (224 et au-delà, 255.255.255.255 compris).
-## Jamais de nom d'hôte : sa résolution bloquerait le thread principal (Windows : plusieurs
-## secondes pour une faute de frappe).
+## L'adresse IPv4 saisie `texte` sous sa forme normale, ou une chaîne vide (voir
+## `TransportENet.adresse_ipv4`, qui la porte depuis la phase 1 : le code d'une partie ENet).
 static func adresse_ipv4(texte: String) -> String:
-	var morceaux := texte.strip_edges().split(".")
-	if morceaux.size() != 4:
-		return ""
-	var octets := PackedStringArray()
-	for morceau in morceaux:
-		if morceau.is_empty() or morceau.length() > 3 or not morceau.lstrip("0123456789").is_empty():
-			return ""
-		var valeur := morceau.to_int()
-		if valeur > 255:
-			return ""
-		octets.append(str(valeur))
-	var premier := octets[0].to_int()
-	if premier == 0 or premier >= 224:
-		return ""
-	return ".".join(octets)
+	return TransportENet.adresse_ipv4(texte)

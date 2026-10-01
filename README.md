@@ -85,6 +85,8 @@ gamepad, with the solo controls; Esc opens a local menu that does not pause the 
 
 Until online play lands, run the game from the editor (`godot .`) on each computer of the same
 local network: games are found automatically (UDP broadcast) or joined by the host's IP address.
+Ready-made Windows, macOS and Linux builds of the LAN version are on
+[LeLion-multi's releases](https://github.com/w3cdotorg/LeLion-multi/releases/latest) (version 0.19).
 
 ## Running the game
 

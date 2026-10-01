@@ -135,7 +135,7 @@ extends SceneTree
 ## Code de sortie 0 si toutes ses vérifications passent. Compilé avant les autoloads : récupère
 ## `Reseau`, `Decouverte`, `GameState` et `Scores` par `root.get_node`, ne nomme ni `Reseau`, ni
 ## `Decouverte`, ni `GameState`, ni le salon (il peut nommer `EtatPartie`, dont le script ne nomme
-## aucun autoload, et `ReglesBataille`).
+## aucun autoload, `ReglesBataille` et `TransportENet`).
 
 const DELAI_ETAPE := 15.0  # secondes au plus pour chaque attente
 ## Manche de bout en bout : secondes de jeu avant les rencontres, puis avant la fin où tout se calme.
@@ -267,6 +267,10 @@ func _run() -> void:
 		await _jouer_chrono(role == "chrono-hote")
 	else:
 		_check(false, "rôle inconnu : --role=hote, client, lent, ecouteur, salon-hote, salon-client, manche-hote, manche-client, manche-muet, bout-hote, bout-client, latence-hote, latence-client, chrono-hote ou chrono-client")
+	# Le départ de ce poste part en arrière-plan (le DISCONNECT de son transport ne part qu'une fois sa file
+	# envoyée) : le processus ne sort qu'une fois le transport fermé (une seconde au plus), sans quoi
+	# l'autre poste attendrait les 10 s du battement.
+	_check(await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0), "le départ de ce poste est fini (son transport fermé)")
 	_check(not reseau.en_ligne() and root.multiplayer.multiplayer_peer is OfflineMultiplayerPeer
 		and root.multiplayer.is_server() and reseau.inscrits.is_empty() and reseau.index_local == -1
 		and not decouverte.ecoute_active(),
@@ -337,7 +341,8 @@ func _jouer_hote() -> void:
 		var rester := _option("rester", "")
 		print("HOTE RESTE")
 		_check(await _attendre(func() -> bool: return FileAccess.file_exists(rester)), "lancer.sh laisse partir l'hôte (%s)" % rester)
-	reseau.quitter()  # close() envoie ses paquets de façon synchrone (N7) : pas de pause à ajouter ici
+	print("ADIEU %d" % _horodatage())
+	reseau.quitter()  # son départ s'achève en arrière-plan : `_run` l'attend avant de sortir
 	if _options.has("apres-depart"):
 		# Le processus vit encore : si la balise ne suivait pas l'état de Reseau, elle continuerait.
 		await _pause(float(_option("apres-depart", "0")))
@@ -390,6 +395,7 @@ func _jouer_client() -> void:
 				_check(await _attendre(func() -> bool: return reseau.table_salon.size() >= 3),
 					"un autre client est en vue dans la table de l'hôte (%d joueurs)" % reseau.table_salon.size())
 				await _pause(0.5)
+				print("ADIEU %d" % _horodatage())
 				reseau.quitter()
 				_check(_issue == "inscrit", "partir de soi-même n'émet ni échec ni hôte perdu (%s)" % _issue)
 			else:
@@ -407,8 +413,8 @@ func _jouer_client() -> void:
 			await _pause(1.0)
 			_check(_issue == "refuse", "un refus n'est suivi d'aucun autre signal (%s)" % _issue)
 		"echec":
-			_check(_issue == "echec" and duree >= reseau.DELAI_CONNEXION - 0.5 and duree <= reseau.DELAI_CONNEXION + 2.0,
-				"sans hôte, la connexion échoue après le délai de %.0f s (%.1f s)" % [reseau.DELAI_CONNEXION, duree])
+			_check(_issue == "echec" and duree >= TransportENet.DELAI_CANAL - 0.5 and duree <= TransportENet.DELAI_CANAL + 2.0,
+				"sans hôte, la connexion échoue après le délai du canal de %.0f s (%.1f s)" % [TransportENet.DELAI_CANAL, duree])
 		_:
 			_check(false, "issue attendue inconnue : %s" % attendu)
 
@@ -700,6 +706,7 @@ func _sur_arrivee(id: int) -> void:
 
 func _sur_depart(id: int) -> void:
 	_departs.append(id)
+	print("DEPART_RECU %d" % _horodatage())
 
 
 func _sur_poignee_echouee(id: int) -> void:
@@ -723,6 +730,14 @@ func _sur_refus(raison: String, version_hote: String) -> void:
 ## client qui reste ; « refuse+echec » trahirait un double signal.
 func _ajouter_issue(quoi: String) -> void:
 	_issue = quoi if _issue.is_empty() else _issue + "+" + quoi
+	if quoi == "hote_perdu":
+		print("HOTE_PERDU_RECU %d" % _horodatage())
+
+
+## L'heure de l'horloge du système, en ms : la même pour tous les postes de ce PC (lancer.sh compare les
+## horodatages de deux journaux).
+func _horodatage() -> int:
+	return int(Time.get_unix_time_from_system() * 1000.0)
 
 
 
@@ -1531,7 +1546,7 @@ func _animer_bout_hote(main: Node, manche: Node, gs: Node, programme: Programme)
 	print("RENCONTRES")
 
 	# Un client arraché en pleine manche (KILL : ni DISCONNECT ni aucun autre paquet), comme un PC
-	# planté ou un Wi-Fi coupé : l'hôte le voit partir au bout du silence de session d'ENet.
+	# planté ou un Wi-Fi coupé : l'hôte le voit partir au bout du silence de son battement (10 s).
 	# Le client arraché est celui qui tient le plus de territoire à cet instant : « ses cellules
 	# restent » doit porter sur des cellules. Un client désigné d'avance n'en tient pas toujours (ses
 	# commandes au hasard, les étourdissements : mesuré, 0 cellule une fois sur quinze passages).

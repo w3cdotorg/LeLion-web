@@ -4,8 +4,8 @@ extends SceneTree
 
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
-const PROTOCOLE_VERSION := "0.19"
-const PROTOCOLE_EMPREINTE := 2537463811
+const PROTOCOLE_VERSION := "0.20"
+const PROTOCOLE_EMPREINTE := 815376087
 
 
 func _init() -> void:
@@ -50,6 +50,8 @@ func _run() -> void:
 	_tester_placement_pseudos()
 	_tester_bilan_manche()
 	_tester_manches_enchainees()
+	_tester_transport_enet()
+	await _tester_battement()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -899,10 +901,17 @@ func _tester_reseau() -> void:
 	_check(reseau.heberger(port) == OK and reseau.en_ligne() and api.is_server() and reseau.inscrits.size() == 1
 		and reseau.index_local == 0 and reseau.couleur_locale == palette[0] and reseau.inscrits[1].pseudo == "Hôte",
 		"port libre : l'hôte écoute et s'inscrit lui-même (index 0, première couleur, son pseudo)")
+	_check(reseau.code_partie == "127.0.0.1:%d" % port and reseau._transport is TransportENet
+		and api.multiplayer_peer == reseau._transport.pair(),
+		"phase 1 : la session passe par son transport (ENet), qui donne le code de la partie (%s)" % reseau.code_partie)
 	reseau.quitter()
 	_check(not reseau.en_ligne() and api.multiplayer_peer is OfflineMultiplayerPeer and api.is_server()
-		and reseau.inscrits.is_empty() and reseau.index_local == -1 and api.auth_callback.is_null(),
-		"quitter revient hors réseau : pair hors ligne, hôte de soi-même, plus d'inscrits ni de poignée de main")
+		and reseau.inscrits.is_empty() and reseau.index_local == -1 and api.auth_callback.is_null()
+		and reseau.code_partie.is_empty() and reseau._transport == null,
+		"quitter revient hors réseau : pair hors ligne, hôte de soi-même, plus d'inscrits, de poignée de main, de code ni de transport")
+	var source_reseau := FileAccess.get_file_as_string("res://Scripts/Reseau.gd")
+	var classes_enet := RegEx.create_from_string("\\bENet[A-Z]\\w*").search_all(source_reseau).map(func(r: RegExMatch) -> String: return r.get_string())
+	_check(classes_enet.is_empty(), "phase 1 : Reseau ne nomme aucune classe d'ENet, tout passe par son transport (%s)" % [classes_enet])
 
 	# places est bornée à l'hébergement (N3) : sinon un hôte à 0 place ne trouverait pas d'index
 	reseau.places = 0
@@ -1758,8 +1767,10 @@ func _tester_reseau_manche() -> void:
 	reseau.definir_silence(reseau.SILENCE_SESSION)
 	_check(reseau.silence == reseau.SILENCE_SESSION, "fin du chargement : silence de session")
 	reseau.quitter()
-	_check(reseau.scenes_chargees.is_empty() and reseau._partants.is_empty() and reseau.heberger(17788) == OK,
-		"quitter oublie les scènes chargées ; sans autre poste connecté, le port se libère aussitôt")
+	var ferme_aussitot: bool = reseau._partants.size() == 1 and reseau._partants[0].pair() == null
+	reseau._process(0.0)
+	_check(reseau.scenes_chargees.is_empty() and ferme_aussitot and reseau._partants.is_empty() and reseau.heberger(17788) == OK,
+		"quitter oublie les scènes chargées ; sans autre poste connecté, le transport se ferme aussitôt (oublié à l'image suivante), le port se libère")
 	# Un autre poste connecté au niveau d'ENet (sa poignée de main ne finit jamais) : un départ propre
 	# le prévient par un DISCONNECT fiable, renvoyé jusqu'à son accusé de réception.
 	var autre := ENetMultiplayerPeer.new()
@@ -2442,6 +2453,295 @@ func _signature_protocole() -> PackedStringArray:
 	return lignes
 
 
+## Phase 1 du jeu en ligne : le transport ENet, seul (sans `Reseau` ni `SceneMultiplayer`) : son code,
+## l'ouverture du canal, le délai d'un client sans hôte, la libération d'un pair figé (I1), le départ
+## (DISCONNECT après la file, servi par `servir()`), la fermeture immédiate.
+func _tester_transport_enet() -> void:
+	print("-- Transport ENet (phase 1)")
+	_check(TransportENet.lire_code(" 127.000.0.1 :17785") == {"ip": "127.0.0.1", "port": 17785}
+		and TransportENet.lire_code("192.168.1.10") == {"ip": "192.168.1.10", "port": TransportENet.PORT},
+		"un code ENet : une IPv4 normalisée et son port, ou le port par défaut")
+	var mauvais := ["", "lelion.local:7777", "192.168.1:7777", "::1", "[::1]:7777", "127.0.0.1:", "127.0.0.1:0",
+		"127.0.0.1:65536", "127.0.0.1:77a", "127.0.0.1:-5", "127.0.0.1:1:2", "0.0.0.0:7777"]
+	_check(mauvais.all(func(c: String) -> bool: return TransportENet.lire_code(c).is_empty()),
+		"refusés : un nom d'hôte, une IPv4 incomplète ou injoignable, une IPv6, un port vide, nul, trop grand ou non numérique")
+	var refuse := TransportENet.new()
+	_check(refuse.rejoindre("lelion.local") == ERR_INVALID_PARAMETER and refuse.pair() == null and not refuse.servir(),
+		"un code refusé n'ouvre rien (aucune résolution de nom)")
+
+	var port := 17785
+	var hote := TransportENet.new(port, 2)
+	var codes: Array[String] = []
+	hote.pret.connect(func(code: String) -> void: codes.append(code))
+	_check(hote.heberger() == OK and codes == ["127.0.0.1:%d" % port] and hote.pair() is ENetMultiplayerPeer and hote.servir(),
+		"l'hôte ouvre sa session : « pret » part avec le code de ce poste (%s)" % [codes])
+	var occupe := TransportENet.new(port, 2)
+	_check(occupe.heberger() != OK and occupe.pair() == null, "un port déjà pris : l'erreur d'ENet, rien d'ouvert (ligne ERROR attendue)")
+	var connectes: Array[int] = []
+	var partis: Array[int] = []
+	hote.pair().peer_connected.connect(func(id: int) -> void: connectes.append(id))
+	hote.pair().peer_disconnected.connect(func(id: int) -> void: partis.append(id))
+
+	var fige := TransportENet.new()
+	var ouverts := [0]
+	fige.connecte.connect(func() -> void: ouverts[0] += 1)
+	_check(fige.rejoindre("127.0.0.1:%d" % port) == OK, "(pré-condition) un client part vers l'hôte")
+	_check(_servir_transports([hote, fige], func() -> bool: return ouverts[0] == 1 and connectes.size() == 1, 2.0),
+		"le canal s'ouvre : « connecte » chez le client, le pair chez l'hôte")
+	# I1 : le client ne répond plus du tout (ni servi ni relevé) ; l'hôte le libère : il part sur-le-champ
+	hote.liberer(connectes[0])
+	_check(partis == [connectes[0]], "un pair libéré qui ne répond plus part pendant l'appel, sans accusé de réception (I1)")
+	fige.clore()
+	_check(fige.pair() == null and not fige.servir(), "clore() ferme tout de suite")
+
+	var partant := TransportENet.new()
+	partant.rejoindre("127.0.0.1:%d" % port)
+	_check(_servir_transports([hote, partant], func() -> bool: return connectes.size() == 2, 2.0), "(pré-condition) un autre client est connecté")
+	partant.quitter()
+	_check(partant.servir() and partant.pair() != null, "quitter() : le départ part en arrière-plan, servi par servir()")
+	var depart_a := Time.get_ticks_msec()
+	_check(_servir_transports([hote, partant], func() -> bool: return partis.size() == 2 and partant.pair() == null, 1.5),
+		"l'hôte reçoit le départ ; le client se ferme une fois le départ reçu (%d ms)" % (Time.get_ticks_msec() - depart_a))
+
+	var seul := TransportENet.new()
+	seul.delai_canal = 0.3
+	var echecs: Array[String] = []
+	seul.echec.connect(func(raison: String) -> void: echecs.append(raison))
+	_check(seul.rejoindre("127.0.0.1:%d" % (port + 1)) == OK, "(pré-condition) un client part vers un port sans hôte")
+	_servir_transports([seul], func() -> bool: return not echecs.is_empty(), 1.0)
+	_check(echecs == [Transport.ECHEC_DELAI], "sans hôte : « echec » (délai du canal) (%s)" % [echecs])
+	seul.quitter()
+	var muet := TransportENet.new()
+	muet.delai_canal = 0.1
+	muet.echec.connect(func(raison: String) -> void: echecs.append(raison))
+	muet.rejoindre("127.0.0.1:%d" % (port + 1))
+	muet.quitter()
+	_servir_transports([muet], func() -> bool: return false, 0.3)
+	_check(echecs.size() == 1 and muet.pair() == null and seul.pair() == null,
+		"quitter() pendant l'attente du canal : fermé aussitôt, plus aucun signal ensuite")
+	hote.quitter()
+	_check(not hote.servir() and hote.pair() == null, "un hôte sans client connecté se ferme aussitôt")
+
+
+## Phase 1 du jeu en ligne : le battement et les silences de `Reseau`, d'abord en logique pure, puis
+## entre l'autoload, hôte, et un second poste client dans ce même processus : un second `Reseau` (le
+## script chargé : l'autoload n'est pas nommé) sous sa propre `SceneMultiplayer`, posée par
+## `set_multiplayer` sur un nœud à lui (le `SceneTree` la relève aussi). Les silences y sont raccourcis
+## (`definir_silence`) ; un poste se tait par `set_process(false)` (plus de battement, mais sa
+## `SceneMultiplayer` et son ENet tournent encore : seul le battement peut le déclarer parti).
+func _tester_battement() -> void:
+	print("-- Battement et silences (phase 1)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var entendus: Dictionary[int, int] = {12: 2400, 5: 1000, 9: 4000}
+	_check(hote.pairs_muets(entendus, 4500, 2000) == [5, 12] and hote.pairs_muets(entendus, 3000, 2000).is_empty()
+		and hote.pairs_muets(entendus, 3001, 2000) == [5],
+		"un pair est muet au-delà du silence toléré, pas à sa limite, dans l'ordre des identifiants (%s)" % [hote.pairs_muets(entendus, 4500, 2000)])
+	var port := 17786
+	_check(hote.heberger(port) == OK, "(pré-condition) ce poste héberge")
+	# Le verdict se rend à l'instant de l'écoute précédente : ce qui était arrivé avant a été relevé au début
+	# de cette image ; ce qui arrive pendant un gel de ce poste ne l'est pas encore
+	var silence_ms := int(hote.SILENCE_SESSION * 1000.0)
+	var maintenant := Time.get_ticks_msec()
+	hote._entendus[77] = maintenant - silence_ms - 1000  # (inconnu de SceneMultiplayer) muet depuis 9 s quand le gel commence
+	hote._derniere_ecoute = maintenant - 2000  # ce poste sort lui-même d'un gel de 2 s
+	hote._ecouter(maintenant)
+	var epargne: bool = hote._entendus.has(77)
+	hote._ecouter(maintenant + 16)
+	_check(epargne and not hote._entendus.has(77),
+		"au sortir d'un gel de 2 s de ce poste, personne n'est déclaré parti à la première image (ce qu'il a reçu pendant le gel n'est pas encore relevé) ; à la suivante, le pair resté muet l'est")
+	hote._entendus[76] = maintenant - silence_ms - 200  # muet depuis 10,2 s
+	hote._derniere_ecoute = maintenant - 333
+	var images := 0
+	while hote._entendus.has(76) and images < 6:
+		hote._ecouter(maintenant + images * 333)  # 3 images par seconde, soutenues
+		images += 1
+	_check(not hote._entendus.has(76) and images == 2,
+		"à 3 images par seconde, un pair muet est quand même déclaré parti, une image après son silence dépassé (%d images)" % images)
+	# Un silence raccourci (la fin du chargement : SILENCE_CHARGEMENT puis SILENCE_SESSION) repart de zéro
+	# pour chaque pair suivi : un poste figé au chargement n'a pas encore pu battre
+	hote.definir_silence(hote.SILENCE_CHARGEMENT)
+	maintenant = Time.get_ticks_msec()
+	hote._entendus[78] = maintenant - 15000  # muet depuis 15 s, toléré sous 30 s
+	hote._entendus[79] = maintenant + 500  # entendu plus tard que l'instant posé : jamais reculé
+	hote.definir_silence(hote.SILENCE_SESSION)
+	var pose: int = hote._entendus.get(78, 0)
+	hote._derniere_ecoute = maintenant
+	hote._ecouter(maintenant + 16)
+	_check(hote._entendus.has(78) and pose >= maintenant and hote._entendus.get(79, 0) == maintenant + 500,
+		"passer de 30 s à 10 s : un pair muet depuis 15 s n'est pas déclaré parti, son silence repart de zéro (instant posé à %+d ms)" % (pose - maintenant))
+	hote._ecouter(maintenant + silence_ms + 100)
+	hote._ecouter(maintenant + silence_ms + 200)
+	_check(not hote._entendus.has(78) and hote._entendus.has(79), "... il l'est s'il reste muet 10 s de plus")
+	var avant: Dictionary[int, int] = hote._entendus.duplicate()
+	hote.definir_silence(hote.SILENCE_CHARGEMENT)
+	_check(hote._entendus == avant, "un silence allongé ne touche à aucun instant")
+	hote.quitter()
+
+	var noeud := Node.new()
+	noeud.name = "PosteClient"
+	root.add_child(noeud)
+	var chemin := noeud.get_path()
+	set_multiplayer(SceneMultiplayer.new(), chemin)
+	var client: Node = load("res://Scripts/Reseau.gd").new()
+	client.name = "Reseau"  # vu de sa propre API, au même chemin que l'autoload : les RPC s'y retrouvent
+	noeud.add_child(client)
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Client"
+
+	# Le battement tient la session : chacun a entendu l'autre il y a moins d'une période et demie
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id_client: int = arrives[0] if arrives.size() == 1 else -1
+	await create_timer(2.5).timeout
+	var ecart_hote: int = Time.get_ticks_msec() - hote._entendus.get(id_client, 0)
+	var ecart_client: int = Time.get_ticks_msec() - client._entendus.get(1, 0)
+	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 1500 and ecart_client <= 1500,
+		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms" % [ecart_hote, ecart_client])
+
+	# Un client muet : l'hôte le déclare parti au bout du silence toléré, pas avant
+	hote.definir_silence(1.5)
+	client.set_process(false)
+	var client_muet_depuis: int = hote._entendus.get(id_client, 0)
+	_check(await _attendre(func() -> bool: return partis.size() == 1, 5.0), "l'hôte voit partir un client muet (son ENet répondait encore)")
+	var vu_apres: int = Time.get_ticks_msec() - client_muet_depuis
+	_check(partis == [id_client] and vu_apres >= 1500 and vu_apres <= 2500,
+		"... %d ms après son dernier battement : son silence de 1,5 s, pas avant" % vu_apres)
+	client.set_process(true)
+	_check(await _attendre(func() -> bool: return pertes.size() == 1, 3.0) and not client.en_ligne(),
+		"le client libéré se retrouve hors réseau, l'hôte perdu")
+
+	# L'hôte muet : le client le déclare perdu au bout de son silence toléré
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint de nouveau")
+	_check(await _attendre(func() -> bool: return arrives.size() == 2 and client._entendus.has(1), 3.0), "(pré-condition) le client est de nouveau arrivé")
+	client.definir_silence(1.5)
+	hote.set_process(false)
+	var hote_muet_depuis: int = client._entendus.get(1, 0)
+	_check(await _attendre(func() -> bool: return pertes.size() == 2, 5.0), "le client perd un hôte muet")
+	var perdu_apres: int = Time.get_ticks_msec() - hote_muet_depuis
+	hote.set_process(true)
+	_check(perdu_apres >= 1500 and perdu_apres <= 2500 and pertes.size() == 2 and pertes[1] == client.PERTE_HOTE and not client.en_ligne(),
+		"... %d ms après son dernier battement (silence de 1,5 s) : « L'hôte a quitté la partie »" % perdu_apres)
+
+	# Départ volontaire (spec §5), sous un silence de 30 s : vu tout de suite, par l'adieu. D'abord l'adieu
+	# seul (le poste ne quitte pas : son transport ne dit rien), puis un vrai `quitter()`.
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une troisième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 3 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	var partis_avant := partis.size()
+	var pertes_avant := pertes.size()
+	var adieu_a := Time.get_ticks_msec()
+	client._recevoir_adieu.rpc_id(1)
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1, 1.0),
+		"l'adieu d'un client : l'hôte le voit partir tout de suite (%d ms), sans attendre son silence" % (Time.get_ticks_msec() - adieu_a))
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and not client.en_ligne(),
+		"(le client libéré se retrouve hors réseau)")
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une quatrième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 4 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	pertes_avant = pertes.size()
+	adieu_a = Time.get_ticks_msec()
+	hote._recevoir_adieu.rpc()
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and pertes[-1] == client.PERTE_HOTE,
+		"l'adieu de l'hôte : le client le perd tout de suite (%d ms), « L'hôte a quitté la partie »" % (Time.get_ticks_msec() - adieu_a))
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une cinquième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 5 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	partis_avant = partis.size()
+	var transport_client: Transport = client._transport
+	client.quitter()
+	_check(not client.en_ligne() and client._partants.has(transport_client), "quitter() : ce poste est hors réseau aussitôt, son départ continue en arrière-plan")
+	var quitte_a := Time.get_ticks_msec()
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1 and not client._partants.has(transport_client), 1.5),
+		"un client qui quitte : l'hôte le voit partir, son transport se ferme une fois l'adieu envoyé (%d ms)" % (Time.get_ticks_msec() - quitte_a))
+
+	# Le transport de la session se ferme de lui-même (`servir()` faux sans `quitter()` ni `clore()`) : la
+	# session est perdue, une seule fois. Un client qui se connecte : un échec de connexion ; un client
+	# inscrit : l'hôte perdu ; l'hôte : `hote_perdu` aussi (comme N4, son pair tombé en erreur)
+	var echecs: Array[int] = []
+	var sur_echec := func() -> void: echecs.append(Time.get_ticks_msec())
+	client.connexion_echouee.connect(sur_echec)
+	pertes_avant = pertes.size()
+	_check(client.rejoindre("127.0.0.1", port + 1) == OK, "(pré-condition) le client se connecte à un port sans hôte")
+	var factice := TransportPerdu.new(client._transport)
+	client._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return not echecs.is_empty(), 1.0) and not client.en_ligne() and client._transport == null,
+		"le transport d'un client qui se connecte se ferme de lui-même : échec de connexion, ce poste hors réseau")
+	await _attendre(func() -> bool: return false, 0.2)
+	_check(echecs.size() == 1 and pertes.size() == pertes_avant and factice.quitte == 1 and not client._partants.has(factice),
+		"... une seule fois (%d échec(s), %d perte(s)), son transport quitté une fois (%d) puis oublié" % [echecs.size(), pertes.size() - pertes_avant, factice.quitte])
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une sixième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 6 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	partis_avant = partis.size()
+	factice = TransportPerdu.new(client._transport)
+	client._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and pertes[-1] == client.PERTE_HOTE
+		and not client.en_ligne() and echecs.size() == 1,
+		"le transport d'un client inscrit se ferme de lui-même : l'hôte est perdu, « L'hôte a quitté la partie »")
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1, 1.0), "(l'hôte voit partir ce client : son adieu)")
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une septième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 7 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var pertes_hote: Array[int] = []
+	var sur_perte_hote := func() -> void: pertes_hote.append(Time.get_ticks_msec())
+	hote.hote_perdu.connect(sur_perte_hote)
+	pertes_avant = pertes.size()
+	factice = TransportPerdu.new(hote._transport)
+	hote._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return pertes_hote.size() == 1, 1.0) and not hote.en_ligne() and hote.inscrits.is_empty(),
+		"le transport de l'hôte se ferme de lui-même : la session est perdue (hote_perdu chez l'hôte, comme N4), ce poste hors réseau")
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0), "(le client perd l'hôte : son adieu)")
+	await _attendre(func() -> bool: return false, 0.2)
+	_check(pertes_hote.size() == 1, "... une seule fois (%d)" % pertes_hote.size())
+	hote.hote_perdu.disconnect(sur_perte_hote)
+	client.connexion_echouee.disconnect(sur_echec)
+
+	hote.quitter()
+	client.quitter()
+	await _attendre(func() -> bool: return hote._partants.is_empty() and client._partants.is_empty(), 2.0)
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	noeud.queue_free()
+	set_multiplayer(null, chemin)
+	hote.pseudo = ""
+
+
+## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
+## valeur.
+func _attendre(condition: Callable, delai: float) -> bool:
+	var fin := Time.get_ticks_msec() + int(delai * 1000.0)
+	while not condition.call() and Time.get_ticks_msec() < fin:
+		await process_frame
+	return condition.call()
+
+
+## Sert les transports `transports` (leur pair relevé, `servir()`) jusqu'à ce que `condition` soit
+## vraie, `delai` secondes au plus ; renvoie sa dernière valeur.
+func _servir_transports(transports: Array, condition: Callable, delai: float) -> bool:
+	var fin := Time.get_ticks_msec() + int(delai * 1000.0)
+	while not condition.call() and Time.get_ticks_msec() < fin:
+		for t: Transport in transports:
+			var p := t.pair()
+			if p != null and p.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+				p.poll()
+			t.servir()
+		OS.delay_msec(5)
+	return condition.call()
+
+
 ## Les fichiers du dossier `dossier` qui finissent par `suffixe`, triés.
 func _fichiers_du_dossier(dossier: String, suffixe: String) -> PackedStringArray:
 	var fichiers := PackedStringArray()
@@ -2467,3 +2767,37 @@ func _connecter(autre: ENetMultiplayerPeer, reseau: Node) -> bool:
 				return true
 		OS.delay_msec(5)
 	return false
+
+
+## Un transport factice (`_tester_battement`) : délègue tout au transport `reel`, sauf `servir()`, faux
+## dès que `perdu` est vrai (la session s'est fermée d'elle-même, sans `quitter()` ni `clore()`) ; compte
+## ses `quitter()`.
+class TransportPerdu extends Transport:
+	var reel: Transport
+	var perdu := false
+	var quitte := 0
+
+	func _init(transport: Transport) -> void:
+		reel = transport
+
+	func heberger() -> Error:
+		return reel.heberger()
+
+	func rejoindre(code: String) -> Error:
+		return reel.rejoindre(code)
+
+	func quitter() -> void:
+		quitte += 1
+		reel.quitter()
+
+	func clore() -> void:
+		reel.clore()
+
+	func pair() -> MultiplayerPeer:
+		return reel.pair()
+
+	func liberer(id: int) -> void:
+		reel.liberer(id)
+
+	func servir() -> bool:
+		return reel.servir() and not perdu
