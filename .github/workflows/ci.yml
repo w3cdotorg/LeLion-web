@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Installer Godot et les templates d'export
         run: |
@@ -111,7 +111,7 @@ jobs:
       run:
         working-directory: signalisation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Installer Node
         uses: actions/setup-node@v6
