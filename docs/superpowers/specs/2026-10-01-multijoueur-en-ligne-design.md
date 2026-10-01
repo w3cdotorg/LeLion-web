@@ -54,8 +54,8 @@ qui change est sous `Reseau` : le transport devient une unité à part, avec deu
 
 | Unité | Rôle | Dépend de |
 |---|---|---|
-| `Reseau` (autoload, allégé) | Poignée de main (authentification de `SceneMultiplayer`, inchangée), table du salon, barrière de chargement, relance de manche, départs. Ne nomme plus aucune classe ENet. Tient le **battement** : chaque poste envoie un battement par seconde (non fiable) ; tout paquet reçu d'un pair, battement ou non, remet son silence à zéro ; 10 s de silence (30 s au chargement) le déclarent parti. Ajoute l'**exclusion** par l'hôte (§8). | `Transport`, `GameState` |
-| `Transport` (interface, `RefCounted`) | `heberger() -> Error`, `rejoindre(code: String) -> Error`, `quitter()`, `pair() -> MultiplayerPeer` ; signaux `pret(code)` (chez l'hôte : la salle existe), `connecte()` (chez le client : canal ouvert, la poignée de main peut partir), `echec(raison)`. Ne sait rien du salon ni du jeu. | rien |
+| `Reseau` (autoload, allégé) | Poignée de main (authentification de `SceneMultiplayer`, inchangée), table du salon, barrière de chargement, relance de manche, départs. Ne nomme plus aucune classe ENet. Tient le **battement** : chaque poste envoie un battement par seconde (non fiable) ; tout paquet de `Reseau` reçu d'un pair, battement ou RPC, remet son silence à zéro (`SceneMultiplayer` ne donne ni l'heure de réception par pair ni un signal par RPC reçue : le trafic de la manche n'est pas compté, le battement y suffit) ; 10 s de silence (30 s au chargement) le déclarent parti. Départ volontaire : un adieu fiable, puis le transport ferme une fois l'adieu envoyé (§5). Un exclu part de lui-même à l'annonce, fiable ; l'hôte le libère ensuite. Ajoute l'**exclusion** par l'hôte (§8). | `Transport`, `GameState` |
+| `Transport` (interface `@abstract`, `RefCounted`) | `heberger() -> Error`, `rejoindre(code: String) -> Error`, `quitter()` (ferme une fois envoyé ce qui est en file, en arrière-plan), `clore()` (tout de suite), `pair() -> MultiplayerPeer`, `liberer(id)` (chez l'hôte : ferme sur-le-champ le canal d'un pair parti, muet ou exclu, sans attendre de réponse ; son `peer_disconnected` part pendant l'appel), `servir() -> bool` (à chaque image ; faux une fois fermé) ; signaux `pret(code)` (chez l'hôte : la salle existe), `connecte()` (chez le client : canal ouvert, la poignée de main peut partir), `echec(raison)`. Ne sait rien du salon ni du jeu. | rien |
 | `TransportWebRTC` | Le transport livré : la signalisation (§4), un `WebRTCPeerConnection` par client chez l'hôte, la configuration ICE reçue du Worker, les canaux (§5). | `Transport`, `WebSocketPeer` |
 | `TransportENet` | Le transport ENet de LeLion-multi, extrait de `Reseau.gd`, gardé pour la **version desktop de développement et les tests headless** (les 13 scénarios réseau, le relais de latence). Jamais choisi dans l'export Web. Le « code » y est `ip:port`. | `Transport` |
 | `EcranEnLigne` (remplace `EcranReseau`) | Pseudo (mémorisé dans `Scores`), *Créer une partie* (absent sur mobile), *Rejoindre* avec un champ de code (pré-rempli par `?salle=`), messages d'erreur (§9). Le salon affiche le code et *Copier le lien*. | `Reseau` |
@@ -247,6 +247,8 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   inviter, rejoindre, onglet au premier plan, mobiles, vie privée, dépannage message par message).
 
 ## 12. Phases (le découpage exact viendra du plan)
+
+Le découpage exact est celui de la feuille de route (`docs/superpowers/plans/2026-10-01-en-ligne-feuille-de-route.md`), qui fait foi : elle le revoit (la découverte LAN part avec l'écran En ligne, en 3 bis ; le WebRTC et son test de bout en bout vont ensemble, en 4 ; le déploiement a sa phase, 5). Le tableau ci-dessous garde le découpage du brainstorming.
 
 Chaque phase touche 5 fichiers au plus, se termine par les tests verts et attend une validation.
 
