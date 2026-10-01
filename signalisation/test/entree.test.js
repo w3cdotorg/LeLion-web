@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ESSAIS_CODE } from "../src/code.js";
 import * as principal from "../src/index.js";
+import { cleIp } from "../src/ip.js";
 import { origineAdmise } from "../src/origine.js";
-import { brancher, ouvrir, requete } from "./aide.js";
+import { brancher, creerSalle, loinDuBordDeMinute, ouvrir, requete } from "./aide.js";
 
 const ORIGINES = "https://w3cdotorg.github.io,http://localhost:*";
 
@@ -32,6 +33,44 @@ describe("origineAdmise", () => {
 		}
 		expect(origineAdmise("https://w3cdotorg.github.io", undefined)).toBe(false);
 	});
+});
+
+describe("cleIp", () => {
+	it("une IPv4 telle quelle, une IPv4 mappée en IPv6 rendue à l'IPv4, absente : local", () => {
+		expect(cleIp("203.0.113.7")).toBe("203.0.113.7");
+		expect(cleIp("::ffff:203.0.113.7")).toBe("203.0.113.7");
+		expect(cleIp("::FFFF:203.0.113.7")).toBe("203.0.113.7");
+		expect(cleIp("0:0:0:0:0:ffff:cb00:7107")).toBe("203.0.113.7");
+		for (const absente of [null, undefined, ""]) expect(cleIp(absente)).toBe("local");
+	});
+
+	it("une IPv6 : son /64 (4 premiers groupes, :: développé, minuscules, zéros de tête retirés)", () => {
+		expect(cleIp("2001:db8::1")).toBe("2001:db8:0:0");
+		expect(cleIp("2001:DB8:0A:b::1")).toBe("2001:db8:a:b");
+		expect(cleIp("2001:0db8:000a:000b:1:2:3:4")).toBe("2001:db8:a:b");
+		expect(cleIp("2001:db8:a:b:c::")).toBe("2001:db8:a:b");
+		expect(cleIp("2001:db8:a::b:c:d:e")).toBe("2001:db8:a:0");
+		expect(cleIp("::1")).toBe("0:0:0:0");
+		expect(cleIp("64:ff9b::203.0.113.7")).toBe("64:ff9b:0:0");
+	});
+
+	it("un texte qui n'est pas une IP valide reste tel quel (en minuscules)", () => {
+		for (const texte of ["pas:une:ip", "1:2:3:4:5:6:7:8:9", "1::2::3", "1:2:3:4:5:6:7", "12345::1", "::ffff:999.0.0.1"]) {
+			expect(cleIp(texte), texte).toBe(texte);
+		}
+		expect(cleIp("Pas:Une:IP")).toBe("pas:une:ip");
+	});
+
+	it("deux adresses d'un même /64 partagent la limite de création, un autre /64 non", async () => {
+		await loinDuBordDeMinute();
+		const [a, b] = crypto.getRandomValues(new Uint16Array(2));
+		const reseau = `2001:db8:${a.toString(16)}:${b.toString(16)}`;
+		for (const ip of [`${reseau}::1`, `${reseau}::2`, `${reseau}:1:2:3:4`, `${reseau.toUpperCase()}::5`, `${reseau}:ffff:0:0:6`]) {
+			expect((await creerSalle({ ip })).salle.t, ip).toBe("salle");
+		}
+		expect(await (await ouvrir("/v1/creer", { ip: `${reseau}::7` })).suivant()).toEqual({ t: "erreur", raison: "debit" });
+		expect((await creerSalle({ ip: `2001:db8:${a.toString(16)}:${(b ^ 1).toString(16)}::1` })).salle.t).toBe("salle");
+	}, 20000);
 });
 
 const worker = principal.default;

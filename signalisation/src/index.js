@@ -1,8 +1,10 @@
 // Le point d'entrée du Worker (spec §4.1, §8.1) : les routes /v1, l'origine, les limites de création
-// et d'arrivée par IP, puis la salle (Durable Object `Salle`, un par code) qui garde la socket.
+// et d'arrivée par IP (un /64 en IPv6), puis la salle (Durable Object `Salle`, un par code) qui garde
+// la socket.
 // Le module principal n'exporte que des gestionnaires (`default`, `Salle`) : workerd refuse d'en
 // démarrer un qui exporte autre chose (constante, fonction).
 import { ESSAIS_CODE, lireCode, tirerCode } from "./code.js";
+import { cleIp } from "./ip.js";
 import { origineAdmise } from "./origine.js";
 import { journal, refuser } from "./protocole.js";
 
@@ -30,7 +32,7 @@ export default {
 			journal("origine refusée", { origine });
 			return refuser("origine");
 		}
-		const cle = requete.headers.get("cf-connecting-ip") ?? "local";
+		const cle = cleIp(requete.headers.get("cf-connecting-ip"));
 		return code === null ? creer(requete, env, cle) : rejoindre(requete, env, code, cle);
 	},
 };
