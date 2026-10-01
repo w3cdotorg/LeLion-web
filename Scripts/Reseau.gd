@@ -66,7 +66,7 @@ signal scene_chargee(id: int)
 ## Chez le client : l'hôte l'a accepté et la connexion est établie (`index_local`, `couleur_locale`).
 signal inscrit(index: int, couleur: Color)
 ## Chez le client : l'hôte a refusé ; `raison` est une des constantes REFUS_* (clé de traduction
-## pour l'écran Réseau de la phase 12), `version_hote` la version de l'hôte. Le poste est déjà
+## pour l'écran En ligne), `version_hote` la version de l'hôte. Le poste est déjà
 ## revenu hors réseau quand le signal part.
 signal refuse(raison: String, version_hote: String)
 ## Chez le client : pas d'inscription (le transport n'a pas ouvert son canal, ou la poignée de main n'a
@@ -621,7 +621,7 @@ static func pseudo_ou_defaut(texte: String, index: int) -> String:
 
 
 ## Chez l'hôte, à l'ouverture du salon (et au retour d'une manche, phase 18) : plus de manche en
-## cours (les arrivées sont de nouveau acceptées, la balise l'annonce), personne n'est prêt, le
+## cours (les arrivées sont de nouveau acceptées), personne n'est prêt, le
 ## niveau est `niveau` (ramené dans la liste des niveaux).
 func ouvrir_salon(niveau: int) -> void:
 	if not multiplayer.is_server():
@@ -692,7 +692,7 @@ func definir_pret(id: int, pret: bool) -> bool:
 
 
 ## Chez l'hôte, quand il appuie sur « Démarrer la partie » : la manche commence. Plus aucune arrivée
-## (`manche_en_cours`, que la balise annonce), index compactés sur 0..n-1 (des départs ont pu
+## (`manche_en_cours`), index compactés sur 0..n-1 (des départs ont pu
 ## laisser des trous), table compactée diffusée (chaque client y lit son nouvel `index_local`),
 ## puis le lancement (`_recevoir_manche`, sur le même canal fiable que la table : il arrive
 ## après elle) ; `manche_lancee` part aussi ici. La demande est revérifiée ici, au moment même :
@@ -723,7 +723,7 @@ func relancer_manche(niveau: int) -> bool:
 
 ## Chez l'hôte, depuis l'écran Résultats (phase 18) : chaque poste revient au salon, sur la même table
 ## (les partis en moins) : le salon s'ouvre chez l'hôte (`ouvrir_salon` : plus de manche en cours, les
-## arrivées de nouveau acceptées et annoncées par la balise, personne prêt, la table diffusée), puis
+## arrivées de nouveau acceptées, personne prêt, la table diffusée), puis
 ## chaque client change de scène (`_recevoir_retour_salon`, sur le canal ordonné, avec la table) ;
 ## `salon_rouvert` part aussi ici. Faux chez un client, ou hors d'une manche.
 func revenir_au_salon() -> bool:

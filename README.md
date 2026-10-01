@@ -108,8 +108,9 @@ Scenes/     Titre (title), Main (a game), Intro (READY? VOMIT!), Lion, Ville (to
             ControlesTactiles (touch controls), GameOver (CONTINUE? + summary), ColorPickup, BonusPickup,
             CoeurPickup, Soucoupe, Coccinelle, Boss
 Scripts/    one script per scene; the autoloads GameState (game, players, levels, difficulties, arcade), Scores
-            (records, preferences), Parametres (settings, CRT layer), Audio (sounds, layered music), Reseau (ENet
-            transport, handshake, lobby table) and Decouverte (UDP game announcements); Manche (a networked round);
+            (records, preferences), Parametres (settings, CRT layer), Audio (sounds, layered music) and Reseau
+            (handshake, lobby table, heartbeat); Transport and TransportENet (the network channels); CodeSalle
+            (room codes, invitation link); Manche (a networked round);
             pure logic: Joueur (a player), Commandes (inputs), Regles / ReglesSolo / ReglesBataille (rules of each
             mode), Territoire (cell ownership), Peinture (deterministic stamps), EtatLion, InterpolationLion and
             PredictionLocale (lions over the network), BilanManche (end of a round), PlacementPseudos; the lion's
@@ -141,7 +142,7 @@ godot --headless --script tests/unitaires.gd                       # pure logic:
 godot --headless --script tests/smoke_test.gd                      # solo game, title, online screen, lobby, a networked round
 godot --headless --fixed-fps 60 --script tests/bataille_test.gd    # a 4-lion local battle, the Results screen, rematch
 godot --headless --fixed-fps 60 --script tests/prediction_test.gd  # client-side prediction under simulated latency
-bash tests/reseau/lancer.sh                                        # headless Godot processes on localhost; DIFFUSION=1 adds real broadcast
+bash tests/reseau/lancer.sh                                        # headless Godot processes on localhost (ENet)
 godot --headless --fixed-fps 60 --script tests/trace_lions.gd      # the lions' fingerprint, for refactors
 ```
 
