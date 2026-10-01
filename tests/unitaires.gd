@@ -901,10 +901,17 @@ func _tester_reseau() -> void:
 	_check(reseau.heberger(port) == OK and reseau.en_ligne() and api.is_server() and reseau.inscrits.size() == 1
 		and reseau.index_local == 0 and reseau.couleur_locale == palette[0] and reseau.inscrits[1].pseudo == "Hôte",
 		"port libre : l'hôte écoute et s'inscrit lui-même (index 0, première couleur, son pseudo)")
+	_check(reseau.code_partie == "127.0.0.1:%d" % port and reseau._transport is TransportENet
+		and api.multiplayer_peer == reseau._transport.pair(),
+		"phase 1 : la session passe par son transport (ENet), qui donne le code de la partie (%s)" % reseau.code_partie)
 	reseau.quitter()
 	_check(not reseau.en_ligne() and api.multiplayer_peer is OfflineMultiplayerPeer and api.is_server()
-		and reseau.inscrits.is_empty() and reseau.index_local == -1 and api.auth_callback.is_null(),
-		"quitter revient hors réseau : pair hors ligne, hôte de soi-même, plus d'inscrits ni de poignée de main")
+		and reseau.inscrits.is_empty() and reseau.index_local == -1 and api.auth_callback.is_null()
+		and reseau.code_partie.is_empty() and reseau._transport == null,
+		"quitter revient hors réseau : pair hors ligne, hôte de soi-même, plus d'inscrits, de poignée de main, de code ni de transport")
+	var source_reseau := FileAccess.get_file_as_string("res://Scripts/Reseau.gd")
+	var classes_enet := RegEx.create_from_string("\\bENet[A-Z]\\w*").search_all(source_reseau).map(func(r: RegExMatch) -> String: return r.get_string())
+	_check(classes_enet.is_empty(), "phase 1 : Reseau ne nomme aucune classe d'ENet, tout passe par son transport (%s)" % [classes_enet])
 
 	# places est bornée à l'hébergement (N3) : sinon un hôte à 0 place ne trouverait pas d'index
 	reseau.places = 0

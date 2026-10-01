@@ -135,7 +135,7 @@ extends SceneTree
 ## Code de sortie 0 si toutes ses vérifications passent. Compilé avant les autoloads : récupère
 ## `Reseau`, `Decouverte`, `GameState` et `Scores` par `root.get_node`, ne nomme ni `Reseau`, ni
 ## `Decouverte`, ni `GameState`, ni le salon (il peut nommer `EtatPartie`, dont le script ne nomme
-## aucun autoload, et `ReglesBataille`).
+## aucun autoload, `ReglesBataille` et `TransportENet`).
 
 const DELAI_ETAPE := 15.0  # secondes au plus pour chaque attente
 ## Manche de bout en bout : secondes de jeu avant les rencontres, puis avant la fin où tout se calme.
@@ -267,6 +267,10 @@ func _run() -> void:
 		await _jouer_chrono(role == "chrono-hote")
 	else:
 		_check(false, "rôle inconnu : --role=hote, client, lent, ecouteur, salon-hote, salon-client, manche-hote, manche-client, manche-muet, bout-hote, bout-client, latence-hote, latence-client, chrono-hote ou chrono-client")
+	# Le départ de ce poste part en arrière-plan (le DISCONNECT de son transport ne part qu'une fois sa file
+	# envoyée) : le processus ne sort qu'une fois le transport fermé (une seconde au plus), sans quoi
+	# l'autre poste attendrait les 10 s du battement.
+	_check(await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0), "le départ de ce poste est fini (son transport fermé)")
 	_check(not reseau.en_ligne() and root.multiplayer.multiplayer_peer is OfflineMultiplayerPeer
 		and root.multiplayer.is_server() and reseau.inscrits.is_empty() and reseau.index_local == -1
 		and not decouverte.ecoute_active(),
@@ -337,7 +341,7 @@ func _jouer_hote() -> void:
 		var rester := _option("rester", "")
 		print("HOTE RESTE")
 		_check(await _attendre(func() -> bool: return FileAccess.file_exists(rester)), "lancer.sh laisse partir l'hôte (%s)" % rester)
-	reseau.quitter()  # close() envoie ses paquets de façon synchrone (N7) : pas de pause à ajouter ici
+	reseau.quitter()  # son départ s'achève en arrière-plan : `_run` l'attend avant de sortir
 	if _options.has("apres-depart"):
 		# Le processus vit encore : si la balise ne suivait pas l'état de Reseau, elle continuerait.
 		await _pause(float(_option("apres-depart", "0")))
@@ -407,8 +411,8 @@ func _jouer_client() -> void:
 			await _pause(1.0)
 			_check(_issue == "refuse", "un refus n'est suivi d'aucun autre signal (%s)" % _issue)
 		"echec":
-			_check(_issue == "echec" and duree >= reseau.DELAI_CONNEXION - 0.5 and duree <= reseau.DELAI_CONNEXION + 2.0,
-				"sans hôte, la connexion échoue après le délai de %.0f s (%.1f s)" % [reseau.DELAI_CONNEXION, duree])
+			_check(_issue == "echec" and duree >= TransportENet.DELAI_CANAL - 0.5 and duree <= TransportENet.DELAI_CANAL + 2.0,
+				"sans hôte, la connexion échoue après le délai du canal de %.0f s (%.1f s)" % [TransportENet.DELAI_CANAL, duree])
 		_:
 			_check(false, "issue attendue inconnue : %s" % attendu)
 

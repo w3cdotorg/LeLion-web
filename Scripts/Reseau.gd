@@ -1,5 +1,5 @@
 extends Node
-## Transport LAN (spec §4) : le pair ENet (port UDP 7777), la poignée de main (version, pseudo),
+## La session réseau (spec §3.1 du jeu en ligne) : la poignée de main (version, pseudo),
 ## l'attribution des index et des couleurs par l'hôte, les arrivées et les départs, et la table du
 ## salon (phase 13) : qui est là, sa couleur, s'il est prêt, le niveau et le lancement de la
 ## manche, que l'hôte ne permet que si le salon est prêt (`raison_attente`). Le salon
@@ -13,15 +13,20 @@ extends Node
 ## `OfflineMultiplayerPeer` : ce poste est son propre hôte (`multiplayer.is_server()` vrai), et
 ## `quitter()` y revient toujours.
 ##
-## Battement et silences (phase 1 du jeu en ligne) : chaque poste en session envoie un battement par
-## seconde (`_battement`, non fiable) ; tout ce que ce script reçoit d'un pair, battement ou RPC, remet
-## son silence à zéro (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte
-## comme chez un client, SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa
-## scène ou compile ses shaders ne répond plus). Chez l'hôte, un client muet ou exclu est libéré
-## (`_liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs. `quitter()` part
-## proprement (M6 : un DISCONNECT fiable d'ENet, renvoyé jusqu'à son accusé de réception, DELAI_DEPART
-## au plus, en arrière-plan : `_partants`), pas par un seul datagramme qu'une perte Wi-Fi ferait passer
-## inaperçu. Le relais du serveur est coupé (`server_relay`) : tout passe par l'hôte.
+## Transport (phase 1 du jeu en ligne) : les canaux sont ceux d'un `Transport` (`TransportENet`, puis
+## `TransportWebRTC` en phase 4), dont ce script donne le pair à `SceneMultiplayer` et qu'il sert à
+## chaque image ; il ne nomme aucune classe d'ENet. Un transport quitté finit son départ en
+## arrière-plan (`_partants`).
+##
+## Battement et silences : chaque poste en session envoie un battement par seconde (`_battement`, non
+## fiable) ; tout ce que ce script reçoit d'un pair, battement ou RPC, remet son silence à zéro
+## (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte comme chez un client,
+## SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa scène ou compile ses
+## shaders ne répond plus). Chez l'hôte, un client muet ou exclu est libéré (`_liberer`, puis
+## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs.
+## `quitter()` part proprement : le transport ferme sa session après l'envoi de ce qui est en file
+## (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est coupé
+## (`server_relay`) : tout passe par l'hôte.
 ##
 ## La poignée de main passe par l'authentification de `SceneMultiplayer` : des octets bruts
 ## (`var_to_bytes` d'un dictionnaire), échangés avant tout RPC, si bien que deux versions
@@ -68,7 +73,7 @@ signal refuse(raison: String, version_hote: String)
 signal connexion_echouee()
 ## Chez le client : l'hôte a quitté la partie ou ne répond plus. Le poste est déjà revenu hors
 ## réseau quand le signal part ; `raison_perte` dit pourquoi (phase 18 : un joueur exclu par la barrière
-## de chargement le sait). N4 : si le pair ENet de l'hôte tombe lui-même en erreur, ce même
+## de chargement le sait). N4 : si le pair de l'hôte tombe lui-même en erreur, ce même
 ## signal part aussi chez l'hôte (server_disconnected n'y distingue pas les deux cas) ; personne ne
 ## l'écoute encore côté hôte à cette phase, mais un futur appelant ne doit pas supposer « jamais
 ## chez l'hôte ».
@@ -85,21 +90,18 @@ signal manche_lancee(fiches: Array[Dictionary])
 ## Résultats) ; la table (sans les partis, personne prêt) est déjà arrivée, la manche n'est plus en cours.
 signal salon_rouvert()
 
-const PORT := 7777
+## Port de jeu par défaut : celui du transport ENet.
+const PORT := TransportENet.PORT
 ## Identifiant de la poignée de main : une demande qui ne le porte pas vient d'un autre programme.
 const JEU := "LELION"
-## Délai d'une connexion jusqu'à l'inscription (spec §9 : 5 s puis message).
+## Délai de la poignée de main d'un client, du canal ouvert (`Transport.connecte`) à l'inscription (spec
+## §9 : 5 s puis message) ; l'ouverture du canal a le délai de son transport.
 const DELAI_CONNEXION := 5.0
 ## Délai laissé à chaque pair pour finir la poignée de main (`SceneMultiplayer.auth_timeout`).
 const DELAI_POIGNEE_DE_MAIN := 3.0
 ## Longueur maximale d'un pseudo, en caractères, imposée par l'hôte (l'étiquette du lion est
 ## centrée sur lui et coupée par le bord de l'écran au-delà d'une douzaine de caractères).
 const PSEUDO_MAX := 12
-## Connexions ENet (`max_clients`) acceptées au-delà de `places` : l'hôte ne consomme pas de
-## connexion vers lui-même, donc `places - 1` suffiraient aux vrais clients ; ce solde donne de quoi
-## recevoir, et refuser explicitement, les demandes d'une partie déjà pleine au lieu de les laisser
-## échouer sans explication côté ENet (N1 : la marge réelle est donc de CONNEXIONS_EN_TROP + 1).
-const CONNEXIONS_EN_TROP := 2
 ## Taille maximale, en octets, d'un envoi de poignée de main : au-delà, `bytes_to_var` ne décode
 ## pas (le coût du décodage doit rester borné, même pour un émetteur quelconque sur le port UDP).
 const TAILLE_POIGNEE_DE_MAIN_MAX := 1024
@@ -130,26 +132,13 @@ const SILENCE_CHARGEMENT := 30.0
 ## ce temps ne sera relevé qu'à l'image suivante ; son verdict sur les silences attend jusque-là
 ## (`_ecouter`).
 const GEL_LOCAL := 250
-## Essais de renvoi d'ENet avant de compter le silence (son défaut).
-const ESSAIS_SILENCE := 32
-## Silence d'un pair au-delà duquel ENet l'abandonne lui-même (`ENetPacketPeer.set_timeout`, en ms :
-## minimum, maximum) : bien au-delà de SILENCE_CHARGEMENT, pour que ce soit toujours le battement qui
-## décide.
-const SILENCE_ENET := Vector2i(45000, 60000)
-## Délai laissé à un départ volontaire pour être reçu (accusé de réception du DISCONNECT), en
-## millisecondes.
-const DELAI_DEPART := 1000
-## Canal ENet du lancement et du retour au salon, table comprise : le canal fiable ordonné de la manche
+## Canal du lancement et du retour au salon, table comprise : le canal fiable ordonné de la manche
 ## (`Manche.CANAL_PEINTURE`, spec §4), phase 18.
 const CANAL_ORDONNE := 1
 
 ## Ce que `_poser_salon` fait d'une table reçue de l'hôte (M6) : posée, plus ancienne que la dernière
 ## posée (ignorée), ou illisible (ignorée, signalée).
 enum Pose { POSEE, PERIMEE, ILLISIBLE }
-
-## Pour `adresse_ipv4`, la validation de l'écran Réseau (fonction statique : l'autoload n'est pas
-## nommé). `Decouverte.gd` précharge aussi ce script : ce préchargement croisé passe en Godot 4.7.
-const _Decouverte := preload("res://Scripts/Decouverte.gd")
 
 ## Version présentée à la poignée de main (`application/config/version`) ; deux versions
 ## différentes ne jouent pas ensemble. Modifiable par les tests.
@@ -206,9 +195,12 @@ var couleur_locale := Color.TRANSPARENT
 var scenes_chargees: Array[int] = []
 ## Silence toléré des pairs de cette session, en secondes (SILENCE_SESSION ou SILENCE_CHARGEMENT).
 var silence := SILENCE_SESSION
+## Chez l'hôte : le code de la partie (`Transport.pret`), ce qu'un client donne pour la rejoindre ; vide
+## hors réseau, chez un client, et tant que le transport ne l'a pas donné.
+var code_partie := ""
 
 ## Vrai dès que l'issue d'une connexion est décidée (refus, échec, hôte perdu) : un seul signal
-## part, même quand ENet signale ensuite la fermeture qui en découle.
+## part, même quand le transport signale ensuite la fermeture qui en découle.
 var _issue_decidee := false
 ## Incrémenté à chaque `quitter()` (donc à chaque `heberger()` ou `rejoindre()`, qui commencent par
 ## lui) : la génération de la session en cours. `_decider` capture la sienne avant de différer sa
@@ -216,10 +208,13 @@ var _issue_decidee := false
 ## ni la fermer, ni émettre un signal qui ne la concerne plus.
 var _generation := 0
 var _delai: Timer
-## Sessions quittées dont le départ n'est pas encore reçu : `{"pair": ENetMultiplayerPeer,
-## "paquets": Array (ses ENetPacketPeer), "fin": int (ms)}`, servies par `_process` jusqu'à ce que
-## chaque autre poste ait accusé réception, ou jusqu'à `fin`, puis fermées.
-var _partants: Array[Dictionary] = []
+## Le transport de la session en cours (null hors réseau).
+var _transport: Transport
+## Les transports quittés dont le départ n'est pas fini, servis par `_process` jusqu'à leur fermeture.
+var _partants: Array[Transport] = []
+## Chez un client : vrai de `rejoindre()` à l'inscription ; une fermeture pendant ce temps est un échec
+## de connexion, pas un hôte perdu.
+var _connexion_en_cours := false
 ## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
 ## perte de l'hôte qui suit.
 var _exclu := false
@@ -252,19 +247,21 @@ func _ready() -> void:
 
 
 ## Héberge une partie sur `port` : quitte d'abord toute session en cours, borne `places`, puis ce
-## poste s'inscrit lui-même (index 0, première couleur). Si le port est pris, renvoie l'erreur
-## d'ENet sans rien changer de plus (spec §9 : « port occupé ») : la session précédente reste
+## poste s'inscrit lui-même (index 0, première couleur). Si le port est pris, renvoie l'erreur du
+## transport sans rien changer de plus (spec §9 : « port occupé ») : la session précédente reste
 ## close, mais rien de neuf n'est créé.
 func heberger(port := PORT) -> Error:
 	quitter()
 	_clore_partants()  # une session hébergée qui part encore tient son port : le libérer d'abord
 	places = clampi(places, EtatPartie.NB_JOUEURS_MIN, EtatPartie.NB_JOUEURS_MAX)
-	var pair := ENetMultiplayerPeer.new()
-	var erreur := pair.create_server(port, places + CONNEXIONS_EN_TROP)
+	var transport := _nouveau_transport(port)
+	_brancher(transport)  # avant `heberger()` : `pret` peut partir pendant l'appel
+	var erreur := transport.heberger()
 	if erreur != OK:
 		return erreur
+	_transport = transport
 	_activer_poignee_de_main()
-	multiplayer.multiplayer_peer = pair
+	multiplayer.multiplayer_peer = transport.pair()
 	index_local = premier_index_libre(inscrits, places)
 	couleur_locale = premiere_couleur_libre(inscrits)
 	inscrits[multiplayer.get_unique_id()] = {"index": index_local, "couleur": couleur_locale,
@@ -274,40 +271,38 @@ func heberger(port := PORT) -> Error:
 	return OK
 
 
-## Rejoint l'hôte à `adresse`, une IPv4 (M8 : un nom d'hôte serait résolu par `create_client` en
-## bloquant le jeu, plusieurs secondes sous Windows pour une faute de frappe) : toute adresse que
-## `Decouverte.adresse_ipv4` ne reconnaît pas est refusée (ERR_INVALID_PARAMETER) sans rien
-## changer, pas même la session en cours. La réponse arrive par `inscrit`, `refuse` ou
-## `connexion_echouee` (au plus tard après DELAI_CONNEXION). Renvoie l'erreur d'ENet si le client
-## ne peut même pas être créé.
+## Rejoint l'hôte à `adresse` (une IPv4) et `port` : le code `adresse:port` du transport, qui refuse
+## tout autre texte (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution bloquerait le jeu)
+## avant que rien ne change, pas même la session en cours. La réponse arrive par `inscrit`, `refuse` ou
+## `connexion_echouee` (au plus tard après le délai du canal du transport, puis DELAI_CONNEXION). Renvoie
+## l'erreur du transport si le client ne peut même pas être créé.
 func rejoindre(adresse: String, port := PORT) -> Error:
-	var ipv4: String = _Decouverte.adresse_ipv4(adresse)
-	if ipv4.is_empty():
-		return ERR_INVALID_PARAMETER
-	quitter()
-	var pair := ENetMultiplayerPeer.new()
-	var erreur := pair.create_client(ipv4, port)
+	var transport := _nouveau_transport(port)
+	var erreur := transport.rejoindre("%s:%d" % [adresse.strip_edges(), port])
 	if erreur != OK:
 		return erreur
+	quitter()
+	_brancher(transport)  # après `quitter()` : la génération de la nouvelle session
+	_transport = transport
+	_connexion_en_cours = true
 	_activer_poignee_de_main()
-	multiplayer.multiplayer_peer = pair
-	_delai.start(DELAI_CONNEXION)
+	multiplayer.multiplayer_peer = transport.pair()
 	return OK
 
 
-## Quitte le réseau : part proprement (les autres postes voient partir ce joueur, ou l'hôte : voir
-## `_partir`), remet `OfflineMultiplayerPeer` et oublie inscrits, table du salon, index, couleur,
-## scènes chargées et manche en cours (une session hébergée finie n'a plus lieu d'être). Sans effet
-## visible hors réseau : chaque chemin de retour au titre peut l'appeler (point de vigilance des
-## phases 12/13).
+## Quitte le réseau : part proprement (les autres postes voient partir ce joueur, ou l'hôte : le
+## transport ferme sa session une fois ce qui est en file envoyé, en arrière-plan), remet
+## `OfflineMultiplayerPeer` et oublie inscrits, table du salon, index, couleur, scènes chargées, code et
+## manche en cours (une session hébergée finie n'a plus lieu d'être). Sans effet visible hors réseau :
+## chaque chemin de retour au titre peut l'appeler (point de vigilance des phases 12/13).
 func quitter() -> void:
 	_generation += 1
 	_delai.stop()
-	var pair := multiplayer.multiplayer_peer
-	if pair is ENetMultiplayerPeer:
-		_partir(pair)
-	elif pair != null and not (pair is OfflineMultiplayerPeer):
-		pair.close()
+	if _transport != null:
+		_transport.quitter()
+		if _transport.servir():
+			_partants.append(_transport)  # son départ continue, servi par `_process`
+		_transport = null
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	_api().auth_callback = Callable()
 	inscrits.clear()
@@ -315,6 +310,8 @@ func quitter() -> void:
 	scenes_chargees.clear()
 	silence = SILENCE_SESSION
 	_entendus.clear()
+	code_partie = ""
+	_connexion_en_cours = false
 	niveau_salon = 0
 	places_salon = EtatPartie.NB_JOUEURS_MAX
 	places_reservees = 0
@@ -327,45 +324,37 @@ func quitter() -> void:
 	_issue_decidee = false
 
 
-## Départ volontaire d'une session ENet (M6) : chaque autre poste connecté reçoit un DISCONNECT fiable,
-## envoyé tout de suite, puis renvoyé par `_process` jusqu'à son accusé de réception (DELAI_DEPART au
-## plus) ; la session est alors fermée. `close()` seul n'envoie qu'un datagramme non fiable : perdu
-## en Wi-Fi, le départ ne serait vu qu'au bout du silence de l'autre poste.
-func _partir(pair: ENetMultiplayerPeer) -> void:
-	if pair.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
-		pair.close()
-		return
-	var connexion := pair.host
-	var paquets: Array = [] if connexion == null else connexion.get_peers().filter(
-		func(p: ENetPacketPeer) -> bool: return p.get_state() == ENetPacketPeer.STATE_CONNECTED)
-	if paquets.is_empty():
-		pair.close()
-		return
-	for p: ENetPacketPeer in paquets:
-		p.peer_disconnect()
-	connexion.flush()
-	_partants.append({"pair": pair, "paquets": paquets, "fin": Time.get_ticks_msec() + DELAI_DEPART})
+## Le transport d'une nouvelle session : ENet (le desktop, les tests ; WebRTC dans l'export Web, phase 4).
+func _nouveau_transport(port: int) -> Transport:
+	return TransportENet.new(port, places)
 
 
-## En session, le battement et l'écoute des silences ; puis les départs en cours, fermés une fois reçus
-## ou leur délai passé.
+## Branche les signaux de `transport` sur cette session (la génération en cours) : ceux d'une session
+## périmée ne font rien.
+func _brancher(transport: Transport) -> void:
+	transport.pret.connect(_sur_transport_pret.bind(_generation))
+	transport.connecte.connect(_sur_transport_connecte.bind(_generation))
+	transport.echec.connect(_sur_transport_echec.bind(_generation))
+
+
+## En session, le transport, le battement et l'écoute des silences ; puis les départs en cours, oubliés
+## une fois leur transport fermé.
 func _process(_delta: float) -> void:
+	if _transport != null:
+		_transport.servir()
 	if en_ligne():
 		var maintenant := Time.get_ticks_msec()
 		_battre(maintenant)
 		_ecouter(maintenant)
-	for partant: Dictionary in _partants.duplicate():
-		partant.pair.poll()
-		var recus: bool = partant.paquets.all(func(p: ENetPacketPeer) -> bool: return p.get_state() == ENetPacketPeer.STATE_DISCONNECTED)
-		if recus or Time.get_ticks_msec() >= partant.fin:
-			partant.pair.close()
+	for partant: Transport in _partants.duplicate():
+		if not partant.servir():
 			_partants.erase(partant)
 
 
 ## Ferme tout de suite les départs en cours (leurs ports se libèrent).
 func _clore_partants() -> void:
-	for partant: Dictionary in _partants:
-		partant.pair.close()
+	for partant: Transport in _partants:
+		partant.clore()
 	_partants.clear()
 
 
@@ -430,17 +419,6 @@ func _battement() -> void:
 	_entendre(multiplayer.get_remote_sender_id())
 
 
-## Pose SILENCE_ENET sur chaque pair ENet connecté, le nouveau venu compris : ENet ne doit jamais
-## décider avant le battement.
-func _reculer_silence_enet() -> void:
-	var pair := multiplayer.multiplayer_peer
-	if pair is ENetMultiplayerPeer and pair.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED \
-			and pair.host != null:
-		for p: ENetPacketPeer in pair.host.get_peers():
-			if p.get_state() == ENetPacketPeer.STATE_CONNECTED:
-				p.set_timeout(ESSAIS_SILENCE, SILENCE_ENET.x, SILENCE_ENET.y)
-
-
 ## Chez l'hôte : le joueur `id` n'a pas chargé sa scène de jeu à temps (la barrière de la manche,
 ## `Manche._exclure`) : il apprend son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU, pas
 ## « L'hôte a quitté la partie ») et s'en va de lui-même ; DELAI_EXCLUSION plus tard, l'hôte le libère
@@ -454,18 +432,14 @@ func exclure(id: int) -> void:
 
 
 ## Chez l'hôte : libère le client `id` (muet ou exclu), s'il est encore là dans la même session
-## (`generation`) : son silence n'est plus écouté, et son pair est fermé sur-le-champ, sans attendre
+## (`generation`) : son silence n'est plus écouté, et son transport le ferme sur-le-champ, sans attendre
 ## d'accusé de réception (I1, revue finale phase 14 : un pair figé, qui charge ou compile ses shaders,
 ## ou mort n'en enverra pas) ; son départ part aussitôt par `peer_disconnected` (`_sur_pair_deconnecte`).
 func _liberer(id: int, generation: int) -> void:
-	if generation != _generation or not multiplayer.is_server() or not multiplayer.get_peers().has(id):
+	if generation != _generation or _transport == null or not multiplayer.is_server() or not multiplayer.get_peers().has(id):
 		return
 	_entendus.erase(id)
-	var pair := multiplayer.multiplayer_peer as ENetMultiplayerPeer
-	var paquet := pair.get_peer(id) if pair != null else null
-	if paquet != null and paquet.is_active():
-		paquet.peer_disconnect_now()  # un seul DISCONNECT, non fiable : sa place se libère tout de suite
-		pair.poll()  # ENet rend compte du pair fermé : `peer_disconnected` part maintenant
+	_transport.liberer(id)
 
 
 ## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps) ; ce poste s'en va
@@ -982,7 +956,7 @@ func _repondre(id: int, demande: Variant) -> void:
 		inscrits[id] = {"index": reponse.index, "couleur": reponse.couleur, "pseudo": reponse.pseudo, "arrive": false, "pret": false}
 		_diffuser_salon()  # une place réservée : le bouton Démarrer de l'hôte se grise, ses clients le savent
 	_api().send_auth(id, var_to_bytes(reponse))
-	# Un refusé n'est pas déconnecté ici : ENet viderait sa file d'envoi, réponse comprise, et le
+	# Un refusé n'est pas déconnecté ici : le transport viderait sa file d'envoi, réponse comprise, et le
 	# client ne saurait jamais pourquoi. Il part de lui-même en lisant le refus ; sinon le délai de
 	# la poignée de main (DELAI_POIGNEE_DE_MAIN) le déconnecte.
 	if reponse.accepte:
@@ -1013,7 +987,6 @@ func _sur_echec_poignee_de_main(id: int) -> void:
 ## au salon et la table lui est envoyée avec celle des autres.
 func _sur_pair_connecte(id: int) -> void:
 	if multiplayer.is_server() and inscrits.has(id):
-		_reculer_silence_enet()  # le nouveau venu aussi
 		_entendus[id] = Time.get_ticks_msec()
 		inscrits[id].arrive = true
 		_diffuser_salon()
@@ -1030,7 +1003,7 @@ func _sur_pair_deconnecte(id: int) -> void:
 
 func _sur_connecte_a_l_hote() -> void:
 	_delai.stop()
-	_reculer_silence_enet()
+	_connexion_en_cours = false
 	_entendus[MultiplayerPeer.TARGET_PEER_SERVER] = Time.get_ticks_msec()
 	inscrit.emit(index_local, couleur_locale)
 
@@ -1039,14 +1012,35 @@ func _sur_connexion_echouee() -> void:
 	_decider("connexion_echouee")
 
 
-## L'hôte ferme la connexion. Avant l'inscription (délai encore en cours), c'est un échec de
-## connexion, pas un hôte perdu : ce poste n'a jamais été dans la partie.
+## L'hôte ferme la connexion. Avant l'inscription, c'est un échec de connexion, pas un hôte perdu : ce
+## poste n'a jamais été dans la partie.
 func _sur_hote_perdu() -> void:
-	_decider("connexion_echouee" if not _delai.is_stopped() else "hote_perdu")
+	_decider("connexion_echouee" if _connexion_en_cours else "hote_perdu")
 
 
+## La poignée de main d'un client n'a pas fini dans DELAI_CONNEXION, une fois le canal ouvert.
 func _sur_delai_depasse() -> void:
-	if en_ligne() and not multiplayer.is_server():
+	if _connexion_en_cours:
+		_decider("connexion_echouee")
+
+
+## Chez l'hôte : la session du transport existe ; son code est celui de la partie.
+func _sur_transport_pret(code: String, generation: int) -> void:
+	if generation == _generation:
+		code_partie = code
+
+
+## Chez un client : le canal vers l'hôte est ouvert ; la poignée de main (que `SceneMultiplayer` lance
+## d'elle-même) a DELAI_CONNEXION pour finir.
+func _sur_transport_connecte(generation: int) -> void:
+	if generation == _generation and _connexion_en_cours:
+		_delai.start(DELAI_CONNEXION)
+
+
+## Chez un client : le canal vers l'hôte ne s'ouvrira pas (`raison`, Transport.ECHEC_* : l'écran En
+## ligne, phase 3, en fera un message ; ici, un échec de connexion).
+func _sur_transport_echec(_raison: String, generation: int) -> void:
+	if generation == _generation and _connexion_en_cours:
 		_decider("connexion_echouee")
 
 
