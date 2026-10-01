@@ -17,7 +17,7 @@ extends SceneTree
 ##              hôte resté seul), une égalité à 2 en anglais (phase 18).
 ## La partie à deux vraies fenêtres (un hôte et un client) est dans `tests/deux_fenetres.gd`, une vraie
 ## manche à 4 capturée dans `tests/bataille_test.gd -- --captures=<dossier>`.
-## N'utilise ni le port 7777 ni le 7778 d'une vraie partie, ni les records et réglages du joueur
+## N'utilise ni le port 7777 d'une vraie partie, ni les records et réglages du joueur
 ## (`user://scores_captures.cfg`, effacé à la fin). Ennemis et pastilles écartés en bataille : les
 ## scores, crans, statistiques et départs sont posés à la main. Compilé avant les autoloads : les lit
 ## par `root.get_node`, charge les scènes à l'exécution.
@@ -25,7 +25,6 @@ extends SceneTree
 const PARTIES := ["solo", "reseau", "salon", "bataille", "resultats"]
 const PORT_JEU := 17890
 const PORT_SANS_HOTE := 17891
-const PORT_BALISE := 17899
 
 var dossier := "user://"
 var parties: PackedStringArray = PackedStringArray(PARTIES)
@@ -284,10 +283,7 @@ func _arrive(reseau: Node, id: int, index: int, couleur: Color, pseudo: String, 
 func _salon() -> void:
 	var params: Node = root.get_node("Parametres")
 	var reseau: Node = root.get_node("Reseau")
-	var decouverte: Node = root.get_node("Decouverte")
 	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
-	decouverte.port_balise = PORT_BALISE
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 	GS.niveau_courant = 1
 
 	# L'hôte seul, pseudo de 12 caractères larges : Démarrer grisé, « Il faut au moins 2 joueurs » ; le code

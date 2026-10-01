@@ -6,11 +6,10 @@ extends SceneTree
 ##   godot --path . --rendering-driver opengl3 --script tests/deux_fenetres.gd -- --role=client --dossier=<dossier>
 ## (dans n'importe quel ordre : le client attend que l'hôte héberge). Chaque fenêtre capture sa vue au même instant que l'autre (fichiers
 ## de rendez-vous dans le dossier) : `hote_*.png`, `client_*.png`. Sans rendu (headless), le déroulé seul
-## se vérifie, rien n'est écrit. N'utilise ni le port 7777 ni le 7778 d'une vraie partie, ni les records
+## se vérifie, rien n'est écrit. N'utilise ni le port 7777 d'une vraie partie, ni les records
 ## et réglages du joueur.
 
 const PORT := 17990
-const PORT_BALISE := 18990
 ## La manche, raccourcie sur les deux postes (le chrono de l'hôte la termine ; celui du client s'affiche).
 const DUREE_MANCHE := 15.0
 
@@ -103,14 +102,11 @@ func _run() -> void:
 		return
 	_nettoyer_mes_fichiers()
 	var reseau: Node = root.get_node("Reseau")
-	var decouverte: Node = root.get_node("Decouverte")
 	var scores: Node = root.get_node("Scores")
 	var gs: Node = root.get_node("GameState")
 	scores.chemin = "user://scores_deux_fenetres_%s.cfg" % role
 	scores.effacer()
 	root.get_node("Parametres").definir_langue("fr")
-	decouverte.port_balise = PORT_BALISE
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 	ReglesBataille.duree_manche = DUREE_MANCHE
 	# Une fenêtre, même si les réglages de ce poste demandent le plein écran (préférence non modifiée) :
 	# `Regles.appliquer_ecran` ne règle que les fenêtres.

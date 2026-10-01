@@ -1781,9 +1781,6 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 func _tester_titre_reseau(scores: Node) -> void:
 	print("-- Titre et réseau")
 	var reseau: Node = root.get_node("Reseau")
-	var decouverte: Node = root.get_node("Decouverte")
-	decouverte.port_balise = 17895  # l'écran Réseau ouvert ici écoute : jamais le 7778 d'une vraie partie
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 
 	# Titre : le bouton Multijoueur, dans l'écran, sans chevaucher les autres, joignable au clavier
 	var titre: Control = load("res://Scenes/Titre.tscn").instantiate()
@@ -1808,14 +1805,14 @@ func _tester_titre_reseau(scores: Node) -> void:
 	_check(ecran != null and not ecran.codes_de_salle and ecran.champ_code.max_length == 21,
 		"sur le desktop, le champ du code prend une adresse ip:port (21 caractères au plus)")
 	# Ne sauter que les vérifications qui dépendent de `ecran` : la remise à zéro de fin de fonction
-	# doit tourner même si cette précondition échoue (sinon un seul échec ici laisse decouverte et
-	# reseau dans un état anormal pour la suite de la fonction et pour `_tester_salon`).
+	# doit tourner même si cette précondition échoue (sinon un seul échec ici laisse reseau dans un
+	# état anormal pour la suite de la fonction et pour `_tester_salon`).
 	if ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn":
 		ecran.bouton_retour.pressed.emit()
 		var titre_retour: Control = (await _attendre_scene("res://Scenes/Titre.tscn")) as Control
 		_check(titre_retour != null and titre_retour.scene_file_path == "res://Scenes/Titre.tscn" and not is_instance_valid(ecran)
-			and root.content_scale_size == Vector2i(2000, 648) and not decouverte.ecoute_active() and not reseau.en_ligne(),
-			"Retour ramène au titre, en 2000×648, hors réseau et sans écoute")
+			and root.content_scale_size == Vector2i(2000, 648) and not reseau.en_ligne(),
+			"Retour ramène au titre, en 2000×648, hors réseau")
 		if titre_retour != null:
 			titre_retour.free()
 
@@ -1875,7 +1872,7 @@ func _tester_titre_reseau(scores: Node) -> void:
 	root.add_child(titre)
 	await _frames(1)
 	_check(not reseau.en_ligne() and root.multiplayer.multiplayer_peer is OfflineMultiplayerPeer and reseau.inscrits.is_empty(),
-		"après un hébergement, le titre remet ce poste hors réseau (plus de balise ni d'arrivée)")
+		"après un hébergement, le titre remet ce poste hors réseau (plus d'arrivée)")
 	titre.free()
 	_check(reseau.rejoindre("127.0.0.1", 17796) == OK and not root.multiplayer.is_server(), "(pré-condition) ce poste est un client")
 	titre = load("res://Scenes/Titre.tscn").instantiate()
@@ -1885,8 +1882,6 @@ func _tester_titre_reseau(scores: Node) -> void:
 	_check(root.multiplayer.is_server() and not reseau.en_ligne() and root.multiplayer.multiplayer_peer is OfflineMultiplayerPeer,
 		"après une connexion, le titre rend ce poste hôte de lui-même : le solo qui suit tranche ses contacts (« un coup coûte une vie »)")
 	titre.free()
-	decouverte.port_balise = decouverte.PORT_BALISE
-	decouverte.destinations_forcees = PackedStringArray()
 	reseau.pseudo = ""
 	scores.effacer()
 
@@ -1897,11 +1892,7 @@ func _tester_titre_reseau(scores: Node) -> void:
 func _tester_salon(params: Node) -> void:
 	print("-- Salon")
 	var reseau: Node = root.get_node("Reseau")
-	var decouverte: Node = root.get_node("Decouverte")
 	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
-	var port_balise := 17896  # la balise de l'hôte : jamais le 7778 d'une vraie partie
-	decouverte.port_balise = port_balise
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 	reseau.pseudo = "MMMMMMMMMMMM"  # 12 caractères larges : ils doivent tenir dans la carte
 	GS.niveau_courant = 1
 	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
@@ -2007,26 +1998,13 @@ func _tester_salon(params: Node) -> void:
 	_check(salon.cartes[1].pseudo.text == tr("SALON_LIBRE") and bouton.disabled and salon.etat.text == tr("SALON_ATTENTE_JOUEURS"),
 		"Bob part : sa carte se libère, « il faut au moins 2 joueurs pour démarrer »")
 
-	# Niveau (l'hôte, haut/bas, en boucle) : la partie et la balise le suivent
+	# Niveau (l'hôte, haut/bas, en boucle) : la partie le suit
 	await _appuyer(&"deplacer_bas", true)
 	await _appuyer(&"deplacer_bas", false)
 	_check(reseau.niveau_salon == 2 and GS.niveau_courant == 2 and salon.titre_niveau.text == "Niveau : Village", "bas : le niveau suivant")
 	salon.changer_niveau(1)
 	_check(reseau.niveau_salon == 0 and GS.niveau_courant == 0, "après le dernier, le premier (en boucle)")
 	salon.changer_niveau(-1)
-	var recepteur := PacketPeerUDP.new()
-	_check(recepteur.bind(port_balise, "0.0.0.0") == OK, "(pré-condition) un récepteur écoute la balise de l'hôte")
-	decouverte._emettre_balise()
-	var balise := {}
-	var fin := Time.get_ticks_msec() + 500
-	while balise.is_empty() and Time.get_ticks_msec() < fin:
-		if recepteur.get_available_packet_count() > 0:
-			balise = decouverte.decoder_balise(recepteur.get_packet())
-		else:
-			OS.delay_msec(5)
-	recepteur.close()
-	_check(balise.get("niveau") == 2 and balise.get("nb_joueurs") == 1 and balise.get("manche_en_cours") == false,
-		"la balise de l'hôte annonce le niveau choisi au salon (%s)" % [balise])
 
 	# Langue ; Retour ; plus aucune connexion aux autoloads
 	params.definir_langue("en")
@@ -2099,8 +2077,6 @@ func _tester_salon(params: Node) -> void:
 	if ecran != null:
 		ecran.free()
 
-	decouverte.port_balise = decouverte.PORT_BALISE
-	decouverte.destinations_forcees = PackedStringArray()
 	reseau.pseudo = ""
 	GS.niveau_courant = 0
 
@@ -2382,7 +2358,7 @@ func _tester_resultats_reseau() -> void:
 		"une relance que l'hôte ne peut plus suivre est refusée : l'écran reste, on peut encore choisir")
 	# Retour au salon : la même table (Bob en moins), personne prêt, les arrivées de nouveau acceptées ;
 	# M7 de la revue finale : le vrai bouton cliqué (un clic n'agit qu'une fois l'animation finie, M2)
-	var balise_manche: bool = reseau.manche_en_cours
+	var manche_avant: bool = reseau.manche_en_cours
 	# M8 de la revue finale : la vérification plus bas (aucune connexion aux autoloads) tournait après
 	# que l'ancien Main (`suivante`) soit libéré par le changement de scène : un objet déjà libéré ne
 	# peut plus détenir de connexion, qu'il se soit bien désabonné ou non dans `_exit_tree`, donc la
@@ -2397,7 +2373,7 @@ func _tester_resultats_reseau() -> void:
 	resultats.terminer_animation()
 	resultats.bouton_salon.pressed.emit()
 	var salon: Node = await _attendre_scene("res://Scenes/Salon.tscn")
-	_check(salon != null and salon.scene_file_path == "res://Scenes/Salon.tscn" and not paused and balise_manche and not reseau.manche_en_cours
+	_check(salon != null and salon.scene_file_path == "res://Scenes/Salon.tscn" and not paused and manche_avant and not reseau.manche_en_cours
 		and reseau.table_salon.map(func(f: Dictionary) -> int: return f.id) == [1] and not reseau.inscrits[1].pret
 		and salon.titre_niveau.text == "Niveau : Métropole",
 		"Retour au salon : le salon de l'hôte s'ouvre sur la même table (Bob parti), personne prêt, le niveau gardé, les arrivées acceptées")
