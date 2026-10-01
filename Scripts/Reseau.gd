@@ -291,17 +291,21 @@ func rejoindre(adresse: String, port := PORT) -> Error:
 ## suite : son adieu, puis le transport ferme sa session une fois l'adieu envoyé, en arrière-plan), remet
 ## `OfflineMultiplayerPeer` et oublie inscrits, table du salon, index, couleur, scènes chargées, code et
 ## manche en cours (une session hébergée finie n'a plus lieu d'être). Sans effet visible hors réseau :
-## chaque chemin de retour au titre peut l'appeler (point de vigilance des phases 12/13).
+## chaque chemin de retour au titre peut l'appeler (point de vigilance des phases 12/13). Le transport
+## quitté n'est plus celui de la session avant même son `quitter()` ; il rejoint `_partants` dans tous les
+## cas, servi par `_process` jusqu'à sa fermeture (oublié à l'image suivante s'il n'avait personne à
+## prévenir).
 func quitter() -> void:
 	_generation += 1
 	_delai.stop()
-	_dire_adieu()
-	if _transport != null:
-		_transport.quitter()
-		if _transport.servir():
-			_partants.append(_transport)  # son départ continue, servi par `_process`
-		_transport = null
+	_dire_adieu()  # avant la fermeture : le transport l'envoie avant son DISCONNECT
+	var partant := _transport
+	_transport = null
+	if partant != null:
+		partant.quitter()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	if partant != null:
+		_partants.append(partant)  # son départ continue, servi par `_process`
 	_api().auth_callback = Callable()
 	inscrits.clear()
 	table_salon.clear()

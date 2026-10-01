@@ -1767,8 +1767,10 @@ func _tester_reseau_manche() -> void:
 	reseau.definir_silence(reseau.SILENCE_SESSION)
 	_check(reseau.silence == reseau.SILENCE_SESSION, "fin du chargement : silence de session")
 	reseau.quitter()
-	_check(reseau.scenes_chargees.is_empty() and reseau._partants.is_empty() and reseau.heberger(17788) == OK,
-		"quitter oublie les scènes chargées ; sans autre poste connecté, le port se libère aussitôt")
+	var ferme_aussitot: bool = reseau._partants.size() == 1 and reseau._partants[0].pair() == null
+	reseau._process(0.0)
+	_check(reseau.scenes_chargees.is_empty() and ferme_aussitot and reseau._partants.is_empty() and reseau.heberger(17788) == OK,
+		"quitter oublie les scènes chargées ; sans autre poste connecté, le transport se ferme aussitôt (oublié à l'image suivante), le port se libère")
 	# Un autre poste connecté au niveau d'ENet (sa poignée de main ne finit jamais) : un départ propre
 	# le prévient par un DISCONNECT fiable, renvoyé jusqu'à son accusé de réception.
 	var autre := ENetMultiplayerPeer.new()
