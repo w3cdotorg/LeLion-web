@@ -2488,6 +2488,11 @@ func _tester_code_salle() -> void:
 	var format := ["", "K7Q2X", "K7Q-2XM9", "K7Q_2XM", "K7Q.2XM", "K7Q#2XM", "ſ7Q2XM", "ÉÀÇ2XM"]
 	_check(format.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
 		"mal formés : trop court, trop long, un autre séparateur (« _ », « . »), un caractère hors de l'alphabet, une lettre non ASCII qui ressemble à une lettre du code (« ſ »)")
+	# Le signe Kelvin (U+212A) a pour minuscule un k ASCII : une mise en majuscules Unicode ou une
+	# comparaison sans casse en ferait un K du code ; la saisie le garde tel quel, et le refuse
+	var kelvin := char(0x212A) + "7Q2XM"
+	_check(CodeSalle.erreur(kelvin) == CodeSalle.ERREUR_FORMAT and not CodeSalle.valide(CodeSalle.normaliser(kelvin)),
+		"le signe Kelvin n'est pas le K du code : « %s » est mal formé (%s)" % [kelvin, CodeSalle.erreur(kelvin)])
 	var confusions := ["K0Q2XM", "KOQ2XM", "K1Q2XM", "KIQ2XM", "KLQ2XM", "ko q2xm", "kl", "l7q2x"]
 	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
 		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
@@ -2514,6 +2519,7 @@ func _tester_code_salle() -> void:
 	var premier := CodeSalle.prendre_code_de_la_page()
 	var second := CodeSalle.prendre_code_de_la_page()
 	CodeSalle.recherche_forcee = ""
+	CodeSalle._page_lue = false  # le lien lu ici : les suites suivantes retrouvent un lancement neuf
 	_check(premier == "K7Q2XM" and second.is_empty(), "le lien de la page ne sert qu'une fois par lancement (%s, puis « %s »)" % [premier, second])
 
 
