@@ -2683,15 +2683,16 @@ func _tester_battement() -> void:
 	hote.pseudo = "Hôte"
 	client.pseudo = "Client"
 
-	# Le battement tient la session : chacun a entendu l'autre il y a moins d'une période et demie
+	# Le battement tient la session : chacun a entendu l'autre il y a moins de deux périodes (une période
+	# et demie laissait échouer un battement en retard de quelques ms sur une machine chargée : 1504 ms)
 	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
 	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
 	var id_client: int = arrives[0] if arrives.size() == 1 else -1
 	await create_timer(2.5).timeout
 	var ecart_hote: int = Time.get_ticks_msec() - hote._entendus.get(id_client, 0)
 	var ecart_client: int = Time.get_ticks_msec() - client._entendus.get(1, 0)
-	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 1500 and ecart_client <= 1500,
-		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms" % [ecart_hote, ecart_client])
+	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 2000 and ecart_client <= 2000,
+		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms (moins de deux périodes)" % [ecart_hote, ecart_client])
 
 	# Un client muet : l'hôte le déclare parti au bout du silence toléré, pas avant
 	hote.definir_silence(1.5)
