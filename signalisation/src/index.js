@@ -1,5 +1,5 @@
-// Le point d'entrée du Worker (spec §4.1, §8.1) : les routes /v1, l'origine, la limite de création
-// par IP, puis la salle (Durable Object `Salle`, un par code) qui garde la socket.
+// Le point d'entrée du Worker (spec §4.1, §8.1) : les routes /v1, l'origine, les limites de création
+// et d'arrivée par IP, puis la salle (Durable Object `Salle`, un par code) qui garde la socket.
 // Le module principal n'exporte que des gestionnaires (`default`, `Salle`) : workerd refuse d'en
 // démarrer un qui exporte autre chose (constante, fonction).
 import { ESSAIS_CODE, lireCode, tirerCode } from "./code.js";
@@ -30,7 +30,8 @@ export default {
 			journal("origine refusée", { origine });
 			return refuser("origine");
 		}
-		return code === null ? creer(requete, env) : rejoindre(requete, env, code);
+		const cle = requete.headers.get("cf-connecting-ip") ?? "local";
+		return code === null ? creer(requete, env, cle) : rejoindre(requete, env, code, cle);
 	},
 };
 
@@ -38,10 +39,22 @@ function salle(env, code) {
 	return env.SALLES.get(env.SALLES.idFromName(code));
 }
 
+/**
+ * Vrai si le limiteur `limite` (binding ratelimits) admet encore `cle`. Injoignable, il laisse passer
+ * (ouvert par défaut) : c'est un frein, et sa panne ne doit pas fermer le service.
+ */
+async function admis(limite, cle) {
+	try {
+		return (await limite.limit({ key: cle })).success;
+	} catch (erreur) {
+		journal("limite injoignable", { erreur: String(erreur) });
+		return true;
+	}
+}
+
 /** Un code libre (la salle répond 409 si le sien a déjà un hôte), sa salle crée l'hôte. */
-async function creer(requete, env) {
-	const { success } = await env.LIMITE_CREATION.limit({ key: requete.headers.get("cf-connecting-ip") ?? "local" });
-	if (!success) {
+async function creer(requete, env, cle) {
+	if (!(await admis(env.LIMITE_CREATION, cle))) {
 		journal("trop de salles créées par cette IP");
 		return refuser("debit");
 	}
@@ -50,6 +63,7 @@ async function creer(requete, env) {
 			const code = tirerCode();
 			const reponse = await salle(env, code).fetch(new Request(`https://salle/creer?code=${code}`, requete));
 			if (reponse.status !== 409) return reponse;
+			await reponse.body?.cancel(); // un corps jamais lu retiendrait la réponse
 		}
 	} catch (erreur) {
 		journal("salle injoignable", { erreur: String(erreur) });
@@ -60,7 +74,11 @@ async function creer(requete, env) {
 }
 
 /** Un Durable Object qui échoue est, sur l'offre gratuite, un quota épuisé (spec §8.1). */
-async function rejoindre(requete, env, code) {
+async function rejoindre(requete, env, code, cle) {
+	if (!(await admis(env.LIMITE_ARRIVEE, cle))) {
+		journal("trop d'arrivées pour cette IP");
+		return refuser("debit");
+	}
 	try {
 		return await salle(env, code).fetch(new Request("https://salle/rejoindre", requete));
 	} catch (erreur) {

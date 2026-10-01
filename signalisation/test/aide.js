@@ -9,6 +9,15 @@ export function ipAuHasard() {
 	return `10.${a}.${b}.${c}`;
 }
 
+/**
+ * Attend la minute suivante s'il en reste moins de 10 s : les fenêtres de la limitation de débit locale
+ * sont calées sur la minute de l'horloge, un test de limite ne doit pas en chevaucher deux.
+ */
+export async function loinDuBordDeMinute() {
+	const reste = 60000 - (Date.now() % 60000);
+	if (reste < 10000) await new Promise((resoudre) => setTimeout(resoudre, reste + 100));
+}
+
 /** Une requête vers le Worker (WebSocket demandée, origine admise et IP au hasard par défaut). */
 export function requete(chemin, { origine = ORIGINE, ip = ipAuHasard(), upgrade = "websocket", methode = "GET" } = {}) {
 	const entetes = new Headers({ "cf-connecting-ip": ip });

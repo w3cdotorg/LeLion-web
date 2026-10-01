@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { arriver, creerSalle, ouvrir, salleDe } from "./aide.js";
+import { arriver, creerSalle, ipAuHasard, loinDuBordDeMinute, ouvrir, salleDe } from "./aide.js";
 
 const REPONSE = { t: "reponse", vers: 1, sdp: "v=0" };
 
@@ -109,13 +109,24 @@ describe("20 messages par seconde et par socket", () => {
 
 describe("limite de création par IP", () => {
 	it("5 salles par minute et par IP, la 6e reçoit erreur debit ; une autre IP crée encore", async () => {
-		// Les fenêtres de la limitation locale sont calées sur la minute de l'horloge : ne pas en chevaucher deux.
-		const reste = 60000 - (Date.now() % 60000);
-		if (reste < 10000) await new Promise((resoudre) => setTimeout(resoudre, reste + 100));
+		await loinDuBordDeMinute();
 		const ip = "203.0.113.7";
 		for (let i = 0; i < 5; i++) expect((await creerSalle({ ip })).salle.t).toBe("salle");
 		const sixieme = await ouvrir("/v1/creer", { ip });
 		expect(await sixieme.suivant()).toEqual({ t: "erreur", raison: "debit" });
 		expect((await creerSalle({ ip: "203.0.113.8" })).salle.t).toBe("salle");
+	}, 20000);
+});
+
+describe("limite d'arrivée par IP", () => {
+	it("30 arrivées par minute et par IP, la 31e reçoit erreur debit ; une autre IP arrive encore", async () => {
+		await loinDuBordDeMinute();
+		const ip = ipAuHasard();
+		for (let i = 0; i < 30; i++) {
+			// Un code inconnu compte aussi : la limite passe avant la salle.
+			expect(await (await ouvrir("/v1/rejoindre/ZZZZZZ", { ip })).suivant()).toEqual({ t: "erreur", raison: "inconnue" });
+		}
+		expect(await (await ouvrir("/v1/rejoindre/ZZZZZZ", { ip })).suivant()).toEqual({ t: "erreur", raison: "debit" });
+		expect(await (await ouvrir("/v1/rejoindre/ZZZZZZ")).suivant()).toEqual({ t: "erreur", raison: "inconnue" });
 	}, 20000);
 });

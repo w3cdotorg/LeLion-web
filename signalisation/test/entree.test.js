@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ESSAIS_CODE } from "../src/code.js";
 import * as principal from "../src/index.js";
 import { origineAdmise } from "../src/origine.js";
@@ -77,19 +77,25 @@ describe("routes du Worker", () => {
 	});
 });
 
+/** Le message `erreur` porté par une réponse 101 de refus. */
+async function lireRefus(reponse) {
+	expect(reponse.status).toBe(101);
+	return brancher(reponse.webSocket).suivant();
+}
+
+/** Un limiteur factice qui admet tout. */
+const ADMET = { limit: async () => ({ success: true }) };
+
+/** Un environnement factice : la salle donnée, des limiteurs qui admettent tout sauf ceux de `limites`. */
+const envFactice = (salle, limites = {}) => ({
+	ORIGINES,
+	LIMITE_CREATION: ADMET,
+	LIMITE_ARRIVEE: ADMET,
+	SALLES: { idFromName: (code) => code, get: () => salle },
+	...limites,
+});
+
 describe("quota", () => {
-	const envFactice = (salle) => ({
-		ORIGINES,
-		LIMITE_CREATION: { limit: async () => ({ success: true }) },
-		SALLES: { idFromName: (code) => code, get: () => salle },
-	});
-
-	async function lireRefus(reponse) {
-		expect(reponse.status).toBe(101);
-		const socket = brancher(reponse.webSocket);
-		return socket.suivant();
-	}
-
 	it("une salle qui ne répond pas (quota gratuit épuisé) : erreur quota", async () => {
 		const env = envFactice({
 			fetch: async () => {
@@ -110,5 +116,44 @@ describe("quota", () => {
 		});
 		expect(await lireRefus(await worker.fetch(requete("/v1/creer"), env))).toEqual({ t: "erreur", raison: "quota" });
 		expect(appels).toBe(ESSAIS_CODE);
+	});
+
+	it("le corps de chaque 409 est abandonné (rien ne reste en attente de lecture)", async () => {
+		let annulations = 0;
+		const env = envFactice({
+			fetch: async () => new Response(new ReadableStream({ cancel: () => void annulations++ }), { status: 409 }),
+		});
+		expect(await lireRefus(await worker.fetch(requete("/v1/creer"), env))).toEqual({ t: "erreur", raison: "quota" });
+		expect(annulations).toBe(ESSAIS_CODE);
+	});
+});
+
+describe("limiteurs", () => {
+	const SALLE_FACTICE = { fetch: async () => new Response("salle factice", { status: 200 }) };
+	const INJOIGNABLE = {
+		limit: async () => {
+			throw new Error("limiteur injoignable");
+		},
+	};
+
+	it("un limiteur injoignable laisse passer (ouvert par défaut) et le journal le dit", async () => {
+		const journal = vi.spyOn(console, "log").mockImplementation(() => {});
+		const env = envFactice(SALLE_FACTICE, { LIMITE_CREATION: INJOIGNABLE, LIMITE_ARRIVEE: INJOIGNABLE });
+		for (const chemin of ["/v1/creer", "/v1/rejoindre/K7Q2XM"]) {
+			const reponse = await worker.fetch(requete(chemin), env);
+			expect(await reponse.text(), chemin).toBe("salle factice");
+		}
+		const messages = journal.mock.calls.map(([ligne]) => JSON.parse(ligne).message);
+		expect(messages).toEqual(["limite injoignable", "limite injoignable"]);
+	});
+
+	it("arrivée au-delà de la limite de l'IP : erreur debit, sans appeler la salle", async () => {
+		const SALLE_INTERDITE = {
+			fetch: async () => {
+				throw new Error("la salle ne doit pas être appelée");
+			},
+		};
+		const env = envFactice(SALLE_INTERDITE, { LIMITE_ARRIVEE: { limit: async () => ({ success: false }) } });
+		expect(await lireRefus(await worker.fetch(requete("/v1/rejoindre/K7Q2XM"), env))).toEqual({ t: "erreur", raison: "debit" });
 	});
 });
