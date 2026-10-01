@@ -68,3 +68,42 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
   secrets du Worker et de GitHub, créés par l'utilisateur.
 - **Réglages de LeLion-multi 19 bis** : s'ils sont faits là-bas après l'essai LAN, les reporter ici
   par `git cherry-pick` depuis la remote `multi` (règles de jeu communes).
+
+### Notes de la revue de la phase 2 (pour les phases 4 et 5)
+
+**Phase 4** (`TransportWebRTC`, client Godot de la signalisation) :
+
+- Envoyer en texte seulement (`send_text`) : `put_packet` est binaire par défaut, la salle ignore les
+  trames binaires sans rien dire et un ping binaire n'a jamais son pong. Le ping est le texte exact
+  `{"t":"ping"}`.
+- Cadencer les envois de l'hôte (file, 15 par seconde au plus) : six arrivées simultanées font environ
+  70 messages, soit environ 5 s, sur les 15 s du client. Cadencer aussi les clients. Pas de
+  regroupement des candidats : la v1 n'accepte que les champs exacts d'un `candidat` (il faudrait un
+  nouveau type).
+- Identifiants : `int()` (le JSON de Godot donne des flottants). Le client apprend son id par
+  `bienvenue.id` ; l'hôte est 1.
+- Après `bienvenue`, le client ne ferme pas sa socket : il attend la fermeture 1000 `ouvert` de la
+  salle. L'hôte ignore un `depart` d'un pair déjà connecté.
+- Lire tous les paquets en attente même à l'état CLOSING ou CLOSED ; la raison de fermeture vaut la
+  raison de l'`erreur` (repli).
+- La fermeture de la socket de signalisation de l'hôte (`expiree`, son propre `debit`, coupure
+  réseau) n'arrête pas la partie : seules les arrivées cessent.
+- Pages de test sur `localhost`, pas `127.0.0.1` ; une IP du réseau local exige `.dev.vars`
+  (`ORIGINES`, déjà ignoré par git).
+- Un `WebSocketPeer` natif n'envoie pas d'`Origin` : `handshake_headers` si besoin (l'export Web
+  l'envoie toujours).
+- Contrat de `Transport.pair()` à revoir (phase 1) : SceneMultiplayer refuse un
+  `WebRTCMultiplayerPeer` avant `create_client`, dont l'id vient de la signalisation.
+
+**Phase 5** (déploiement) :
+
+- Secrets par `wrangler secret put` (`TURN_KEY_ID`, `TURN_KEY_API_TOKEN`).
+- Identifiants de namespace ratelimit 1001 et 1002 uniques sur le compte ; vérifier que le binding est
+  accepté sur l'offre gratuite (sinon compteur en Durable Object).
+- Ne jamais redescendre la date de compatibilité sous 2026-04-07 (auto-réponse à la fermeture,
+  `deleteAll` qui supprime l'alarme). Migration `v1` figée.
+- Retirer `localhost` des `ORIGINES` de production.
+- Les identifiants TURN vont à quiconque ouvre `/v1/creer` (l'`Origin` se falsifie) : 2 h de relais
+  par identifiant ; plafonner la dépense ou poser des alertes si une carte est exigée.
+- Workers Logs : un événement par invocation du Durable Object, sur 200 000 par jour.
+- Le job CI du Worker n'a pas encore tourné sur GitHub avant le push de la phase 2.
