@@ -1,13 +1,17 @@
 // Une salle (Durable Object, une par code) : l'hôte, les arrivants en cours, le relais entre eux
 // (spec §4.2, §4.3, §8.1). Tout son état vit dans les sockets (étiquettes, fiches attachées) et dans
-// son stockage SQLite : il survit à l'hibernation, qui ne garde rien en mémoire.
+// son stockage SQLite : il survit à l'hibernation, qui ne garde rien en mémoire. Une seule alarme,
+// posée à l'échéance la plus proche (expiration de la salle, délai d'un arrivant), les balaie toutes.
 import { DurableObject } from "cloudflare:workers";
 import { fabriquerIce } from "./ice.js";
 import { ID_HOTE, LIMITES, PING, PONG, envoyer, fermer, journal, refuser } from "./protocole.js";
 
-/** La fiche attachée à une socket (`serializeAttachment`) : rôle, identifiant, seau de jetons, fin. */
-function nouvelleFiche(role, id) {
-	return { role, id, jetons: LIMITES.MESSAGES_PAR_SECONDE, instant: Date.now(), fin: null };
+/**
+ * La fiche attachée à une socket (`serializeAttachment`) : rôle, identifiant, seau de jetons, fin, et
+ * son échéance (`expire`, celle de la salle, chez l'hôte ; `limite`, son délai d'arrivée, chez un client).
+ */
+function nouvelleFiche(role, id, echeance) {
+	return { role, id, jetons: LIMITES.MESSAGES_PAR_SECONDE, instant: Date.now(), fin: null, ...echeance };
 }
 
 /**
@@ -90,10 +94,11 @@ export class Salle extends DurableObject {
 	async accueillirHote(code) {
 		if (this.hote()) return new Response("salle occupée\n", { status: 409 });
 		const [client, serveur] = Object.values(new WebSocketPair());
+		const expire = Date.now() + LIMITES.DUREE_SALLE_MS;
 		this.ctx.acceptWebSocket(serveur, ["hote"]);
-		serveur.serializeAttachment(nouvelleFiche("hote", ID_HOTE));
+		serveur.serializeAttachment(nouvelleFiche("hote", ID_HOTE, { expire }));
 		this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS pairs (id INTEGER PRIMARY KEY)");
-		await this.ctx.storage.setAlarm(Date.now() + LIMITES.DUREE_SALLE_MS);
+		await this.ctx.storage.setAlarm(expire);
 		envoyer(serveur, { t: "salle", code, id: ID_HOTE, ice: await fabriquerIce(this.env) });
 		return new Response(null, { status: 101, webSocket: client });
 	}
@@ -103,9 +108,14 @@ export class Salle extends DurableObject {
 		if (!hote) return refuser("inconnue");
 		if (this.vivantes().length >= LIMITES.SOCKETS) return refuser("pleine");
 		const id = this.tirerId();
+		const limite = Date.now() + LIMITES.DELAI_ARRIVEE_MS;
 		const [client, serveur] = Object.values(new WebSocketPair());
 		this.ctx.acceptWebSocket(serveur, ["client", String(id)]);
-		serveur.serializeAttachment(nouvelleFiche("client", id));
+		serveur.serializeAttachment(nouvelleFiche("client", id, { limite }));
+		// L'alarme avant l'attente du TURN : l'hôte peut partir pendant celle-ci (la salle est alors
+		// effacée), et une alarme posée après recréerait le stockage d'une salle qui n'existe plus.
+		const alarme = await this.ctx.storage.getAlarm();
+		if (alarme === null || limite < alarme) await this.ctx.storage.setAlarm(limite);
 		// Un seul jeu d'identifiants par arrivée, neuf pour l'arrivant comme pour l'hôte (spec §4.2).
 		const ice = await fabriquerIce(this.env);
 		envoyer(serveur, { t: "bienvenue", id, ice });
@@ -159,7 +169,10 @@ export class Salle extends DurableObject {
 		if (hote) envoyer(hote, { ...contenu, de: fiche.id });
 	}
 
-	/** La salle ne suit plus le client `ws` (`ouvert`, ou chassé) et le ferme ; `depart` à l'hôte sauf après `ouvert`. */
+	/**
+	 * La salle ne suit plus le client `ws` (`ouvert`, ou chassé : `debit`, `delai`) et le ferme ; `erreur`
+	 * au client et `depart` à l'hôte, sauf après `ouvert`. Sa fin retire aussi son échéance du balayage.
+	 */
 	oublier(ws, raison) {
 		const fiche = ws.deserializeAttachment();
 		fiche.fin = raison;
@@ -217,9 +230,34 @@ export class Salle extends DurableObject {
 		await this.ctx.storage.deleteAll();
 	}
 
-	/** 4 h après la création : la salle ferme (la partie continue en WebRTC, plus personne n'arrive). */
+	/**
+	 * Le balayage des échéances. Salle expirée (4 h) : elle ferme (la partie continue en WebRTC, plus
+	 * personne n'arrive). Sinon, chaque arrivant dont le délai est passé est oublié (`delai`), et l'alarme
+	 * se repose à la prochaine échéance. Sans hôte (alarme orpheline), le stockage s'efface, rien d'autre.
+	 */
 	async alarm() {
-		journal("salle expirée");
-		await this.fermerSalle("expiree");
+		const hote = this.hote();
+		if (!hote) {
+			await this.ctx.storage.deleteAll();
+			return;
+		}
+		const maintenant = Date.now();
+		const { expire } = hote.deserializeAttachment();
+		if (maintenant >= expire) {
+			journal("salle expirée");
+			await this.fermerSalle("expiree");
+			return;
+		}
+		let prochaine = expire;
+		for (const ws of this.vivantes("client")) {
+			const { limite } = ws.deserializeAttachment();
+			if (maintenant < limite) {
+				prochaine = Math.min(prochaine, limite);
+				continue;
+			}
+			journal("arrivée trop lente");
+			this.oublier(ws, "delai");
+		}
+		await this.ctx.storage.setAlarm(prochaine);
 	}
 }

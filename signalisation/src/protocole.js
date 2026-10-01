@@ -12,6 +12,8 @@ export const LIMITES = Object.freeze({
 	MESSAGES_PAR_SECONDE: 20,
 	/** Durée de vie d'une salle. */
 	DUREE_SALLE_MS: 4 * 60 * 60 * 1000,
+	/** Délai d'arrivée : un arrivant que l'hôte n'a pas dit `ouvert` à temps est oublié (`delai`). */
+	DELAI_ARRIVEE_MS: 30 * 1000,
 });
 
 /** Le battement de l'hôte et sa réponse, servis par le runtime sans réveiller la salle (texte exact). */
