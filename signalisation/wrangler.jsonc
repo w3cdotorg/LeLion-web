@@ -1,0 +1,35 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "lelion-signalisation",
+	"main": "src/index.js",
+	"compatibility_date": "2026-10-01",
+	// Origines admises, séparées par des virgules ; « :* » = tout port (spec §8.1).
+	"vars": {
+		"ORIGINES": "https://w3cdotorg.github.io,http://localhost:*"
+	},
+	// Secrets (phase 5, jamais dans le dépôt) : TURN_KEY_ID, TURN_KEY_API_TOKEN. Absents : STUN seul.
+	// Une salle par code (idFromName) ; SQLite obligatoire sur l'offre gratuite.
+	"durable_objects": {
+		"bindings": [{ "name": "SALLES", "class_name": "Salle" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Salle"] }],
+	// Limitation de débit des Workers, par point de présence : 5 créations et 30 arrivées par minute et
+	// par IP. namespace_id : entier propre au compte (phase 5 : le changer s'il est déjà pris).
+	"ratelimits": [
+		{
+			"name": "LIMITE_CREATION",
+			"namespace_id": "1001",
+			"simple": { "limit": 5, "period": 60 }
+		},
+		{
+			"name": "LIMITE_ARRIVEE",
+			"namespace_id": "1002",
+			"simple": { "limit": 30, "period": 60 }
+		}
+	],
+	"observability": {
+		"enabled": true,
+		"logs": { "enabled": true, "head_sampling_rate": 1 },
+		"traces": { "enabled": true, "head_sampling_rate": 0.05 }
+	}
+}

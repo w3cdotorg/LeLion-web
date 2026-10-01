@@ -45,7 +45,7 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 |---|---|---|---|
 | 0 | **Dépôt et CI Web seule** : création de `w3cdotorg/LeLion-web` (public, sans lien de fork) avec l'utilisateur ; exports Windows, Linux, macOS et job Release retirés ; l'export Web publié en artefact ; README recentré. | ✏️ `.github/workflows/ci.yml` ✏️ `export_presets.cfg` ✏️ `README.md` ➖ `docs/essai-lan.md` | Dépôt en ligne, CI verte, artefact `LeLion-web`. Faite (PR #1). |
 | 1 | **Transport** : Step 0 sur `Reseau.gd` (977 lignes : code mort, journaux), puis interface `Transport` et `TransportENet` extrait de `Reseau.gd` (qui ne nomme plus aucune classe ENet) ; battement applicatif d'une seconde et silence de 10 s pour tous (30 s au chargement) à la place des délais d'ENet ; départ volontaire par message fiable. Version 0.20, `PROTOCOLE_EMPREINTE` renotée. | ➕ `Scripts/Transport.gd` ➕ `Scripts/TransportENet.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Decouverte.gd` ✏️ `Scripts/Manche.gd` ✏️ `project.godot` ✏️ `tests/unitaires.gd` ✏️ `tests/reseau/joueur.gd` ✏️ `tests/reseau/lancer.sh` ✏️ spec ✏️ `README.md` | Les 13 scénarios réseau verts, scénario 11 allongé (silence de 10 s). Faite (PR #2). |
-| 2 | **Signalisation** : Worker et Durable Object `Salle` (§4 et §8.1 du spec : messages, plafonds, origine, expiration, identifiants TURN, hibernation), tests `vitest` dans l'environnement local de Cloudflare ; job CI du Worker. Vérifier ici : limitation de débit sur l'offre gratuite. | ➕ `signalisation/package.json` ➕ `signalisation/wrangler.jsonc` ➕ `signalisation/src/index.js` ➕ `signalisation/test/salle.test.js` ✏️ `.github/workflows/ci.yml` | `npm test` vert en local et en CI, sans compte Cloudflare. |
+| 2 | **Signalisation** : Worker et Durable Object `Salle` (§4 et §8.1 du spec : messages, plafonds, origine, expiration, identifiants TURN, hibernation), tests `vitest` dans l'environnement local de Cloudflare ; job CI du Worker. Vérifier ici : limitation de débit sur l'offre gratuite. | ➕ `signalisation/package.json` ➕ `signalisation/wrangler.jsonc` ➕ `signalisation/src/index.js` ➕ `signalisation/test/salle.test.js` ✏️ `.github/workflows/ci.yml` | `npm test` vert en local et en CI, sans compte Cloudflare. Faite (PR #3). |
 | 3 | **Écran En ligne** : remplace l'écran Réseau (pseudo, *Créer une partie*, *Rejoindre* avec un code) ; code de salle (alphabet, format `K7Q-2XM`, validation), lecture de `?salle=` ; le salon affiche le code et *Copier le lien*. Sur desktop (dev), le code est `ip:port` pour `TransportENet`. ◉ | ➕ `Scripts/CodeSalle.gd` ➕ `Scenes/EcranEnLigne.tscn` ➕ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Assets/Traductions/traductions.csv` | Parcours Titre → En ligne → Salon en ENet ; unitaires du code de salle. |
 | 3 bis | **Retrait de la découverte** : `Decouverte.gd`, son autoload, l'écran Réseau, les scénarios de découverte et `DIFFUSION=1` ; tests adaptés à l'écran En ligne. | ➖ `Scripts/Decouverte.gd` ➖ `Scenes/EcranReseau.tscn` ✏️ `project.godot` ✏️ tests (`smoke_test`, `screenshots`, `deux_fenetres`, `unitaires`, `reseau/`) | Plus aucune référence à `Decouverte` ; captures à jour (compte de la CI ajusté). |
 | 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/Reseau.gd` (choix du transport) ➕ `tests/web/bout_en_bout.spec.js` ➕ `tests/web/playwright.config.js` ✏️ `.github/workflows/ci.yml` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. |
@@ -68,3 +68,42 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
   secrets du Worker et de GitHub, créés par l'utilisateur.
 - **Réglages de LeLion-multi 19 bis** : s'ils sont faits là-bas après l'essai LAN, les reporter ici
   par `git cherry-pick` depuis la remote `multi` (règles de jeu communes).
+
+### Notes de la revue de la phase 2 (pour les phases 4 et 5)
+
+**Phase 4** (`TransportWebRTC`, client Godot de la signalisation) :
+
+- Envoyer en texte seulement (`send_text`) : `put_packet` est binaire par défaut, la salle ignore les
+  trames binaires sans rien dire et un ping binaire n'a jamais son pong. Le ping est le texte exact
+  `{"t":"ping"}`.
+- Cadencer les envois de l'hôte (file, 15 par seconde au plus) : six arrivées simultanées font environ
+  70 messages, soit environ 5 s, sur les 15 s du client. Cadencer aussi les clients. Pas de
+  regroupement des candidats : la v1 n'accepte que les champs exacts d'un `candidat` (il faudrait un
+  nouveau type).
+- Identifiants : `int()` (le JSON de Godot donne des flottants). Le client apprend son id par
+  `bienvenue.id` ; l'hôte est 1.
+- Après `bienvenue`, le client ne ferme pas sa socket : il attend la fermeture 1000 `ouvert` de la
+  salle. L'hôte ignore un `depart` d'un pair déjà connecté.
+- Lire tous les paquets en attente même à l'état CLOSING ou CLOSED ; la raison de fermeture vaut la
+  raison de l'`erreur` (repli).
+- La fermeture de la socket de signalisation de l'hôte (`expiree`, son propre `debit`, coupure
+  réseau) n'arrête pas la partie : seules les arrivées cessent.
+- Pages de test sur `localhost`, pas `127.0.0.1` ; une IP du réseau local exige `.dev.vars`
+  (`ORIGINES`, déjà ignoré par git).
+- Un `WebSocketPeer` natif n'envoie pas d'`Origin` : `handshake_headers` si besoin (l'export Web
+  l'envoie toujours).
+- Contrat de `Transport.pair()` à revoir (phase 1) : SceneMultiplayer refuse un
+  `WebRTCMultiplayerPeer` avant `create_client`, dont l'id vient de la signalisation.
+
+**Phase 5** (déploiement) :
+
+- Secrets par `wrangler secret put` (`TURN_KEY_ID`, `TURN_KEY_API_TOKEN`).
+- Identifiants de namespace ratelimit 1001 et 1002 uniques sur le compte ; vérifier que le binding est
+  accepté sur l'offre gratuite (sinon compteur en Durable Object).
+- Ne jamais redescendre la date de compatibilité sous 2026-04-07 (auto-réponse à la fermeture,
+  `deleteAll` qui supprime l'alarme). Migration `v1` figée.
+- Retirer `localhost` des `ORIGINES` de production.
+- Les identifiants TURN vont à quiconque ouvre `/v1/creer` (l'`Origin` se falsifie) : 2 h de relais
+  par identifiant ; plafonner la dépense ou poser des alertes si une carte est exigée.
+- Workers Logs : un événement par invocation du Durable Object, sur 200 000 par jour.
+- Le job CI du Worker n'a pas encore tourné sur GitHub avant le push de la phase 2.

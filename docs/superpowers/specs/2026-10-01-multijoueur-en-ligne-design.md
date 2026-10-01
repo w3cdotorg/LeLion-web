@@ -59,7 +59,7 @@ qui change est sous `Reseau` : le transport devient une unité à part, avec deu
 | `TransportWebRTC` | Le transport livré : la signalisation (§4), un `WebRTCPeerConnection` par client chez l'hôte, la configuration ICE reçue du Worker, les canaux (§5). | `Transport`, `WebSocketPeer` |
 | `TransportENet` | Le transport ENet de LeLion-multi, extrait de `Reseau.gd`, gardé pour la **version desktop de développement et les tests headless** (les 13 scénarios réseau, le relais de latence). Jamais choisi dans l'export Web. Le « code » y est `ip:port`. | `Transport` |
 | `EcranEnLigne` (remplace `EcranReseau`) | Pseudo (mémorisé dans `Scores`), *Créer une partie* (absent sur mobile), *Rejoindre* avec un champ de code (pré-rempli par `?salle=`), messages d'erreur (§9). Le salon affiche le code et *Copier le lien*. | `Reseau` |
-| `signalisation/` (Worker + Durable Object `Salle`, JavaScript) | Crée les salles, relaie offres, réponses et candidats entre l'hôte et chaque arrivant, fournit les identifiants TURN, applique les plafonds (§8). Ne lit pas le contenu WebRTC. Environ 150 lignes, avec ses tests `vitest`. | API TURN de Cloudflare |
+| `signalisation/` (Worker + Durable Object `Salle`, JavaScript) | Crée les salles, relaie offres, réponses et candidats entre l'hôte et chaque arrivant, fournit les identifiants TURN, applique les plafonds (§8). Ne lit pas le contenu WebRTC. Six modules (`index`, `origine`, `code`, `protocole`, `ice`, `salle`, environ 440 lignes), avec ses tests `vitest` dans l'environnement local de Cloudflare (`@cloudflare/vitest-plugin`). | API TURN de Cloudflare |
 
 Le choix du transport : `TransportWebRTC` quand `OS.has_feature("web")`, `TransportENet` sinon (ou
 forcé par les tests).
@@ -80,10 +80,14 @@ qu'une page ancienne restée ouverte ne casse pas contre un Worker neuf (un `/v2
 d'une transition). La version du jeu reste vérifiée par la poignée de main.
 
 - `GET /v1/creer` (upgrade WebSocket) : l'hôte. Le Worker tire un code libre (nouvel essai si la
-  salle de ce code a déjà un hôte), crée le Durable Object `Salle` de ce code (`idFromName`) et lui
-  passe la socket.
-- `GET /v1/rejoindre/<code>` (upgrade WebSocket) : un arrivant. Code mal formé : 400 ; salle sans
-  hôte : message `erreur` `inconnue` puis fermeture.
+  salle de ce code a déjà un hôte, 5 essais au plus, puis `erreur` `quota`), crée le Durable Object
+  `Salle` de ce code (`idFromName`) et lui passe la socket.
+- `GET /v1/rejoindre/<code>` (upgrade WebSocket) : un arrivant. Code mal formé : 400 (le code s'y
+  écrit sans tiret, en majuscules ou en minuscules) ; salle sans hôte : message `erreur` `inconnue`
+  puis fermeture.
+- Les autres refus (origine, débit, quota, salle pleine) passent eux aussi par une socket acceptée
+  le temps d'un message `erreur` : un navigateur ne montre pas au jeu le statut HTTP d'une WebSocket
+  refusée. Hors de ces deux chemins : 404 ; autre méthode que GET : 405 ; sans upgrade : 426.
 
 ### 4.2 Messages (JSON, champ `t`)
 
@@ -92,25 +96,29 @@ d'une transition). La version du jeu reste vérifiée par la poignée de main.
 | Salle → hôte | `{t:"salle", code, id:1, ice}` | La salle existe ; `ice` = liste `iceServers` (STUN + TURN, identifiants 2 h). |
 | Salle → client | `{t:"bienvenue", id, ice}` | `id` : identifiant de pair tiré au hasard dans 2..2³¹-1, unique dans la salle. |
 | Salle → hôte | `{t:"arrivee", id, ice}` | Un client arrive ; `ice` neuf (les identifiants de l'hôte se renouvellent ainsi, la salle vivant jusqu'à 4 h). |
-| Hôte ↔ client (relayé) | `{t:"offre"\|"reponse"\|"candidat", vers, …}` | La salle vérifie que `vers` est membre, remplace l'émetteur par `de` et relaie. Seulement entre l'hôte et un client, jamais entre deux clients. |
-| Salle → hôte | `{t:"depart", id}` | La socket d'un client s'est fermée avant que l'hôte ait dit `ouvert`. |
-| Hôte → salle | `{t:"ouvert", id}` | Le canal WebRTC avec `id` est ouvert : la salle oublie ce client (il ferme sa socket de son côté). |
+| Hôte ↔ client (relayé) | `{t:"offre"\|"reponse", vers, sdp}`, `{t:"candidat", vers, media, index, nom}` | La salle vérifie que `vers` est membre, remplace l'émetteur par `de` et relaie (`{t, de, sdp}`, `{t, de, media, index, nom}` : les champs des signaux de `WebRTCPeerConnection`). Seulement entre l'hôte et un client, jamais entre deux clients. Un message invalide (type inconnu, champ en plus ou en moins, mauvais type, `vers` absent de la salle) est ignoré, sans fermer la socket. |
+| Salle → hôte | `{t:"depart", id}` | La socket d'un client s'est fermée avant que l'hôte ait dit `ouvert` : fermée par le client, ou par la salle qui l'a chassé (`debit`, `delai`). |
+| Hôte → salle | `{t:"ouvert", id}` | Le canal WebRTC avec `id` est ouvert : la salle oublie ce client et ferme sa socket (code 1000, motif `ouvert`, sans `erreur` : le client ne la prend pas pour un échec). |
 | Hôte → salle | `{t:"ping"}` | Toutes les 30 s ; réponse automatique `{t:"pong"}` (hibernation du Durable Object, §8). |
-| Salle → tous | `{t:"erreur", raison}` puis fermeture | `inconnue`, `pleine`, `debit`, `quota`, `origine`. |
+| Salle → tous | `{t:"erreur", raison}` puis fermeture | `inconnue`, `pleine`, `debit`, `quota`, `origine`, `expiree` (§4.3, point 4), `delai` (arrivant que l'hôte n'a pas dit `ouvert` 30 s après son arrivée, §4.3 point 3, §8.1). Fermeture : code 1000, la raison en motif. |
 
 ### 4.3 Déroulé
 
 1. **Création** : l'hôte ouvre `/v1/creer`, reçoit `salle`, affiche le salon avec le code. Sa socket
    reste ouverte tant que la salle vit, retour de manche compris. Socket fermée (onglet fermé, retour
-   au titre) : la salle est supprimée.
+   au titre), ou hôte au-delà d'un plafond (§8.1) : la salle est supprimée, ses arrivants en cours
+   reçoivent `erreur` `inconnue`.
 2. **Arrivée** : le client ouvre `/v1/rejoindre/<code>`, reçoit `bienvenue` ; l'hôte reçoit `arrivee`,
    crée la connexion WebRTC (`create_server` déjà fait, `add_peer(id)`), envoie son offre ; offre,
-   réponse et candidats passent par la salle. Canal ouvert : l'hôte envoie `ouvert`, le client ferme
-   sa socket, puis la poignée de main du LAN se déroule (version, pseudo, refus partie pleine ou
-   manche en cours).
+   réponse et candidats passent par la salle. Canal ouvert : l'hôte envoie `ouvert`, la salle ferme
+   la socket du client (le client ne la ferme pas lui-même : il attend cette fermeture 1000 `ouvert`),
+   puis la poignée de main du LAN se déroule (version, pseudo, refus partie pleine ou manche en cours).
 3. **Délai** : canal non ouvert 15 s après `bienvenue` : échec côté client (« Connexion impossible
-   avec l'hôte (réseau trop restrictif ?) »), et l'hôte retire le pair.
-4. Une salle vit **4 h au plus**, puis la salle ferme toutes ses sockets (la partie en cours continue
+   avec l'hôte (réseau trop restrictif ?) »), et l'hôte retire le pair. Côté salle, un arrivant que
+   l'hôte n'a pas dit `ouvert` 30 s après son arrivée est oublié (`erreur` `delai`, `depart` à l'hôte,
+   sa place libérée) : le filet d'un client qui ne ferme pas sa socket (§8.1).
+4. Une salle vit **4 h au plus** (alarme du Durable Object), puis elle envoie `erreur` `expiree` et
+   ferme toutes ses sockets (la partie en cours continue
    en WebRTC, mais plus personne ne peut arriver ; le salon de l'hôte affiche « Salle expirée : crée
    une nouvelle partie pour inviter »).
 
@@ -165,19 +173,46 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 ### 8.1 Worker
 
 - **Origine** : WebSocket acceptée seulement depuis `https://w3cdotorg.github.io` et
-  `http://localhost:*` (variable du Worker). Ça freine le pillage, ça ne protège pas seul.
-- **Plafonds par salle** : 7 sockets (l'hôte et 6 arrivants en cours) ; messages de 16 Ko au plus ;
-  20 messages par seconde et par socket ; au-delà, `erreur` puis fermeture.
-- **Limite par IP** : quelques salles créées par minute et par IP (`cf-connecting-ip`), par la
-  limitation de débit des Workers (`ratelimit`) si elle est disponible sur l'offre gratuite, sinon
-  par un Durable Object compteur. À vérifier en phase 2.
-- **Validation** : type de message connu, `vers` membre de la salle, champs attendus seulement ; le
-  contenu SDP n'est ni lu ni journalisé.
+  `http://localhost:*` (variable du Worker `ORIGINES` ; `:*` = tout port ou aucun). Ça freine le
+  pillage, ça ne protège pas seul. Sans en-tête `Origin` : refusée (le jeu livré est l'export Web,
+  dont le navigateur l'envoie toujours ; le desktop de développement joue en ENet).
+- **Plafonds par salle** : 7 sockets (l'hôte et 6 arrivants en cours) ; messages de 16 Ko au plus
+  (16 384 octets UTF-8) ; 20 messages par seconde et par socket (seau de jetons de 20, rempli de 20
+  par seconde, gardé dans la fiche de la socket) ; au-delà, `erreur` puis fermeture (`pleine` pour
+  la 8e socket, `debit` pour la taille et le débit ; un client au-delà est chassé, `depart` à l'hôte ;
+  un hôte au-delà ferme sa salle, ses arrivants reçoivent `inconnue`). Le `ping`, servi par le
+  runtime, ne compte pas. Une trame binaire n'est jamais relayée, mais se mesure et prend son jeton.
+- **Délai d'arrivée** : 30 s pour que l'hôte dise `ouvert` (le double des 15 s du client, §4.3) ;
+  au-delà, la salle oublie l'arrivant (`erreur` `delai`, `depart` à l'hôte) et sa place se libère.
+  Les échéances (expiration de la salle chez l'hôte, délai de chaque arrivant) vivent dans les fiches
+  des sockets ; une seule alarme, posée à la plus proche, les balaie et se repose à la suivante.
+- **Limite par IP** : 5 salles créées et 30 arrivées par minute et par IP (`cf-connecting-ip`), par
+  la limitation de débit des Workers (bindings `ratelimits` `LIMITE_CREATION` et `LIMITE_ARRIVEE`,
+  générale depuis le 19/09/2025, simulée par Miniflare en local et testée) ; au-delà, `erreur`
+  `debit` (l'arrivée est comptée avant la salle, code inconnu compris). Une IPv6 compte pour son /64
+  (un abonné en reçoit en général un entier), une IPv4 mappée (`::ffff:a.b.c.d`) pour son IPv4.
+  Compteurs par point de présence et cohérents à terme : un frein, pas un compte exact. Un limiteur
+  injoignable laisse passer (ouvert par défaut, journalisé) : sa panne ne ferme pas le service.
+  Vérifié en phase 2 (documentation du 01/10/2026) : ni la page *Rate Limiting* ni les tarifs et
+  limites des Workers ne la réservent à une offre, sans dire en toutes lettres qu'elle existe sur
+  l'offre gratuite ; le premier `wrangler deploy` (phase 5) le tranche, et sinon un Durable Object
+  compteur la remplace.
+- **Validation** : type de message connu, `vers` membre de la salle, champs attendus seulement ; un
+  message invalide est ignoré, sans fermer la socket (un relais vers un client parti à l'instant est
+  une course normale) ; le contenu SDP n'est ni lu ni journalisé.
 - **TURN** : la clé TURN et le jeton d'API restent dans les secrets du Worker ; identifiants à 2 h,
-  donnés seulement par `salle`, `bienvenue` et `arrivee`.
+  donnés seulement par `salle`, `bienvenue` et `arrivee`. Fabriqués par
+  `POST https://rtc.live.cloudflare.com/v1/turn/keys/<TURN_KEY_ID>/credentials/generate-ice-servers`
+  (`Authorization: Bearer <TURN_KEY_API_TOKEN>`, corps `{"ttl": 7200}`, réponse 201 `iceServers` ;
+  vérifié dans la documentation TURN de Cloudflare le 01/10/2026), URL du port 53 retirées (bloqué
+  par les navigateurs) ; un seul jeu par arrivée, donné à l'arrivant et à l'hôte. Sans secrets
+  (développement local), API en erreur ou muette 3 s : STUN seul (Cloudflare et Google).
 - **Coût** : Durable Object en hibernation de WebSocket (pas de durée facturée pour une socket
   inactive) ; quota gratuit dépassé : `erreur quota`, le jeu dit « Trop de parties en ce moment,
-  réessaie plus tard. ».
+  réessaie plus tard. ». Sur l'offre gratuite, une opération au-delà du quota quotidien des Durable
+  Objects échoue (tarifs des Durable Objects) : le Worker répond `erreur quota` à tout appel de salle
+  qui échoue. Le quota du Worker lui-même (requêtes par jour) ne se détecte pas de l'intérieur :
+  Cloudflare répond à sa place, le jeu y voit un service injoignable.
 
 ### 8.2 Jeu
 
@@ -220,8 +255,9 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   battement et silence, limites de débit des RPC, exclusion.
 - **Worker** (`signalisation/`, `vitest` dans l'environnement local de Cloudflare, sans compte) :
   création, code unique, arrivée, relais limité à hôte ↔ client, `depart`, `ouvert`, plafonds (7
-  sockets, 16 Ko, 20 msg/s), limite par IP, origine refusée, expiration à 4 h, identifiants TURN (API
-  Cloudflare simulée), réponses automatiques `ping`.
+  sockets, 16 Ko, 20 msg/s), limites par IP (création, arrivée, /64), origine refusée, expiration à
+  4 h, délai d'arrivée de 30 s, identifiants TURN (API Cloudflare simulée), réponses automatiques
+  `ping`.
 - **De bout en bout WebRTC** (Playwright, Chromium et Firefox, en CI) : l'export Web servi en local,
   le Worker en local (`wrangler dev`), 3 pages. Création, arrivée de deux pages par le lien, Prêt,
   manche de 10 s, même empreinte sur les 3 pages (lue dans la console), exclusion d'un joueur, départ
@@ -271,9 +307,10 @@ Chaque phase touche 5 fichiers au plus, se termine par les tests verts et attend
   TCP et TLS 443 ; mesuré à l'essai avec `?relais=1`.
 - **Latence Internet** (30 à 120 ms, plus en 4G) : prédiction déjà éprouvée sous 80/40/5 ; profil
   mobile ajouté au banc, réglages sur mesures seulement.
-- **Offre gratuite de Cloudflare** : Durable Objects gratuits avec le stockage SQLite seulement ; à
-  vérifier en phase 2 si le TURN exige une carte bancaire pour être activé, et si la limitation de
-  débit existe sur l'offre gratuite.
+- **Offre gratuite de Cloudflare** : Durable Objects gratuits avec le stockage SQLite seulement
+  (`new_sqlite_classes`, phase 2) ; limitation de débit : aucune restriction d'offre dans la
+  documentation (phase 2, §8.1), le premier déploiement le confirme (phase 5) ; TURN : 1 000 Go
+  gratuits, reste à vérifier en phase 5 s'il exige une carte bancaire pour être activé.
 - **Safari iOS** : WebGL 2 et son ; un ancien ticket Godot (WebRTC bloqué en « connecting », 4.2) n'a
   pas été revérifié : à tester en phase 5 sur un vrai iPhone.
 - **Exclu qui revient** : sans compte, rien n'identifie durablement un joueur. L'exclusion est

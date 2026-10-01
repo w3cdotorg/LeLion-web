@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Installer Godot et les templates d'export
         run: |
@@ -102,3 +102,29 @@ jobs:
           path: export/web
           if-no-files-found: error
           retention-days: 30
+
+  signalisation:
+    name: Tests du Worker de signalisation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: signalisation
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Installer Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: signalisation/package-lock.json
+
+      - name: Installer les dépendances (package-lock.json)
+        run: npm ci
+
+      - name: Tests vitest (Worker et salle dans l'environnement local de Cloudflare, sans compte)
+        run: npm test
+
+      - name: Configuration de déploiement valide (sans compte)
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/signalisation"

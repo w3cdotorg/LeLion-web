@@ -1,0 +1,19 @@
+{
+	"name": "lelion-signalisation",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Signalisation WebRTC de LeLion web : Worker Cloudflare et Durable Object Salle.",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"dev": "wrangler dev"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-plugin": "1.3.5",
+		"vitest": "4.1.11",
+		"wrangler": "4.146.0"
+	}
+}
