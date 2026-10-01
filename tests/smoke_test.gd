@@ -1849,6 +1849,17 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 		and ecran.champ_code.has_focus(), "un lien sans code : « Un code fait 6 caractères (ex. K7Q-2XM). », le focus au code (%s)" % ecran.message.text)
 	reseau.transport_disponible = true
 
+	# Un échec local de Rejoindre, le code bien formé mais refusé par le transport (ici ENet, qui attend
+	# ip:port : ERR_INVALID_PARAMETER) : son code d'erreur, rien d'ouvert, le focus au code
+	var impossible := "Impossible de rejoindre (erreur %d)"
+	ecran.champ_code.text = "K7Q2XM"
+	ecran.bouton_creer.grab_focus()
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == impossible % ERR_INVALID_PARAMETER
+		and ecran.champ_code.has_focus() and tr("ENLIGNE_REJOINDRE_IMPOSSIBLE") == impossible
+		and TranslationServer.get_translation_object("en").get_message("ENLIGNE_REJOINDRE_IMPOSSIBLE") == "Can't join (error %d)",
+		"un code refusé par le transport : « Impossible de rejoindre (erreur %d) », le focus au code (%s)" % [ERR_INVALID_PARAMETER, ecran.message.text])
+
 	# Le desktop de développement : l'adresse ENet d'un hôte ; la connexion, le pseudo nettoyé
 	ecran.codes_de_salle = false
 	ecran.champ_code.text = "lelion.local"

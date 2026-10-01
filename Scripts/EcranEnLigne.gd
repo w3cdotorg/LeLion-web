@@ -140,7 +140,7 @@ func creer_partie() -> void:
 
 ## Rejoint la partie du code saisi, avec le pseudo saisi ; un code mal formé est refusé d'emblée (spec
 ## §9), sans rien tenter. Le code s'affiche alors sous sa forme normale (« K7Q-2XM », ou l'adresse de
-## l'hôte ENet).
+## l'hôte ENet) ; un transport qui le refuse d'emblée donne son code d'erreur, le focus au code.
 func rejoindre() -> void:
 	if etat != Etat.ACCUEIL:
 		return
@@ -152,8 +152,14 @@ func rejoindre() -> void:
 	_appliquer_pseudo()
 	_par_le_code = true
 	var erreur: Error = Reseau.rejoindre_partie(code)
+	if erreur == ERR_UNAVAILABLE:
+		_afficher_message("ENLIGNE_INDISPONIBLE", [], true)
+		return
 	if erreur != OK:
-		_afficher_message("ENLIGNE_INDISPONIBLE" if erreur == ERR_UNAVAILABLE else ECHEC_PAR_DEFAUT, [], true)
+		# Le transport refuse d'emblée (un code qu'il ne sait pas lire, un pair qu'il ne peut créer) : rien
+		# n'est ouvert, le code est à reprendre.
+		_afficher_message("ENLIGNE_REJOINDRE_IMPOSSIBLE", [erreur], true)
+		champ_code.grab_focus()
 		return
 	_changer_etat(Etat.CONNEXION)
 	_afficher_message("RESEAU_CONNEXION", [champ_code.text], false)

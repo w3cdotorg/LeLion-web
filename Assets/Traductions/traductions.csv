@@ -92,6 +92,7 @@ ENLIGNE_SERVICE_INDISPONIBLE,"Service de connexion indisponible, réessaie dans 
 ENLIGNE_QUOTA,"Trop de parties en ce moment, réessaie plus tard.","Too many games right now, try again later."
 ENLIGNE_ECHEC_CANAL,Connexion impossible avec l'hôte (réseau trop restrictif ?),Can't connect to the host (network too restrictive?)
 ENLIGNE_INDISPONIBLE,"Pas encore de jeu en ligne dans cette version : il arrive bientôt.","No online play in this version yet: coming soon."
+ENLIGNE_REJOINDRE_IMPOSSIBLE,Impossible de rejoindre (erreur %d),Can't join (error %d)
 SALON,Salon,Lobby
 SALON_NIVEAU,Niveau : %s,Level: %s
 SALON_HOTE,HÔTE,HOST
