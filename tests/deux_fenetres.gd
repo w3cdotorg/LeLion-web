@@ -1,6 +1,6 @@
 extends SceneTree
 ## Une partie à deux vraies fenêtres sur ce poste (◉, phases 14 et 19 ; la CI la déroule sans rendu (pas « Captures »)) : un hôte
-## et un client passent par l'écran Réseau et le salon, jouent une manche courte au clavier simulé,
+## et un client passent par l'écran En ligne et le salon, jouent une manche courte au clavier simulé,
 ## voient le même écran Résultats, puis l'hôte quitte et le client le voit partir. Deux processus :
 ##   godot --path . --rendering-driver opengl3 --script tests/deux_fenetres.gd -- --role=hote --dossier=<dossier>
 ##   godot --path . --rendering-driver opengl3 --script tests/deux_fenetres.gd -- --role=client --dossier=<dossier>
@@ -75,7 +75,8 @@ func _attendre_l_autre(nom: String) -> void:
 
 
 ## Supprime les fichiers de rendez-vous que CE poste a lui-même écrits (jamais ceux de
-## l'autre) : appelé au tout début (un tour précédent dans le même dossier) et après `fin`.
+## l'autre, ni ses captures : un rendez-vous n'a pas d'extension) : appelé au tout début (un tour
+## précédent dans le même dossier) et après `fin`.
 func _nettoyer_mes_fichiers() -> void:
 	var dir := DirAccess.open(dossier)
 	if dir == null:
@@ -83,7 +84,7 @@ func _nettoyer_mes_fichiers() -> void:
 	dir.list_dir_begin()
 	var f := dir.get_next()
 	while f != "":
-		if not dir.current_is_dir() and f.begins_with(role + "_"):
+		if not dir.current_is_dir() and f.begins_with(role + "_") and f.get_extension().is_empty():
 			dir.remove(f)
 		f = dir.get_next()
 	dir.list_dir_end()
@@ -118,19 +119,19 @@ func _run() -> void:
 	DisplayServer.window_set_position(Vector2i(20, 40) if role == "hote" else Vector2i(740, 440))
 	DisplayServer.window_set_size(Vector2i(700, 227))  # la fenêtre du solo, en plus petit : deux tiennent à l'écran
 
-	# L'écran Réseau, puis le salon
-	change_scene_to_file("res://Scenes/EcranReseau.tscn")
-	await _attendre(func() -> bool: return _scene_est("EcranReseau"))
+	# L'écran En ligne, puis le salon
+	change_scene_to_file("res://Scenes/EcranEnLigne.tscn")
+	await _attendre(func() -> bool: return _scene_est("EcranEnLigne"))
 	var ecran: Node = current_scene
 	ecran.port_jeu = PORT
 	ecran.champ_pseudo.text = "Hôte" if role == "hote" else "Invitée"
 	if role == "hote":
-		ecran.heberger()
+		ecran.creer_partie()
 		_signaler("heberge")
 	else:
 		await _attendre_l_autre("heberge")
-		ecran.champ_ip.text = "127.0.0.1"
-		ecran.rejoindre_par_ip()
+		ecran.champ_code.text = "127.0.0.1:%d" % PORT
+		ecran.rejoindre()
 	await _attendre(func() -> bool: return _scene_est("Salon"))
 	var salon: Node = current_scene
 	if role == "hote":
