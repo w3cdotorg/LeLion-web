@@ -1796,6 +1796,7 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	var reseau: Node = root.get_node("Reseau")
 	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
 	scores.definir_preference("pseudo", "Léa")
+	var connexions_langue: int = params.langue_changee.get_connections().size()
 	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
 	ecran.port_jeu = 17797
 	ecran.codes_de_salle = true  # comme sur le Web
@@ -1976,10 +1977,13 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne(), "Retour pendant une connexion l'annule : l'accueil, hors réseau")
 	ecran.retour(false)
 	_check(not reseau.en_ligne() and scores.preference("pseudo", "") == "Zoé la gran", "Retour à l'accueil quitte le réseau et garde le pseudo mémorisé")
+	var langue_pendant: int = params.langue_changee.get_connections().size()
 	root.remove_child(ecran)
 	_check(reseau.inscrit.get_connections().is_empty() and reseau.refuse.get_connections().is_empty()
-		and reseau.connexion_echouee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty(),
-		"l'écran retiré de l'arbre ne laisse aucune connexion aux autoloads")
+		and reseau.connexion_echouee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty()
+		and langue_pendant == connexions_langue + 1 and params.langue_changee.get_connections().size() == connexions_langue,
+		"l'écran retiré de l'arbre ne laisse aucune connexion aux autoloads, Parametres.langue_changee compris (%d connexion(s) avant l'écran, %d pendant, %d après)"
+			% [connexions_langue, langue_pendant, params.langue_changee.get_connections().size()])
 	ecran.free()
 	reseau.pseudo = ""
 	scores.effacer()
@@ -2061,6 +2065,22 @@ func _tester_titre_reseau(scores: Node) -> void:
 		second_titre.free()
 		invite.free()
 	scores.effacer()
+
+	# La même invitation sans pseudo mémorisé : le focus au pseudo, à choisir avant Rejoindre
+	CodeSalle.recherche_forcee = "?salle=k7q2xm"
+	CodeSalle._page_lue = false
+	titre = load("res://Scenes/Titre.tscn").instantiate()
+	titre.demo_autorisee = false
+	root.add_child(titre)
+	var invite_anonyme: Control = (await _attendre_scene("res://Scenes/EcranEnLigne.tscn")) as Control
+	titre.free()
+	CodeSalle.recherche_forcee = ""
+	_check(invite_anonyme != null and invite_anonyme.scene_file_path == "res://Scenes/EcranEnLigne.tscn"
+		and invite_anonyme.champ_pseudo.text.is_empty() and invite_anonyme.champ_code.text == "K7Q-2XM"
+		and invite_anonyme.champ_pseudo.has_focus() and not reseau.en_ligne(),
+		"une invitation sans pseudo mémorisé : le code rempli, le focus au pseudo, rien de tenté")
+	if invite_anonyme != null:
+		invite_anonyme.free()
 
 	# Retour au titre depuis une session : hors réseau AVANT le solo (point de vigilance de la phase 12)
 	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
