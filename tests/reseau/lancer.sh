@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# Test réseau du transport (phase 11), de la découverte (phase 12), du salon (phase 13), de la
+# Test réseau du transport (phase 11), du salon (phase 13), de la
 # manche synchronisée (phase 14), de bout en bout (phase 15), de la prédiction sous latence
 # simulée (phase 16), de la fin de manche au chrono (phase 17) et des manches enchaînées depuis l'écran
 # Résultats (phase 18) : des postes headless sur localhost,
 # un processus Godot par poste (tests/reseau/joueur.gd), et pour les scénarios 12 et 13 le simulateur de
 # latence (tests/reseau/relais.gd), scénario après scénario.
 #   tests/reseau/lancer.sh [port_de_base]
-# Le scénario n utilise le port port_de_base + n (défaut 17777 : jamais le 7777 d'une vraie partie)
-# et, pour les balises de découverte, port_de_base + 1000 + n (jamais le 7778) ; le relais du
-# scénario n (12, 13) écoute sur port_de_base + 2000 + n.
+# Le scénario n utilise le port port_de_base + n (défaut 17777 : jamais le 7777 d'une vraie partie) ;
+# le relais du scénario n (12, 13) écoute sur port_de_base + 2000 + n. Les scénarios 6 et 7 (la
+# découverte des parties sur le réseau local) sont partis avec elle (phase 3 bis du jeu en ligne) :
+# les autres gardent leur numéro, et leurs ports.
 # Variables : GODOT (défaut : godot), DELAI (secondes au plus par processus, défaut : 40 ; les
 # scénarios 11, 12 et 13, des manches jouées, ont le leur : DUREE11 + 60, DUREE12 + 50, DUREE13 +
-# DUREE13B + 60),
-# DIFFUSION=1 (ajoute le scénario 7, balises en vraie diffusion ; le pas « Test réseau » de la CI le
-# pose depuis la phase 19 ; le scénario 6 couvre le même chemin en envoi direct vers 127.0.0.1).
+# DUREE13B + 60).
 # Chaque étape s'enchaîne sur un événement observé (une ligne d'un journal, un compte de l'hôte),
 # 15 s au plus (DELAI_ETAPE de joueur.gd, 150 × 0,1 s ici ; plus pour les étapes de la manche
 # entière du scénario 11, qui durent ce que dure le jeu) ; seules restent, côté client
@@ -293,43 +292,6 @@ if attendre_hote hote5; then
 fi
 terminer "poignée de main jamais finie : réservation à la réponse, puis libération par le vrai délai"
 
-# 6. Découverte (balises vers 127.0.0.1) : l'hôte émet sa balise ; un écouteur voit sa partie,
-#    la rejoint à l'adresse et au port de la balise, voit la balise suivante compter 2 joueurs.
-#    Un second écouteur sur le même port de balises (deux LeLion sur un PC) reçoit une erreur,
-#    sans planter. Puis l'hôte quitte le réseau mais son processus vit encore 6 s : la partie doit
-#    quitter la liste 3 s après sa dernière balise, pas à la fin du processus.
-P=$((PORT_BASE + 6))
-B=$((PORT_BASE + 1006))
-lancer hote6 --role=hote --port=$P --port-balise=$B --pseudo=Hote6 --places=4 --clients=1 --rester="$JOURNAUX/rester6" --apres-depart=6
-if attendre_hote hote6; then
-	lancer ecouteur6 --role=ecouteur --port=$P --port-balise=$B --hote=Hote6 --places=4 --rejoindre
-	if attendre_ligne ecouteur6 "ECOUTE PRETE"; then
-		lancer occupe6 --role=ecouteur --port-balise=$B --occupe
-		# occupe6 doit tenter son bind() pendant qu'ecouteur6 tient encore le port (le second bind
-		# doit échouer, pas juste arriver après coup) : on attend sa vérification avant de laisser
-		# partir ecouteur6 (constat 4 de la revue finale de la phase 12).
-		attendre_ligne occupe6 "RESULTAT occupe" && attendre_ligne ecouteur6 "PARTIE A 2" && touch "$JOURNAUX/rester6"
-	fi
-fi
-terminer "découverte : partie vue et rejointe par sa balise, comptée à 2, expirée après le départ de l'hôte ; port des balises occupé sans plantage"
-[ "$(compter "PARTIE EXPIREE" ecouteur6)" -eq 1 ] || echec "découverte : la partie n'a pas expiré dans la liste"
-
-# 7. (DIFFUSION=1) La même découverte en vraie diffusion (255.255.255.255 et réseaux privés), sans
-#    rejoindre : l'adresse vue est l'une de celles de ce PC.
-if [ "${DIFFUSION:-0}" = "1" ]; then
-	P=$((PORT_BASE + 7))
-	B=$((PORT_BASE + 1007))
-	lancer hote7 --role=hote --port=$P --port-balise=$B --pseudo=Hote7 --diffusion --rester="$JOURNAUX/rester7"
-	if attendre_hote hote7; then
-		lancer ecouteur7 --role=ecouteur --port=$P --port-balise=$B --hote=Hote7 --diffusion
-		attendre_ligne ecouteur7 "PARTIE VUE" && touch "$JOURNAUX/rester7"
-	fi
-	terminer "découverte en vraie diffusion"
-	[ "$(compter "PARTIE EXPIREE" ecouteur7)" -eq 1 ] || echec "diffusion : la partie n'a pas expiré dans la liste"
-else
-	echo "  (scénario 7, découverte en vraie diffusion : DIFFUSION=1 pour le lancer)"
-fi
-
 # 8. Salon (phase 13), par les vraies scènes : un hôte et trois clients passent par l'écran En ligne
 #    et le salon, arrivés dans l'ordre (index 1, 2, 3). B repart du salon par Retour : sa carte se
 #    libère chez tous, un trou reste à l'index 2. A et C demandent au même feu la couleur voisine
@@ -340,15 +302,14 @@ fi
 #    passe de 3 à 2). Un retardataire est alors refusé « manche en cours » : c'est le salon qui l'a
 #    posée.
 P=$((PORT_BASE + 8))
-B=$((PORT_BASE + 1008))
-lancer hote8 --role=salon-hote --port=$P --port-balise=$B --pseudo=Hote8 --clients=3 --partants=1 --niveau=2 --rester="$JOURNAUX/rester8"
+lancer hote8 --role=salon-hote --port=$P --pseudo=Hote8 --clients=3 --partants=1 --niveau=2 --rester="$JOURNAUX/rester8"
 if attendre_hote hote8; then
-	lancer a8 --role=salon-client --port=$P --port-balise=$B --pseudo=Anna --voir=4 --reste=3 --couleur=1 --feu="$JOURNAUX/feu8" \
+	lancer a8 --role=salon-client --port=$P --pseudo=Anna --voir=4 --reste=3 --couleur=1 --feu="$JOURNAUX/feu8" \
 		--annuler="$JOURNAUX/annule8" --relance="$JOURNAUX/relance8" --index=1 --niveau=2
 	if attendre_ligne a8 "SALON OUVERT"; then
-		lancer b8 --role=salon-client --port=$P --port-balise=$B --pseudo=Bruno --voir=4 --partir
+		lancer b8 --role=salon-client --port=$P --pseudo=Bruno --voir=4 --partir
 		if attendre_ligne b8 "SALON OUVERT"; then
-			lancer c8 --role=salon-client --port=$P --port-balise=$B --pseudo=Chloe --reste=3 --couleur=-1 --feu="$JOURNAUX/feu8" \
+			lancer c8 --role=salon-client --port=$P --pseudo=Chloe --reste=3 --couleur=-1 --feu="$JOURNAUX/feu8" \
 				--index=2 --niveau=2
 			if attendre_ligne a8 "ATTEND LE FEU" && attendre_ligne c8 "ATTEND LE FEU"; then
 				touch "$JOURNAUX/feu8"
@@ -386,13 +347,12 @@ terminer "salon : arrivées, départ (carte libérée), couleurs arbitrées, dé
 GEL9=6.5
 DELAI_CHARGEMENT9=3
 P=$((PORT_BASE + 9))
-B=$((PORT_BASE + 1009))
-lancer hote9 --role=manche-hote --port=$P --port-balise=$B --pseudo=Hote9 --clients=3 --gel=$GEL9 \
+lancer hote9 --role=manche-hote --port=$P --pseudo=Hote9 --clients=3 --gel=$GEL9 \
 	--delai-chargement=$DELAI_CHARGEMENT9 --sens=1 --rester="$JOURNAUX/rester9"
 if attendre_hote hote9; then
-	lancer a9 --role=manche-client --port=$P --port-balise=$B --pseudo=Anna --sens=1 --fige="$JOURNAUX/fige9"
-	lancer b9 --role=manche-client --port=$P --port-balise=$B --pseudo=Bruno --sens=-1 --partir
-	lancer c9 --role=manche-muet --port=$P --port-balise=$B --pseudo=Muet --gel=$GEL9 --delai-chargement=$DELAI_CHARGEMENT9
+	lancer a9 --role=manche-client --port=$P --pseudo=Anna --sens=1 --fige="$JOURNAUX/fige9"
+	lancer b9 --role=manche-client --port=$P --pseudo=Bruno --sens=-1 --partir
+	lancer c9 --role=manche-muet --port=$P --pseudo=Muet --gel=$GEL9 --delai-chargement=$DELAI_CHARGEMENT9
 	# Chaque étape de l'hôte dans ses 15 s : la manche entière en prend plus (le gel, l'intro, les
 	# passes). M6 (revue finale) : « BARRIERE » d'abord, pour que la fenêtre de 15 s d'« INTRO »
 	# ne couvre plus, à elle seule, le plancher fixe du scénario (gel + délai de barrière + intro).
@@ -415,12 +375,11 @@ terminer "manche : barrière de chargement (hôte figé, muet exclu), commandes 
 #     n'est jouée ici : les deux postes sont arrêtés dès la mesure prise.
 DELAI_CHARGEMENT10=3
 P=$((PORT_BASE + 10))
-B=$((PORT_BASE + 1010))
 avant10=$ECHECS
-lancer hote10 --role=manche-hote --port=$P --port-balise=$B --pseudo=Hote10 --clients=1 \
+lancer hote10 --role=manche-hote --port=$P --pseudo=Hote10 --clients=1 \
 	--delai-chargement=$DELAI_CHARGEMENT10 --mesurer-exclusion
 if attendre_hote hote10; then
-	lancer muet10 --role=manche-muet --port=$P --port-balise=$B --pseudo=Muet10 \
+	lancer muet10 --role=manche-muet --port=$P --pseudo=Muet10 \
 		--delai-chargement=$DELAI_CHARGEMENT10 --figer=10
 	if attendre_ligne hote10 "ECART_EXCLUSION"; then
 		ecart=$(grep -o "ECART_EXCLUSION [0-9]*" "$JOURNAUX/hote10.log" | head -1 | awk '{print $2}')
@@ -445,17 +404,16 @@ tuer hote10 muet10
 #     apparitions, niveau, réactions de chaque joueur).
 DUREE11=45
 P=$((PORT_BASE + 11))
-B=$((PORT_BASE + 1011))
 DELAI_AVANT11=$DELAI
 DELAI=$((DUREE11 + 60))
-lancer hote11 --role=bout-hote --port=$P --port-balise=$B --pseudo=Hote11 --clients=3 --niveau=2 --duree=$DUREE11 \
+lancer hote11 --role=bout-hote --port=$P --pseudo=Hote11 --clients=3 --niveau=2 --duree=$DUREE11 \
 	--graine=1 --tue="$JOURNAUX/tue11" --rester="$JOURNAUX/rester11"
 partant11=""
 restes11="a11 b11 c11"
 if attendre_hote hote11; then
-	lancer a11 --role=bout-client --port=$P --port-balise=$B --pseudo=Anna --graine=2 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
-	lancer b11 --role=bout-client --port=$P --port-balise=$B --pseudo=Bruno --graine=3 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
-	lancer c11 --role=bout-client --port=$P --port-balise=$B --pseudo=Chloe --graine=4 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
+	lancer a11 --role=bout-client --port=$P --pseudo=Anna --graine=2 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
+	lancer b11 --role=bout-client --port=$P --pseudo=Bruno --graine=3 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
+	lancer c11 --role=bout-client --port=$P --pseudo=Chloe --graine=4 --calme="$JOURNAUX/calme11" --fige="$JOURNAUX/fige11"
 	if attendre_ligne hote11 "INTRO" 30 && attendre_ligne a11 "INTRO" && attendre_ligne b11 "INTRO" && attendre_ligne c11 "INTRO" \
 		&& attendre_ligne hote11 "A TUER" 60; then
 		# L'hôte désigne le client à arracher (celui qui tient le plus de territoire) : « A TUER <pseudo> ».
@@ -520,16 +478,15 @@ echo "  (bout en bout) départ arraché vu par l'hôte au bout de ${ecart11:-?} 
 #     à travers le relais), puis le relais s'arrête.
 DUREE12=20
 P=$((PORT_BASE + 12))
-B=$((PORT_BASE + 1012))
 R=$((PORT_BASE + 2012))
 DELAI_AVANT12=$DELAI
 DELAI=$((DUREE12 + 50))
 lancer_relais relais12 --ecoute=$R --vers=$P --latence=80 --gigue=40 --pertes=5 --graine=12 --fin="$JOURNAUX/fin12"
-lancer hote12 --role=latence-hote --port=$P --port-balise=$B --pseudo=Hote12 --clients=2 --niveau=0 --duree=$DUREE12 \
+lancer hote12 --role=latence-hote --port=$P --pseudo=Hote12 --clients=2 --niveau=0 --duree=$DUREE12 \
 	--rester="$JOURNAUX/rester12"
 if attendre_ligne relais12 "RELAIS PRET" && attendre_hote hote12; then
-	lancer a12 --role=latence-client --port=$R --port-balise=$B --pseudo=Anna --graine=5 --moitie=0 --calme="$JOURNAUX/calme12" --fige="$JOURNAUX/fige12"
-	lancer b12 --role=latence-client --port=$R --port-balise=$B --pseudo=Bruno --graine=6 --moitie=1 --calme="$JOURNAUX/calme12" --fige="$JOURNAUX/fige12"
+	lancer a12 --role=latence-client --port=$R --pseudo=Anna --graine=5 --moitie=0 --calme="$JOURNAUX/calme12" --fige="$JOURNAUX/fige12"
+	lancer b12 --role=latence-client --port=$R --pseudo=Bruno --graine=6 --moitie=1 --calme="$JOURNAUX/calme12" --fige="$JOURNAUX/fige12"
 	if attendre_ligne hote12 "INTRO" 30 && attendre_ligne hote12 "CALME" $((DUREE12 + 10)); then
 		touch "$JOURNAUX/calme12"
 		if attendre_ligne a12 "PREDICTION" && attendre_ligne b12 "PREDICTION" && attendre_ligne hote12 "FIGE" 30; then
@@ -564,16 +521,15 @@ grep -hE "^PREDICTION |^COMMANDES |^RELAIS datagrammes" "$JOURNAUX/a12.log" "$JO
 DUREE13=10
 DUREE13B=6
 P=$((PORT_BASE + 13))
-B=$((PORT_BASE + 1013))
 R=$((PORT_BASE + 2013))
 DELAI_AVANT13=$DELAI
 DELAI=$((DUREE13 + DUREE13B + 60))
 lancer_relais relais13 --ecoute=$R --vers=$P --latence=80 --gigue=40 --pertes=5 --graine=13 --fin="$JOURNAUX/fin13"
-lancer hote13 --role=chrono-hote --port=$P --port-balise=$B --pseudo=Hote13 --clients=2 --niveau=0 --duree-manche=$DUREE13 \
+lancer hote13 --role=chrono-hote --port=$P --pseudo=Hote13 --clients=2 --niveau=0 --duree-manche=$DUREE13 \
 	--duree-revanche=$DUREE13B --revanche="$JOURNAUX/revanche13" --salon="$JOURNAUX/salon13" --rester="$JOURNAUX/rester13"
 if attendre_ligne relais13 "RELAIS PRET" && attendre_hote hote13; then
-	lancer a13 --role=chrono-client --port=$R --port-balise=$B --pseudo=Anna --sens=1 --duree-manche=$DUREE13 --duree-revanche=$DUREE13B
-	lancer b13 --role=chrono-client --port=$R --port-balise=$B --pseudo=Bruno --sens=-1 --duree-manche=$DUREE13 --duree-revanche=$DUREE13B \
+	lancer a13 --role=chrono-client --port=$R --pseudo=Anna --sens=1 --duree-manche=$DUREE13 --duree-revanche=$DUREE13B
+	lancer b13 --role=chrono-client --port=$R --pseudo=Bruno --sens=-1 --duree-manche=$DUREE13 --duree-revanche=$DUREE13B \
 		--quitte="$JOURNAUX/quitte13"
 	if attendre_ligne hote13 "^RESULTATS FIN " $((DUREE13 + 40)) && attendre_ligne a13 "^RESULTATS FIN " && attendre_ligne b13 "^RESULTATS FIN "; then
 		touch "$JOURNAUX/revanche13"

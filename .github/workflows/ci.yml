@@ -60,11 +60,11 @@ jobs:
           timeout 300 godot --headless --fixed-fps 60 --script tests/prediction_test.gd 2>&1 | tee prediction_test.log
           if grep -nE "SCRIPT ERROR|SHADER ERROR" prediction_test.log; then echo "::error::erreur de script dans le banc de la prédiction"; exit 1; fi
 
-      - name: Test réseau (plusieurs processus sur localhost, dont une manche sous latence simulée et la découverte en vraie diffusion)
+      - name: Test réseau (plusieurs processus sur localhost, dont une manche sous latence simulée)
         shell: bash
         run: |
           set -o pipefail
-          DIFFUSION=1 timeout 300 bash tests/reseau/lancer.sh 2>&1 | tee reseau.log
+          timeout 300 bash tests/reseau/lancer.sh 2>&1 | tee reseau.log
           if grep -nE "SCRIPT ERROR|SHADER ERROR" reseau.log; then echo "::error::erreur de script dans le test réseau"; exit 1; fi
 
       - name: Captures (déroulé sans rendu, les scripts de captures gardés en vie)
