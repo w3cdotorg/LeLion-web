@@ -8,6 +8,11 @@
 		"ORIGINES": "https://w3cdotorg.github.io,http://localhost:*"
 	},
 	// Secrets (phase 5, jamais dans le dépôt) : TURN_KEY_ID, TURN_KEY_API_TOKEN. Absents : STUN seul.
+	// Une salle par code (idFromName) ; SQLite obligatoire sur l'offre gratuite.
+	"durable_objects": {
+		"bindings": [{ "name": "SALLES", "class_name": "Salle" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Salle"] }],
 	"observability": {
 		"enabled": true,
 		"logs": { "enabled": true, "head_sampling_rate": 1 },
