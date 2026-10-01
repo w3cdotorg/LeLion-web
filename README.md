@@ -1,15 +1,18 @@
-# LeLion multi
+# LeLion web
 
 [Original inspiration: Laetitia Perez](https://www.instagram.com/p/Dc3SacQDsyM/?igsi=M21jMzRiMmxqdTZl)
 
 A lion has to paint the town by puking a rainbow, while dodging enemies.
 An absurd, deliciously colorful game made with [Godot 4](https://godotengine.org).
 
-This fork of [LeLion](https://github.com/w3cdotorg/LeLion) turns it into a **paint battle for 2 to 6
-players on a local network**, each on their own Windows PC: see
-[Multiplayer](#multiplayer-a-lan-paint-battle), and [Jouer en LAN](#jouer-en-lan) (in French) to set
-it up. The solo game below is unchanged; the original plays in a browser at
-<https://w3cdotorg.github.io/LeLion/>.
+This copy of [LeLion-multi](https://github.com/w3cdotorg/LeLion-multi) (itself a fork of
+[LeLion](https://github.com/w3cdotorg/LeLion)) is turning the **paint battle for 2 to 6 players**
+into an **online game that runs in the browser**: friends at home open a link and play, no install
+(WebRTC between browsers, see the
+[design spec](docs/superpowers/specs/2026-10-01-multijoueur-en-ligne-design.md), in French). Work in
+progress: for now the battle still runs on a local network, from the Godot editor (see
+[Multiplayer](#multiplayer-a-paint-battle)). The solo game below is unchanged; the original plays in
+a browser at <https://w3cdotorg.github.io/LeLion/>.
 
 A Game Boy Advance port, rewritten in C, lives at [w3cdotorg/lelion-gba](https://github.com/w3cdotorg/lelion-gba).
 
@@ -58,7 +61,7 @@ your system). Difficulty, last level, settings and best
 times are all saved between sessions: on the web build they live in the browser's IndexedDB,
 so they survive closing the tab.
 
-## Multiplayer: a LAN paint battle
+## Multiplayer: a paint battle
 
 On the title screen, **Multiplayer** (bottom right) opens the network screen: pick a name (up to 12
 characters), then **Host a game**, pick a game in the list of games on the network, or type the
@@ -80,101 +83,8 @@ picks **Rematch**, **Next level** or **Back to lobby** for everyone; anyone can 
 quitting ends the game for everyone (it asks first). Each player uses their own PC's keyboard or
 gamepad, with the solo controls; Esc opens a local menu that does not pause the round.
 
-Windows, Linux and macOS builds of each version are on the
-[Releases](https://github.com/w3cdotorg/LeLion-multi/releases) page; players on different systems
-play together, as long as everyone runs the same version.
-
-## Jouer en LAN
-
-### Ce qu'il faut
-
-- Un ordinateur par joueur (2 à 6), sous Windows, macOS ou Linux (on peut mélanger), tous sur **le
-  même réseau local** : la même box, en Wi-Fi ou par câble. Pas besoin d'Internet pendant la partie.
-- La même version du jeu partout, depuis la page
-  [Releases](https://github.com/w3cdotorg/LeLion-multi/releases) (sans compte GitHub) :
-  `LeLion-multi.exe` pour Windows, `LeLion-multi-macos.zip` pour macOS (Intel et Apple Silicon),
-  `LeLion-multi-linux.tar.gz` pour Linux (x86_64). Chaque fichier contient tout le jeu. Entre deux
-  versions publiées, la CI en fait aussi à chaque passage (onglet **Actions**, **Artifacts**
-  `LeLion-multi-windows`, `-macos`, `-linux` ; il faut être connecté à GitHub). Deux versions
-  différentes ne jouent pas ensemble (« Version différente de l'hôte (0.19) »).
-- Garder l'exe **au même endroit** (par exemple `Documents\LeLion`) et y remplacer le fichier à
-  chaque nouvelle version : l'autorisation du pare-feu suit son chemin.
-
-### Premier lancement
-
-1. **SmartScreen** : l'exe n'est pas signé. « Windows a protégé votre ordinateur » →
-   **Informations complémentaires** → **Exécuter quand même** (une fois par fichier). Le navigateur
-   peut aussi prévenir au téléchargement : conserver le fichier.
-2. **Réseau Privé**, sur chaque PC : Paramètres → Réseau et Internet → Wi-Fi (ou Ethernet) → le
-   réseau → **Type de profil réseau** (Windows 11) ou **Profil réseau** (Windows 10) → **Privé**. En
-   réseau Public, Windows bloque ce que LeLion reçoit.
-3. **Pare-feu** : à la première ouverture de l'écran **Multijoueur**, sur chaque PC, hôte compris
-   (LeLion s'y met à écouter les annonces des parties) : Windows affiche « Le Pare-feu Windows
-   Defender a bloqué certaines fonctionnalités de cette application » pour **LeLion multi** :
-   laisser **Réseaux privés** coché et cliquer **Autoriser l'accès** (Windows peut demander le mot
-   de passe d'un administrateur). Sans cela, les autres voient la partie mais ne peuvent pas la
-   rejoindre. Sur l'hôte, Windows peut redemander au tout premier **Héberger une partie** (une
-   règle par port) : autoriser de la même façon.
-
-Ces fenêtres ne reviennent plus tant que l'exe reste au même endroit.
-
-### Sur Mac
-
-1. Extraire `LeLion-multi-macos.zip` (double clic) et ranger `LeLion.app` dans **Applications**.
-2. L'application n'est pas notarisée par Apple : au premier lancement, macOS refuse de l'ouvrir.
-   **Réglages Système** → **Confidentialité et sécurité** → en bas, « LeLion a été bloqué » →
-   **Ouvrir quand même**, puis confirmer (le mot de passe du Mac est demandé). Autre voie, dans le
-   Terminal : `xattr -dr com.apple.quarantine /Applications/LeLion.app`.
-3. À la première ouverture de l'écran **Multijoueur**, macOS demande si LeLion peut « trouver des
-   appareils sur votre réseau local » : **Autoriser**. Sans cela, la liste des parties reste vide
-   (à rattraper dans Réglages Système → Confidentialité et sécurité → **Réseau local**). Si le
-   pare-feu de macOS est activé et demande d'accepter les connexions entrantes : **Autoriser**.
-
-### Sous Linux
-
-Extraire l'archive (`tar -xzf LeLion-multi-linux.tar.gz`), puis lancer `./LeLion-multi.x86_64`. Le
-jeu tourne de préférence sur Vulkan (sinon OpenGL). Avec un pare-feu actif (ufw, firewalld),
-ouvrir les ports UDP 7777 (sur l'hôte) et 7778 (partout), par exemple
-`sudo ufw allow 7777:7778/udp`.
-
-### Jouer
-
-- L'hôte : **Multijoueur** → **Héberger une partie**. Son salon affiche ses adresses (« Les autres
-  te voient dans leur liste, ou tapent ton adresse : 192.168.1.20 »).
-- Les autres : **Multijoueur**. La partie de l'hôte apparaît en une seconde dans « Parties sur le
-  réseau » : la choisir. Sinon, taper l'adresse de l'hôte dans **Adresse IP**, puis **Rejoindre**.
-- Au salon : Gauche/Droite, la couleur ; Espace, prêt. L'hôte choisit le niveau (Haut/Bas) et
-  démarre (Tab ou Start) quand tout le monde est prêt, à deux au moins.
-- Ports, en UDP : **7777** (la partie, chez l'hôte) et **7778** (l'annonce des parties, que l'hôte
-  diffuse chaque seconde sur le réseau local).
-- Pour un jeu fluide : l'hôte en Ethernet si possible, le Wi-Fi en 5 GHz, pas de gros
-  téléchargement pendant la partie.
-
-### Dépannage
-
-| Ce qu'on voit | Pourquoi | Quoi faire |
-|---|---|---|
-| « Aucune partie trouvée. Pare-feu ? Réseau Privé ? Essaie par IP. » | Ce PC ne reçoit pas les annonces : son pare-feu (« Annuler » au premier lancement), un réseau Public, un Wi-Fi invité qui isole les appareils, ou un Wi-Fi maillé (ligne suivante). | Réseau Privé, autoriser LeLion multi (plus bas), ou rejoindre par IP. |
-| La partie n'apparaît pas sur un Wi-Fi maillé (TP-Link Deco, eero, Google/Nest Wifi en mode routeur) | Ces réseaux sont souvent plus grands qu'un /24 (par exemple de 192.168.68.0 à 192.168.71.255, masque 255.255.252.0) : l'annonce, envoyée à a.b.c.255, n'en atteint alors qu'une partie. | Rejoindre par IP : l'adresse s'affiche dans le salon de l'hôte. |
-| « Pas de réponse de l'hôte. Pare-feu de l'hôte ? Réseau Privé ? » (après 5 s) | Le pare-feu de l'hôte bloque le port 7777 (« Annuler » au premier hébergement, ou un réseau Public chez lui), ou l'adresse tapée n'est pas la sienne. | Sur l'hôte : réseau Privé, autoriser LeLion multi (plus bas) ; vérifier l'adresse dans son salon. |
-| « Version différente de l'hôte (x.y) » | Deux versions du jeu. | Le même `LeLion-multi.exe` partout. |
-| « Recherche impossible : port 7778 déjà utilisé (un autre LeLion ouvert ?). Rejoins par IP. » | Deux LeLion ouverts sur le même PC : un seul peut lister les parties. | Fermer l'autre, ou rejoindre par IP (127.0.0.1 pour une partie hébergée par ce PC). |
-| « Impossible d'héberger : port 7777 occupé » | Un autre LeLion (ou un autre programme) héberge déjà sur ce PC. | Le fermer. |
-| « La partie est complète. », « Une manche est en cours : réessaie à la fin. » | 6 joueurs au plus ; on n'arrive pas en pleine manche. | Attendre le retour au salon. |
-| « Exclu : ta partie a mis trop de temps à charger. » | Ce PC a mis plus de 20 s à charger la manche. | Fermer les autres programmes, puis rejoindre au retour au salon. |
-| « L'hôte a quitté la partie » | L'hôte est parti, ou son PC s'est mis en veille, ou son Wi-Fi a coupé. | Retour au titre ; l'hôte peut héberger de nouveau. |
-
-**Autoriser LeLion multi après un « Annuler »** : Sécurité Windows → Pare-feu et protection du
-réseau → **Autoriser une application via le pare-feu** → **Modifier les paramètres** → cocher
-**Privé** en face de « LeLion multi » (« Godot Engine » pour un exe de la version 0.18 ou d'avant)
-→ OK. Si LeLion reste bloqué : **Pare-feu Windows Defender avec fonctions avancées de sécurité**
-(`wf.msc`) → **Règles de trafic entrant** → supprimer les règles « LeLion multi » marquées d'un
-sens interdit rouge, puis héberger de nouveau : la fenêtre du premier lancement revient.
-
-Le journal de chaque PC, utile après une soirée qui s'est mal passée :
-`%APPDATA%\Godot\app_userdata\LeLion\logs\godot.log` (Windows),
-`~/Library/Application Support/Godot/app_userdata/LeLion/logs/godot.log` (macOS),
-`~/.local/share/godot/app_userdata/LeLion/logs/godot.log` (Linux).
+Until online play lands, run the game from the editor (`godot .`) on each computer of the same
+local network: games are found automatically (UDP broadcast) or joined by the host's IP address.
 
 ## Running the game
 
@@ -203,7 +113,7 @@ Assets/     Sprites (used), Sons (generated), Traductions (CSV → .translation)
 tests/      unitaires, smoke_test, bataille_test, prediction_test, trace_lions (headless), reseau/ (multi-process
             network test, latency relay), screenshots and deux_fenetres (captures)
 tools/      generer_sons.py (effects), generer_musique.py (layered chiptune, town + boss themes), generer_skylines.py (skylines, sprites)
-docs/       screenshots, the design spec and the phase plans (superpowers/), the LAN test sheet (essai-lan.md, in French)
+docs/       screenshots, the design specs (LAN, then online) and the phase plans (superpowers/)
 ```
 
 The paint is an RGBA mask the size of the skyline, stamped through a native blit wherever the
@@ -250,25 +160,15 @@ Sounds are regenerated with `python3 tools/generer_sons.py`, the music with
 
 ## Export and CI
 
-`export_presets.cfg` defines a Windows Desktop preset (a single `.exe` with the game data embedded,
-the game's icon, name and version in its file properties), a Linux preset (a single x86_64
-executable, data embedded), a macOS preset (a universal `LeLion.app`, Intel and Apple Silicon,
-ad-hoc signed, not notarized, in a `.zip`) and a Web preset (the solo game). With the export
-templates installed:
+`export_presets.cfg` defines a single Web preset (single-threaded, so it needs no cross-origin
+isolation headers). With the export templates installed:
 
 ```sh
-godot --headless --export-release "Windows Desktop" export/windows/LeLion-multi.exe
-godot --headless --export-release Linux export/linux/LeLion-multi.x86_64
-godot --headless --export-release macOS export/macos/LeLion-multi-macos.zip
 godot --headless --export-release Web export/web/index.html
 ```
 
 The workflow in `.github/workflows/ci.yml` runs on every pull request and every push to `main`: it
 installs Godot 4.7.2 and its export templates, runs the unit tests, the smoke test, the local
 battle test, the prediction bench, the network test (real broadcast included) and the two capture
-scripts without a renderer, exports the four builds, checks the icon and metadata of the Windows
-executable, starts the Linux executable headless, checks the macOS app (version, bundle id,
-local-network usage string, ad-hoc signature, universal binary), and publishes the three games as
-the `LeLion-multi-windows`, `LeLion-multi-linux` and `LeLion-multi-macos` artifacts (kept 30 days).
-Pushing a tag `vX.Y` that matches `config/version` in `project.godot` also publishes a GitHub
-Release with the three games (the `release` job refuses a tag that does not match the version).
+scripts without a renderer, then exports the Web build and publishes it as the `LeLion-web`
+artifact (kept 30 days). Deployment to GitHub Pages comes with online play.
