@@ -2666,6 +2666,49 @@ func _tester_battement() -> void:
 	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1 and not client._partants.has(transport_client), 1.5),
 		"un client qui quitte : l'hôte le voit partir, son transport se ferme une fois l'adieu envoyé (%d ms)" % (Time.get_ticks_msec() - quitte_a))
 
+	# Le transport de la session se ferme de lui-même (`servir()` faux sans `quitter()` ni `clore()`) : la
+	# session est perdue, une seule fois. Un client qui se connecte : un échec de connexion ; un client
+	# inscrit : l'hôte perdu ; l'hôte : `hote_perdu` aussi (comme N4, son pair tombé en erreur)
+	var echecs: Array[int] = []
+	var sur_echec := func() -> void: echecs.append(Time.get_ticks_msec())
+	client.connexion_echouee.connect(sur_echec)
+	pertes_avant = pertes.size()
+	_check(client.rejoindre("127.0.0.1", port + 1) == OK, "(pré-condition) le client se connecte à un port sans hôte")
+	var factice := TransportPerdu.new(client._transport)
+	client._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return not echecs.is_empty(), 1.0) and not client.en_ligne() and client._transport == null,
+		"le transport d'un client qui se connecte se ferme de lui-même : échec de connexion, ce poste hors réseau")
+	await _attendre(func() -> bool: return false, 0.2)
+	_check(echecs.size() == 1 and pertes.size() == pertes_avant and factice.quitte == 1 and not client._partants.has(factice),
+		"... une seule fois (%d échec(s), %d perte(s)), son transport quitté une fois (%d) puis oublié" % [echecs.size(), pertes.size() - pertes_avant, factice.quitte])
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une sixième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 6 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	partis_avant = partis.size()
+	factice = TransportPerdu.new(client._transport)
+	client._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and pertes[-1] == client.PERTE_HOTE
+		and not client.en_ligne() and echecs.size() == 1,
+		"le transport d'un client inscrit se ferme de lui-même : l'hôte est perdu, « L'hôte a quitté la partie »")
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1, 1.0), "(l'hôte voit partir ce client : son adieu)")
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une septième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 7 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var pertes_hote: Array[int] = []
+	var sur_perte_hote := func() -> void: pertes_hote.append(Time.get_ticks_msec())
+	hote.hote_perdu.connect(sur_perte_hote)
+	pertes_avant = pertes.size()
+	factice = TransportPerdu.new(hote._transport)
+	hote._transport = factice
+	factice.perdu = true
+	_check(await _attendre(func() -> bool: return pertes_hote.size() == 1, 1.0) and not hote.en_ligne() and hote.inscrits.is_empty(),
+		"le transport de l'hôte se ferme de lui-même : la session est perdue (hote_perdu chez l'hôte, comme N4), ce poste hors réseau")
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0), "(le client perd l'hôte : son adieu)")
+	await _attendre(func() -> bool: return false, 0.2)
+	_check(pertes_hote.size() == 1, "... une seule fois (%d)" % pertes_hote.size())
+	hote.hote_perdu.disconnect(sur_perte_hote)
+	client.connexion_echouee.disconnect(sur_echec)
+
 	hote.quitter()
 	client.quitter()
 	await _attendre(func() -> bool: return hote._partants.is_empty() and client._partants.is_empty(), 2.0)
@@ -2724,3 +2767,37 @@ func _connecter(autre: ENetMultiplayerPeer, reseau: Node) -> bool:
 				return true
 		OS.delay_msec(5)
 	return false
+
+
+## Un transport factice (`_tester_battement`) : délègue tout au transport `reel`, sauf `servir()`, faux
+## dès que `perdu` est vrai (la session s'est fermée d'elle-même, sans `quitter()` ni `clore()`) ; compte
+## ses `quitter()`.
+class TransportPerdu extends Transport:
+	var reel: Transport
+	var perdu := false
+	var quitte := 0
+
+	func _init(transport: Transport) -> void:
+		reel = transport
+
+	func heberger() -> Error:
+		return reel.heberger()
+
+	func rejoindre(code: String) -> Error:
+		return reel.rejoindre(code)
+
+	func quitter() -> void:
+		quitte += 1
+		reel.quitter()
+
+	func clore() -> void:
+		reel.clore()
+
+	func pair() -> MultiplayerPeer:
+		return reel.pair()
+
+	func liberer(id: int) -> void:
+		reel.liberer(id)
+
+	func servir() -> bool:
+		return reel.servir() and not perdu

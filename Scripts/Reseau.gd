@@ -74,10 +74,10 @@ signal refuse(raison: String, version_hote: String)
 signal connexion_echouee()
 ## Chez le client : l'hôte a quitté la partie ou ne répond plus. Le poste est déjà revenu hors
 ## réseau quand le signal part ; `raison_perte` dit pourquoi (phase 18 : un joueur exclu par la barrière
-## de chargement le sait). N4 : si le pair de l'hôte tombe lui-même en erreur, ce même
-## signal part aussi chez l'hôte (server_disconnected n'y distingue pas les deux cas) ; personne ne
-## l'écoute encore côté hôte à cette phase, mais un futur appelant ne doit pas supposer « jamais
-## chez l'hôte ».
+## de chargement le sait). N4 : si le pair de l'hôte tombe lui-même en erreur, ou si son transport se
+## ferme de lui-même (`Transport.servir` faux), ce même signal part aussi chez l'hôte (server_disconnected
+## n'y distingue pas les deux cas) ; personne ne l'écoute encore côté hôte à cette phase, mais un futur
+## appelant ne doit pas supposer « jamais chez l'hôte ».
 signal hote_perdu()
 ## Sur chaque poste en session : la table du salon (`table_salon`), son niveau ou ses places ont
 ## changé ; chez l'hôte, aussi quand une place se réserve ou se libère (le bouton Démarrer en
@@ -340,11 +340,12 @@ func _brancher(transport: Transport) -> void:
 
 
 ## En session, le transport, le battement et l'écoute des silences ; puis les départs en cours, oubliés
-## une fois leur transport fermé.
+## une fois leur transport fermé. Un transport de session qui se ferme de lui-même (`servir()` faux sans
+## `quitter()` ni `clore()`) : la session est perdue (`_sur_hote_perdu`), sans battement ni écoute.
 func _process(_delta: float) -> void:
-	if _transport != null:
-		_transport.servir()
-	if en_ligne():
+	if _transport != null and not _transport.servir():
+		_sur_hote_perdu()
+	elif en_ligne():
 		var maintenant := Time.get_ticks_msec()
 		_battre(maintenant)
 		_ecouter(maintenant)
@@ -1044,8 +1045,10 @@ func _sur_connexion_echouee() -> void:
 	_decider("connexion_echouee")
 
 
-## L'hôte ferme la connexion. Avant l'inscription, c'est un échec de connexion, pas un hôte perdu : ce
-## poste n'a jamais été dans la partie.
+## L'hôte ferme la connexion, ou le transport de la session s'est fermé de lui-même (`_process`). Avant
+## l'inscription, c'est un échec de connexion, pas un hôte perdu : ce poste n'a jamais été dans la partie.
+## Chez l'hôte, la session est perdue : `hote_perdu` aussi, le chemin de N4 (son pair tombé en erreur).
+## Idempotent (`_decider`).
 func _sur_hote_perdu() -> void:
 	_decider("connexion_echouee" if _connexion_en_cours else "hote_perdu")
 
