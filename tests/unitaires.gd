@@ -53,6 +53,7 @@ func _run() -> void:
 	_tester_code_salle()
 	_tester_transport_enet()
 	await _tester_battement()
+	await _tester_parties_en_ligne()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2774,6 +2775,42 @@ func _tester_battement() -> void:
 	noeud.queue_free()
 	set_multiplayer(null, chemin)
 	hote.pseudo = ""
+
+
+## Phase 3 du jeu en ligne : les entrées de l'écran En ligne dans `Reseau` (créer une partie, en rejoindre
+## une par son code, une plateforme sans transport) et la raison d'un échec de connexion, donnée par le
+## transport (`raison_echec`).
+func _tester_parties_en_ligne() -> void:
+	print("-- Parties en ligne (phase 3)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var port := 17787
+	_check(reseau.transport_disponible, "hors du Web, ce poste a un transport pour jouer en réseau (ENet)")
+	_check(reseau.creer_partie(port) == OK and reseau.en_ligne() and root.multiplayer.is_server() and reseau.code_partie == "127.0.0.1:%d" % port,
+		"créer une partie : ce poste héberge, le code de la partie vient du transport (%s)" % reseau.code_partie)
+	_check(reseau.rejoindre_partie("K7Q2XM") == ERR_INVALID_PARAMETER and reseau.en_ligne() and root.multiplayer.is_server(),
+		"en ENet, un code de salle n'est pas une adresse : refusé sans toucher à la session en cours")
+	reseau.quitter()
+
+	var raisons: Array[String] = []
+	var sur_echec := func() -> void: raisons.append(reseau.raison_echec)
+	reseau.connexion_echouee.connect(sur_echec)
+	_check(reseau.rejoindre_partie(" 127.0.0.1:%d " % (port + 1)) == OK and reseau.en_ligne() and not root.multiplayer.is_server(),
+		"rejoindre une partie par son code : ce poste se connecte (« ip:port », espaces autour)")
+	reseau._transport.echec.emit(Transport.ECHEC_INCONNUE)  # ce que dira TransportWebRTC d'un code sans salle (phase 4)
+	_check(await _attendre(func() -> bool: return not raisons.is_empty(), 1.0) and raisons == [Transport.ECHEC_INCONNUE] and not reseau.en_ligne(),
+		"le transport échoue : connexion échouée, ce poste hors réseau, sa raison dans raison_echec (%s)" % [raisons])
+	_check(reseau.rejoindre_partie("127.0.0.1:%d" % (port + 1)) == OK, "(pré-condition) ce poste se connecte de nouveau")
+	reseau._sur_delai_depasse()  # la poignée de main sans réponse dans son délai
+	_check(await _attendre(func() -> bool: return raisons.size() == 2, 1.0) and raisons[1].is_empty(),
+		"un échec sans raison du transport (la poignée de main) : raison_echec vide, rien de l'échec précédent (%s)" % [raisons])
+	reseau.connexion_echouee.disconnect(sur_echec)
+
+	reseau.transport_disponible = false
+	_check(reseau.creer_partie(port) == ERR_UNAVAILABLE and reseau.rejoindre_partie("127.0.0.1:%d" % port) == ERR_UNAVAILABLE
+		and not reseau.en_ligne() and reseau._transport == null,
+		"sans transport sur ce poste (l'export Web avant la phase 4) : ni créer ni rejoindre, rien d'ouvert")
+	reseau.transport_disponible = true
+	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
