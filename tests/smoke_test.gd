@@ -157,6 +157,7 @@ func _run() -> void:
 	GS.niveau_courant = 0
 
 	await _tester_ecran_reseau(scores, params)
+	await _tester_ecran_en_ligne(scores, params)
 	await _tester_titre_reseau(scores)
 	await _tester_salon(params)
 
@@ -1786,8 +1787,211 @@ func _tester_ecran_reseau(scores: Node, params: Node) -> void:
 	scores.effacer()
 
 
-## Phase 12 bis : le bouton Multijoueur du titre, l'aller et retour avec l'écran Réseau, et le titre
-## qui remet toujours ce poste hors réseau avant le solo.
+## Phase 3 du jeu en ligne : l'écran En ligne (pseudo, Créer une partie, Rejoindre avec un code de salle
+## ou, sur le desktop, l'adresse d'un hôte ENet ; les refus, les échecs et leur message, spec §9 ; un poste
+## sans transport). Les signaux de `Reseau` sont émis comme il le fait (après être revenu hors réseau pour
+## les échecs) : le transport lui-même est couvert par tests/reseau/lancer.sh.
+func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
+	print("-- Écran En ligne")
+	var reseau: Node = root.get_node("Reseau")
+	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
+	scores.definir_preference("pseudo", "Léa")
+	var connexions_langue: int = params.langue_changee.get_connections().size()
+	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran.port_jeu = 17797
+	ecran.codes_de_salle = true  # comme sur le Web
+	root.add_child(ecran)
+	await _frames(1)
+
+	# Accueil : 16:9, Créer une partie au focus, pseudo mémorisé et borné, un exemple de code
+	_check(root.content_scale_size == Vector2i(2000, 1125) and ecran.etat == ecran.Etat.ACCUEIL and ecran.bouton_creer.has_focus()
+		and ecran.message.text.is_empty(), "l'écran En ligne passe en 16:9 ; à l'accueil, Créer une partie a le focus")
+	_check(ecran.champ_pseudo.text == "Léa" and ecran.champ_pseudo.max_length == reseau.PSEUDO_MAX and ecran.champ_code.placeholder_text == "K7Q-2XM",
+		"le pseudo mémorisé est repris, la saisie bornée à %d caractères ; le champ du code montre « K7Q-2XM »" % reseau.PSEUDO_MAX)
+
+	# Un code mal formé est refusé à la saisie (spec §9), sans rien tenter, le focus sur le code
+	var refus := {"K7Q2X": "ENLIGNE_CODE_FORMAT", "K7Q-2XM9": "ENLIGNE_CODE_FORMAT", "": "ENLIGNE_CODE_FORMAT", "k7q-2o1": "ENLIGNE_CODE_CONFUSION"}
+	var faux: Array[String] = []
+	for saisie: String in refus:
+		ecran.champ_code.text = saisie
+		ecran.bouton_creer.grab_focus()
+		ecran.rejoindre()
+		if ecran.etat != ecran.Etat.ACCUEIL or reseau.en_ligne() or ecran.message.text != tr(refus[saisie]) or not ecran.champ_code.has_focus():
+			faux.append("%s → %s" % [saisie, ecran.message.text])
+	_check(faux.is_empty() and tr("ENLIGNE_CODE_FORMAT") == "Un code fait 6 caractères (ex. K7Q-2XM)."
+		and tr("ENLIGNE_CODE_CONFUSION") == "Un code n'a ni 0, ni O, ni 1, ni I, ni L (ex. K7Q-2XM).",
+		"un code mal formé est refusé à la saisie : « Un code fait 6 caractères (ex. K7Q-2XM). », un 0, O, 1, I ou L a son message (%s)" % [faux])
+
+	# Un code bien formé, sans transport sur ce poste (l'export Web avant la phase 4)
+	reseau.transport_disponible = false
+	ecran.champ_code.text = " k7q 2xm"
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.champ_code.text == "K7Q-2XM"
+		and ecran.message.text == tr("ENLIGNE_INDISPONIBLE"),
+		"un code bien formé s'affiche « K7Q-2XM » ; sans transport, Rejoindre le dit sans rien ouvrir (%s)" % ecran.message.text)
+	ecran.message.text = ""
+	ecran.creer_partie()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == tr("ENLIGNE_INDISPONIBLE"),
+		"... et Créer une partie aussi")
+	# Le lien d'invitation collé entier dans le champ (avec le saut de ligne d'un message) : Rejoindre part
+	# avec son code ; un lien sans code valide est un code mal formé (pas une confusion : ses I, L et O)
+	ecran.champ_code.text = CodeSalle.lien("k7q2xm") + char(0x0A)
+	var colle: int = ecran.champ_code.text.length()
+	ecran.message.text = ""
+	ecran.rejoindre()
+	_check(ecran.champ_code.max_length == 256 and colle == CodeSalle.lien("k7q2xm").length() + 1
+		and ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.champ_code.text == "K7Q-2XM"
+		and ecran.message.text == tr("ENLIGNE_INDISPONIBLE"),
+		"le lien d'invitation collé entier (256 caractères permis, %d collés) : Rejoindre part avec son code, affiché « %s » (%s)" % [colle, ecran.champ_code.text, ecran.message.text])
+	ecran.champ_code.text = CodeSalle.url_page() + "?relais=1"
+	ecran.bouton_creer.grab_focus()
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == tr("ENLIGNE_CODE_FORMAT")
+		and ecran.champ_code.has_focus(), "un lien sans code : « Un code fait 6 caractères (ex. K7Q-2XM). », le focus au code (%s)" % ecran.message.text)
+	reseau.transport_disponible = true
+
+	# Un échec local de Rejoindre, le code bien formé mais refusé par le transport (ici ENet, qui attend
+	# ip:port : ERR_INVALID_PARAMETER) : son code d'erreur, rien d'ouvert, le focus au code
+	var impossible := "Impossible de rejoindre (erreur %d)"
+	ecran.champ_code.text = "K7Q2XM"
+	ecran.bouton_creer.grab_focus()
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == impossible % ERR_INVALID_PARAMETER
+		and ecran.champ_code.has_focus() and tr("ENLIGNE_REJOINDRE_IMPOSSIBLE") == impossible
+		and TranslationServer.get_translation_object("en").get_message("ENLIGNE_REJOINDRE_IMPOSSIBLE") == "Can't join (error %d)",
+		"un code refusé par le transport : « Impossible de rejoindre (erreur %d) », le focus au code (%s)" % [ERR_INVALID_PARAMETER, ecran.message.text])
+
+	# Le desktop de développement : l'adresse ENet d'un hôte ; la connexion, le pseudo nettoyé
+	ecran.codes_de_salle = false
+	ecran.champ_code.text = "lelion.local"
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == tr("ENLIGNE_ADRESSE_INVALIDE")
+		and ecran.champ_code.has_focus(), "sur le desktop, un nom d'hôte est refusé sans rien tenter (%s)" % ecran.message.text)
+	ecran.champ_pseudo.text = " Zoé la grande dompteuse"
+	ecran.champ_code.text = " 127.000.0.1:17796 "  # personne n'y écoute
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.CONNEXION and reseau.en_ligne() and not root.multiplayer.is_server()
+		and ecran.champ_code.text == "127.0.0.1:17796" and ecran.message.text == tr("RESEAU_CONNEXION") % "127.0.0.1:17796",
+		"une adresse ENet lance la connexion, normalisée (%s)" % ecran.message.text)
+	_check(reseau.pseudo == "Zoé la gran" and ecran.champ_pseudo.text == "Zoé la gran" and scores.preference("pseudo", "") == "Zoé la gran",
+		"le pseudo nettoyé (sans l'espace de tête) est donné à Reseau et mémorisé (%s)" % reseau.pseudo)
+	_check(ecran.bouton_creer.disabled and ecran.bouton_rejoindre.disabled and not ecran.champ_code.editable and not ecran.champ_pseudo.editable
+		and ecran.bouton_retour.has_focus(), "pendant la connexion, tout est grisé sauf Retour, qui a le focus")
+	reseau.inscrit.emit(2, palette[2])
+	_check(ecran.etat == ecran.Etat.SALON and ecran.bouton_creer.disabled, "inscrit par l'hôte : en route vers le salon, tout reste grisé")
+	var salon_client: Node = await _attendre_scene("res://Scenes/Salon.tscn")
+	_check(salon_client != null and salon_client.scene_file_path == "res://Scenes/Salon.tscn" and reseau.en_ligne(),
+		"puis le salon prend la suite, toujours en ligne")
+	if salon_client != null:
+		salon_client.free()
+	reseau.quitter()
+	reseau.hote_perdu.emit()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and ecran.message.text == tr("RESEAU_HOTE_PERDU") and ecran.bouton_creer.has_focus(),
+		"hôte perdu : « L'hôte a quitté la partie », retour à l'accueil, Créer une partie au focus")
+
+	# Chaque échec de connexion a son message (spec §9), le focus rendu au code
+	var service := "Service de connexion indisponible, réessaie dans un instant."
+	var canal := "Connexion impossible avec l'hôte (réseau trop restrictif ?)"
+	var attendus := {Transport.ECHEC_INCONNUE: "Aucune partie avec ce code.", Transport.ECHEC_EXPIREE: "Aucune partie avec ce code.",
+		Transport.ECHEC_QUOTA: "Trop de parties en ce moment, réessaie plus tard.", Transport.ECHEC_PLEINE: tr("RESEAU_REFUS_PLEIN"),
+		Transport.ECHEC_ORIGINE: service, Transport.ECHEC_DEBIT: service, Transport.ECHEC_INJOIGNABLE: service,
+		Transport.ECHEC_DELAI: canal, "": canal, "raison_inconnue": canal}
+	faux.clear()
+	for raison: String in attendus:
+		ecran.rejoindre()
+		reseau.quitter()
+		reseau.raison_echec = raison
+		reseau.connexion_echouee.emit()
+		if ecran.etat != ecran.Etat.ACCUEIL or ecran.message.text != attendus[raison] or not ecran.champ_code.has_focus():
+			faux.append("%s → %s" % [raison, ecran.message.text])
+	_check(faux.is_empty(), "chaque raison d'échec du transport a son message, le focus rendu au code (%s)" % [faux])
+	reseau.raison_echec = ""
+	ecran.rejoindre()
+	reseau._transport.echec.emit(Transport.ECHEC_INCONNUE)  # ce que dira TransportWebRTC d'un code sans salle (phase 4)
+	var fin := Time.get_ticks_msec() + 1000
+	while ecran.etat != ecran.Etat.ACCUEIL and Time.get_ticks_msec() < fin:
+		await process_frame
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == "Aucune partie avec ce code.",
+		"un vrai échec du transport, sa raison passée par Reseau : « Aucune partie avec ce code. » (%s)" % ecran.message.text)
+	var refus_attendus := {reseau.REFUS_VERSION: tr("RESEAU_REFUS_VERSION") % "0.9", reseau.REFUS_PLEIN: tr("RESEAU_REFUS_PLEIN"),
+		reseau.REFUS_MANCHE: tr("RESEAU_REFUS_MANCHE"), reseau.REFUS_DEMANDE: tr("RESEAU_REFUS_DEMANDE"), "RAISON_INCONNUE": tr("RESEAU_REFUS_DEMANDE")}
+	faux.clear()
+	for raison: String in refus_attendus:
+		ecran.rejoindre()
+		reseau.quitter()
+		reseau.refuse.emit(raison, "0.9")
+		if ecran.etat != ecran.Etat.ACCUEIL or ecran.message.text != refus_attendus[raison] or ecran.message.text.begins_with("RESEAU_"):
+			faux.append("%s → %s" % [raison, ecran.message.text])
+	_check(faux.is_empty(), "chaque refus de l'hôte a son texte traduit, une raison inconnue lue comme demande incomprise (%s)" % [faux])
+
+	# Créer une partie : en ligne, hôte, puis le salon ; Échap arrête
+	ecran.creer_partie()
+	_check(ecran.etat == ecran.Etat.SALON and reseau.en_ligne() and root.multiplayer.is_server() and reseau.inscrits[1].pseudo == "Zoé la gran"
+		and reseau.code_partie == "127.0.0.1:17797" and ecran.bouton_retour.has_focus(),
+		"Créer une partie : ce poste héberge avec son pseudo, le code de la partie est celui du transport (%s)" % reseau.code_partie)
+	ecran.creer_partie()
+	_check(reseau.en_ligne() and reseau.inscrits.size() == 1 and ecran.etat == ecran.Etat.SALON, "un second Créer avant le changement de scène ne relance rien")
+	var salon_hote: Node = await _attendre_scene("res://Scenes/Salon.tscn")
+	_check(salon_hote != null and salon_hote.scene_file_path == "res://Scenes/Salon.tscn" and reseau.en_ligne() and root.multiplayer.is_server(),
+		"puis le salon prend la suite, toujours hôte")
+	if salon_hote != null:
+		salon_hote.free()
+	var echap := InputEventAction.new()
+	echap.action = "ui_cancel"
+	echap.pressed = true
+	root.push_input(echap)
+	await process_frame
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text.is_empty(), "Échap (ou B) arrête d'héberger et revient à l'accueil")
+
+	# Port occupé, autre erreur ; changer de langue retraduit le message
+	var occupant := ENetMultiplayerPeer.new()
+	_check(occupant.create_server(17798) == OK, "(pré-condition) un autre programme occupe le port 17798")
+	ecran.port_jeu = 17798
+	ecran.creer_partie()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == "Impossible d'héberger : port 17798 occupé",
+		"port occupé : « Impossible d'héberger : port 17798 occupé » (%s)" % ecran.message.text)
+	params.definir_langue("en")
+	await _frames(1)
+	_check(ecran.message.text == "Can't host: port 17798 in use" and ecran.bouton_creer.text == "ENLIGNE_CREER" and tr(ecran.bouton_creer.text) == "Create a game",
+		"changer de langue retraduit le message (%s)" % ecran.message.text)
+	params.definir_langue("fr")
+	occupant.close()
+	var erreur_attendue := ENetMultiplayerPeer.new().create_server(70000)
+	ecran.port_jeu = 70000
+	ecran.creer_partie()
+	_check(not reseau.en_ligne() and ecran.message.text == tr("RESEAU_HEBERGER_IMPOSSIBLE") % erreur_attendue,
+		"une autre erreur d'hébergement donne son code (%s)" % ecran.message.text)
+	ecran.port_jeu = 17797
+
+	# Entrée dans le champ du pseudo : sans code, Créer une partie prend le focus ; avec un code, Rejoindre
+	ecran.champ_code.text = ""
+	ecran.champ_pseudo.text_submitted.emit("Zoé la gran")
+	_check(ecran.etat == ecran.Etat.ACCUEIL and ecran.bouton_creer.has_focus(), "Entrée sur le pseudo, sans code : Créer une partie au focus")
+	ecran.champ_code.text = "127.0.0.1:17796"
+	ecran.champ_pseudo.text_submitted.emit("Zoé la gran")
+	_check(ecran.etat == ecran.Etat.CONNEXION and reseau.en_ligne(), "Entrée sur le pseudo, un code saisi : Rejoindre")
+
+	# Retour (sans changer de scène : la navigation vers le titre est vérifiée avec le bouton Multijoueur) ;
+	# l'écran retiré de l'arbre (pas encore détruit) ne laisse aucune connexion aux autoloads
+	ecran.retour(false)
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne(), "Retour pendant une connexion l'annule : l'accueil, hors réseau")
+	ecran.retour(false)
+	_check(not reseau.en_ligne() and scores.preference("pseudo", "") == "Zoé la gran", "Retour à l'accueil quitte le réseau et garde le pseudo mémorisé")
+	var langue_pendant: int = params.langue_changee.get_connections().size()
+	root.remove_child(ecran)
+	_check(reseau.inscrit.get_connections().is_empty() and reseau.refuse.get_connections().is_empty()
+		and reseau.connexion_echouee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty()
+		and langue_pendant == connexions_langue + 1 and params.langue_changee.get_connections().size() == connexions_langue,
+		"l'écran retiré de l'arbre ne laisse aucune connexion aux autoloads, Parametres.langue_changee compris (%d connexion(s) avant l'écran, %d pendant, %d après)"
+			% [connexions_langue, langue_pendant, params.langue_changee.get_connections().size()])
+	ecran.free()
+	reseau.pseudo = ""
+	scores.effacer()
+
+
+## Phase 12 bis : le bouton Multijoueur du titre, l'aller et retour avec l'écran En ligne (phase 3 du jeu en
+## ligne), la page ouverte sur un lien d'invitation, et le titre qui remet toujours ce poste hors réseau
+## avant le solo.
 func _tester_titre_reseau(scores: Node) -> void:
 	print("-- Titre et réseau")
 	var reseau: Node = root.get_node("Reseau")
@@ -1812,13 +2016,15 @@ func _tester_titre_reseau(scores: Node) -> void:
 		and multi.get_node(multi.focus_neighbor_left) == titre.bouton_jouer,
 		"clavier et manette : droite depuis Jouer mène à Multijoueur, gauche en revient")
 	multi.pressed.emit()
-	var ecran: Control = (await _attendre_scene("res://Scenes/EcranReseau.tscn")) as Control
+	var ecran: Control = (await _attendre_scene("res://Scenes/EcranEnLigne.tscn")) as Control
 	titre.free()
-	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn", "Multijoueur ouvre l'écran Réseau")
+	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn", "Multijoueur ouvre l'écran En ligne")
+	_check(ecran != null and not ecran.codes_de_salle and ecran.champ_code.max_length == 21,
+		"sur le desktop, le champ du code prend une adresse ip:port (21 caractères au plus)")
 	# Ne sauter que les vérifications qui dépendent de `ecran` : la remise à zéro de fin de fonction
 	# doit tourner même si cette précondition échoue (sinon un seul échec ici laisse decouverte et
 	# reseau dans un état anormal pour la suite de la fonction et pour `_tester_salon`).
-	if ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn":
+	if ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn":
 		ecran.bouton_retour.pressed.emit()
 		var titre_retour: Control = (await _attendre_scene("res://Scenes/Titre.tscn")) as Control
 		_check(titre_retour != null and titre_retour.scene_file_path == "res://Scenes/Titre.tscn" and not is_instance_valid(ecran)
@@ -1826,6 +2032,55 @@ func _tester_titre_reseau(scores: Node) -> void:
 			"Retour ramène au titre, en 2000×648, hors réseau et sans écoute")
 		if titre_retour != null:
 			titre_retour.free()
+
+	# Une page ouverte sur un lien d'invitation (`?salle=`, spec §4.4) : l'écran En ligne, le code rempli,
+	# Rejoindre au focus (le pseudo est mémorisé) ; ce poste ne rejoint qu'au Rejoindre du joueur
+	scores.definir_preference("pseudo", "Léa")
+	CodeSalle.recherche_forcee = "?relais=1&salle=k7q2xm"
+	CodeSalle._page_lue = false
+	titre = load("res://Scenes/Titre.tscn").instantiate()
+	titre.demo_autorisee = false
+	root.add_child(titre)
+	var invite: Control = (await _attendre_scene("res://Scenes/EcranEnLigne.tscn")) as Control
+	titre.free()
+	CodeSalle.recherche_forcee = ""
+	_check(invite != null and invite.scene_file_path == "res://Scenes/EcranEnLigne.tscn",
+		"une page ouverte sur un lien ?salle= passe du titre à l'écran En ligne")
+	if invite != null and invite.scene_file_path == "res://Scenes/EcranEnLigne.tscn":
+		_check(invite.champ_code.text == "K7Q-2XM" and invite.etat == invite.Etat.ACCUEIL and not reseau.en_ligne()
+			and invite.message.text == tr("ENLIGNE_INVITATION") and invite.bouton_rejoindre.has_focus(),
+			"le code du lien rempli (« K7Q-2XM »), Rejoindre au focus, rien de tenté : « %s »" % invite.message.text)
+		invite.codes_de_salle = true  # comme sur le Web
+		reseau.transport_disponible = false
+		invite.champ_pseudo.text_submitted.emit("Léa")
+		_check(invite.message.text == tr("ENLIGNE_INDISPONIBLE") and not reseau.en_ligne(),
+			"le pseudo validé (Entrée), Rejoindre part avec le code du lien (ici sans transport : « %s »)" % invite.message.text)
+		reseau.transport_disponible = true
+		var second_titre: Control = load("res://Scenes/Titre.tscn").instantiate()
+		second_titre.demo_autorisee = false
+		root.add_child(second_titre)
+		await _frames(3)
+		_check(current_scene == invite and CodeSalle.prendre_code_de_la_page().is_empty(),
+			"le lien ne sert qu'une fois : un titre suivant reste le titre")
+		second_titre.free()
+		invite.free()
+	scores.effacer()
+
+	# La même invitation sans pseudo mémorisé : le focus au pseudo, à choisir avant Rejoindre
+	CodeSalle.recherche_forcee = "?salle=k7q2xm"
+	CodeSalle._page_lue = false
+	titre = load("res://Scenes/Titre.tscn").instantiate()
+	titre.demo_autorisee = false
+	root.add_child(titre)
+	var invite_anonyme: Control = (await _attendre_scene("res://Scenes/EcranEnLigne.tscn")) as Control
+	titre.free()
+	CodeSalle.recherche_forcee = ""
+	_check(invite_anonyme != null and invite_anonyme.scene_file_path == "res://Scenes/EcranEnLigne.tscn"
+		and invite_anonyme.champ_pseudo.text.is_empty() and invite_anonyme.champ_code.text == "K7Q-2XM"
+		and invite_anonyme.champ_pseudo.has_focus() and not reseau.en_ligne(),
+		"une invitation sans pseudo mémorisé : le code rempli, le focus au pseudo, rien de tenté")
+	if invite_anonyme != null:
+		invite_anonyme.free()
 
 	# Retour au titre depuis une session : hors réseau AVANT le solo (point de vigilance de la phase 12)
 	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
@@ -1873,7 +2128,7 @@ func _tester_salon(params: Node) -> void:
 	await _appuyer(&"deplacer_droite", false)
 	Input.action_release("deplacer_droite")
 
-	# L'hôte seul : sa carte, les places libres, le niveau du titre, ses adresses ; aucun focus
+	# L'hôte seul : sa carte, les places libres, le niveau du titre, le code de la partie ; aucun focus
 	var c0: Dictionary = salon.cartes[0]
 	_check(root.content_scale_size == Vector2i(2000, 1125) and salon.cartes.size() == 6
 		and salon.cartes.all(func(c: Dictionary) -> bool: return c.cadre.visible), "le salon est en 16:9, une carte par place (6)")
@@ -1888,15 +2143,24 @@ func _tester_salon(params: Node) -> void:
 	_check(salon.cartes.slice(1).all(func(c: Dictionary) -> bool: return c.pseudo.text == tr("SALON_LIBRE") and c.lion.material == null),
 		"les autres places sont libres : une silhouette sans couleur")
 	_check(salon.titre_niveau.text == "Niveau : Métropole" and reseau.niveau_salon == 1 and salon.aide.text == tr("SALON_AIDE_HOTE")
-		and salon.adresses.visible and salon.etat.text == tr("SALON_ATTENTE_JOUEURS") and salon.bouton_demarrer.visible and salon.bouton_demarrer.disabled,
-		"le niveau choisi au titre, l'aide de l'hôte, ses adresses, Démarrer grisé : « Il faut au moins 2 joueurs pour démarrer. »")
-	_check(root.gui_get_focus_owner() == null and salon.bouton_retour.focus_mode == Control.FOCUS_NONE,
+		and salon.etat.text == tr("SALON_ATTENTE_JOUEURS") and salon.bouton_demarrer.visible and salon.bouton_demarrer.disabled,
+		"le niveau choisi au titre, l'aide de l'hôte, Démarrer grisé : « Il faut au moins 2 joueurs pour démarrer. »")
+	_check(salon.rangee_invitation.visible and salon.etiquette_code.text == "Code de la partie : 127.0.0.1:17797" and not salon.bouton_copier.visible
+		and salon.copier_lien().is_empty(), "sur le desktop, le code de la partie ENet (son adresse), sans lien à copier (%s)" % salon.etiquette_code.text)
+	_check(root.gui_get_focus_owner() == null and salon.bouton_retour.focus_mode == Control.FOCUS_NONE and salon.bouton_copier.focus_mode == Control.FOCUS_NONE,
 		"aucun contrôle ne prend le focus : flèches, croix, stick, vomir et démarrer vont au salon")
-	var adresses_lues: PackedStringArray = salon._adresses_hote
-	salon._adresses_hote = PackedStringArray(["10.9.9.9"])
+	# Une salle de la signalisation (le Web, phase 4) : son code, et « Copier le lien »
+	var code_enet: String = reseau.code_partie
+	reseau.code_partie = "K7Q2XM"
 	reseau.salon_change.emit()
-	_check(salon.adresses.text.contains("10.9.9.9"), "M4 : les adresses de l'hôte sont relevées une fois, à l'ouverture, pas à chaque changement du salon")
-	salon._adresses_hote = adresses_lues
+	_check(salon.etiquette_code.text == "Code de la partie : K7Q-2XM" and salon.bouton_copier.visible and salon.bouton_copier.text == "SALON_COPIER_LIEN",
+		"un code de salle : « Code de la partie : K7Q-2XM » et « Copier le lien », relus à chaque changement du salon (%s)" % salon.etiquette_code.text)
+	_check(salon.copier_lien() == "https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM" and salon.bouton_copier.text == "SALON_LIEN_COPIE"
+		and tr(salon.bouton_copier.text) == "Lien copié !", "Copier le lien : le lien d'invitation, et « Lien copié ! »")
+	await create_timer(salon.DUREE_LIEN_COPIE + 0.2).timeout
+	_check(salon.bouton_copier.text == "SALON_COPIER_LIEN", "%.0f s plus tard, le bouton redit « Copier le lien »" % salon.DUREE_LIEN_COPIE)
+	reseau.code_partie = code_enet
+	reseau.salon_change.emit()
 
 	# Une place réservée (poignée de main en cours) n'a pas de carte ; un joueur arrivé a la sienne
 	reseau.inscrits[7] = {"index": 2, "couleur": palette[2], "pseudo": "Rita", "arrive": false, "pret": false}
@@ -1991,13 +2255,13 @@ func _tester_salon(params: Node) -> void:
 		and reseau.manche_lancee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty(),
 		"le salon fermé ne laisse aucune connexion aux autoloads")
 
-	# Un client : ni niveau ni adresses ; l'hôte perdu ramène à l'écran Réseau, avec son message
+	# Un client : ni niveau ni code ; l'hôte perdu ramène à l'écran En ligne, avec son message
 	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est un client")
 	var salon_client: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
-	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.adresses.visible and not salon_client.bouton_demarrer.visible,
-		"un client : l'aide sans le niveau ni Démarrer, pas d'adresses, pas de bouton")
+	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible,
+		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton")
 	salon_client.changer_niveau(1)
 	salon_client.demarrer()
 	_check(reseau.niveau_salon == 0 and not reseau.manche_en_cours, "un client ne change pas le niveau et ne démarre pas la partie")
@@ -2017,23 +2281,23 @@ func _tester_salon(params: Node) -> void:
 			% [attente_client, attente_arrivee, salon_client.etat.text])
 	reseau.quitter()
 	reseau.hote_perdu.emit()
-	var ecran: Node = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.etat == ecran.Etat.ACCUEIL
-		and ecran.message.text == tr("RESEAU_HOTE_PERDU"), "hôte perdu : retour à l'écran Réseau, « L'hôte a quitté la partie »")
+	var ecran: Node = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.etat == ecran.Etat.ACCUEIL
+		and ecran.message.text == tr("RESEAU_HOTE_PERDU"), "hôte perdu : retour à l'écran En ligne, « L'hôte a quitté la partie »")
 	salon_client.free()
 	if ecran != null:
 		ecran.free()
 
-	# Échap (ou B) : quitte le réseau, écran Réseau sans message (celui de l'hôte perdu ne s'affiche
+	# Échap (ou B) : quitte le réseau, écran En ligne sans message (celui de l'hôte perdu ne s'affiche
 	# qu'une fois)
 	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est de nouveau un client")
 	salon_client = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
 	await _appuyer(&"ui_cancel", true)
-	ecran = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(not reseau.en_ligne() and ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.message.text.is_empty(),
-		"Échap (ou B) quitte le réseau et revient à l'écran Réseau, sans message")
+	ecran = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(not reseau.en_ligne() and ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.message.text.is_empty(),
+		"Échap (ou B) quitte le réseau et revient à l'écran En ligne, sans message")
 	salon_client.free()
 	if ecran != null:
 		ecran.free()
@@ -2042,9 +2306,9 @@ func _tester_salon(params: Node) -> void:
 	# trouvé personne)
 	var orphelin: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(orphelin)
-	ecran = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.message.text == tr("RESEAU_HOTE_PERDU"),
-		"un salon ouvert hors réseau revient à l'écran Réseau avec « L'hôte a quitté la partie »")
+	ecran = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.message.text == tr("RESEAU_HOTE_PERDU"),
+		"un salon ouvert hors réseau revient à l'écran En ligne avec « L'hôte a quitté la partie »")
 	orphelin.free()
 	if ecran != null:
 		ecran.free()

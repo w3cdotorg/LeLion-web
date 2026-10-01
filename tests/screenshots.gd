@@ -4,10 +4,13 @@ extends SceneTree
 ## Écrit ses PNG dans <dossier> (défaut : user://), par partie (toutes par défaut) :
 ##   solo       le titre, une partie solo (gerbe à 3 puis 7 couleurs, ennemis, pause, défaite), une
 ##              victoire avec record, le peintre du Village ;
-##   reseau     le titre et son bouton Multijoueur, l'écran Réseau (vide, liste, IP invalide, connexion,
-##              refus de version, anglais, port des balises occupé ; phase 12 bis) ;
-##   salon      l'hôte seul, le salon à 3 (bouton grisé puis actif), à 6 aux pseudos larges, en anglais,
-##              vu d'un client (tous prêts, un joueur qui arrive ; phase 13) ;
+##   reseau     le titre et son bouton Multijoueur, l'écran En ligne (phase 3 du jeu en ligne) : comme sur
+##              le Web (accueil, code trop court, code à confusion, partie inconnue, pas de transport,
+##              anglais, une page ouverte sur un lien d'invitation), puis sur le desktop de développement
+##              (connexion à l'adresse d'un hôte ENet, refus de version) ;
+##   salon      l'hôte seul (le code de sa salle et « Copier le lien »), le salon à 3 (bouton grisé puis
+##              actif), à 6 aux pseudos larges, en anglais, vu d'un client (tous prêts, un joueur qui
+##              arrive ; phase 13) ;
 ##   bataille   la manche à 6 couleurs (départ, en jeu : parts, rangs, couronnes, crans, gerbe XXL,
 ##              étourdi, parti ; les dix dernières secondes), une égalité à 2 en anglais (phase 17) ;
 ##   resultats  l'écran Résultats d'une bataille à 6 (animation, hôte local, client, hôte en réseau,
@@ -190,17 +193,14 @@ func _solo() -> void:
 	current_scene = null
 
 
-# --- Écran Réseau (phase 12 bis) --------------------------------------------------------------------
+# --- Écran En ligne (phase 3 du jeu en ligne) --------------------------------------------------------
 
 
 func _reseau() -> void:
 	var scores: Node = root.get_node("Scores")
 	var params: Node = root.get_node("Parametres")
 	var reseau: Node = root.get_node("Reseau")
-	var decouverte: Node = root.get_node("Decouverte")
 	scores.definir_preference("pseudo", "MMMMMMMMMMMM")  # 12 caractères larges : le champ doit les tenir
-	decouverte.port_balise = PORT_BALISE
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 
 	var titre: Control = load("res://Scenes/Titre.tscn").instantiate()
 	titre.demo_autorisee = false
@@ -212,60 +212,62 @@ func _reseau() -> void:
 	await _shot("reseau_01_titre_focus_multijoueur")
 	titre.free()
 
-	var ecran: Control = load("res://Scenes/EcranReseau.tscn").instantiate()
+	# Comme sur le Web : un code de salle
+	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
 	ecran.port_jeu = PORT_JEU
+	ecran.codes_de_salle = true
 	root.add_child(ecran)
 	await _attendre(0.3)
-	await _shot("reseau_02_vide")
-
-	var futur := Time.get_ticks_msec() + 600000  # ces parties n'expirent pas pendant les captures
-	var zoe := {"version": reseau.version, "port": 7777, "nb_joueurs": 2, "places": 6, "manche_en_cours": false, "niveau": 1, "pseudo": "Zoé"}
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.20", zoe, futur)
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.21", zoe.merged({"pseudo": "Anna", "nb_joueurs": 6}, true), futur)
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.22", zoe.merged({"pseudo": "Bob", "version": "0.10"}, true), futur)
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.23", zoe.merged({"pseudo": "Chloé", "manche_en_cours": true, "niveau": 2}, true), futur)
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.24", zoe.merged({"pseudo": "MMMMMMMMMMMM", "nb_joueurs": 5, "niveau": 0}, true), futur)
-	decouverte.parties_changees.emit()
+	await _shot("reseau_02_accueil")
+	ecran.champ_code.text = "K7Q2X"
+	ecran.rejoindre()
+	await _attendre(0.1)
+	await _shot("reseau_03_code_trop_court")
+	ecran.champ_code.text = "K0Q-2XM"
+	ecran.rejoindre()
+	await _attendre(0.1)
+	await _shot("reseau_04_code_confusion")
+	ecran.champ_code.text = "K7Q-2XM"
+	reseau.raison_echec = Transport.ECHEC_INCONNUE  # ce que dira TransportWebRTC d'un code sans salle (phase 4)
+	reseau.connexion_echouee.emit()
+	reseau.raison_echec = ""
+	await _attendre(0.1)
+	await _shot("reseau_05_partie_inconnue")
+	reseau.transport_disponible = false
+	ecran.creer_partie()
+	reseau.transport_disponible = true
+	await _attendre(0.1)
+	await _shot("reseau_06_pas_de_transport")
+	params.definir_langue("en")
+	ecran.champ_code.text = "K7Q2X"
+	ecran.rejoindre()
 	await _attendre(0.2)
-	await _shot("reseau_03_liste")
-	ecran.boutons_parties["192.168.1.20:7777"].grab_focus()
-	await _attendre(0.1)
-	await _shot("reseau_04_focus_partie")
+	await _shot("reseau_07_anglais")
+	params.definir_langue("fr")
+	ecran.free()
 
-	ecran.champ_ip.text = "lelion.local"
-	ecran.rejoindre_par_ip()
-	await _attendre(0.1)
-	await _shot("reseau_05_ip_invalide")
+	# Une page ouverte sur un lien d'invitation (`?salle=K7Q2XM`) : le code rempli, Rejoindre au focus
+	var ecran_lien: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran_lien.codes_de_salle = true
+	ecran_lien.code_a_l_arrivee = "K7Q2XM"
+	root.add_child(ecran_lien)
+	await _attendre(0.3)
+	await _shot("reseau_08_lien")
+	ecran_lien.free()
 
-	ecran.champ_ip.text = "127.0.0.1"
-	ecran.port_jeu = PORT_SANS_HOTE
-	ecran.rejoindre_par_ip()
-	await _attendre(0.1)
-	await _shot("reseau_06_connexion")
+	# Le desktop de développement : l'adresse d'un hôte ENet
+	var ecran_dev: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran_dev.port_jeu = PORT_JEU
+	root.add_child(ecran_dev)
+	ecran_dev.champ_code.text = "127.0.0.1:%d" % PORT_SANS_HOTE
+	ecran_dev.rejoindre()
+	await _attendre(0.3)
+	await _shot("reseau_09_connexion_desktop")
 	reseau.quitter()
 	reseau.refuse.emit(reseau.REFUS_VERSION, "0.10")
 	await _attendre(0.1)
-	await _shot("reseau_07_refus_version")
-
-	params.definir_langue("en")
-	decouverte.parties.clear()
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.20", zoe, futur)
-	decouverte.enregistrer_partie(decouverte.parties, "192.168.1.21", zoe.merged({"pseudo": "Anna", "nb_joueurs": 6}, true), futur)
-	decouverte.parties_changees.emit()
-	await _attendre(0.2)
-	await _shot("reseau_08_anglais")
-	params.definir_langue("fr")
-	ecran.free()
-	decouverte.parties.clear()
-
-	var intrus := PacketPeerUDP.new()
-	intrus.bind(decouverte.port_balise, "0.0.0.0")
-	var ecran2: Control = load("res://Scenes/EcranReseau.tscn").instantiate()
-	root.add_child(ecran2)
-	await _attendre(0.3)
-	await _shot("reseau_09_ecoute_impossible")
-	ecran2.free()
-	intrus.close()
+	await _shot("reseau_10_refus_version")
+	ecran_dev.free()
 
 
 # --- Salon (phase 13) ------------------------------------------------------------------------------
@@ -288,9 +290,11 @@ func _salon() -> void:
 	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
 	GS.niveau_courant = 1
 
-	# L'hôte seul, pseudo de 12 caractères larges : Démarrer grisé, « Il faut au moins 2 joueurs »
+	# L'hôte seul, pseudo de 12 caractères larges : Démarrer grisé, « Il faut au moins 2 joueurs » ; le code
+	# d'une salle de la signalisation (le Web, phase 4) et « Copier le lien »
 	reseau.pseudo = "MMMMMMMMMMMM"
 	reseau.heberger(PORT_JEU)
+	reseau.code_partie = "K7Q2XM"
 	var salon: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon)
 	await _attendre(0.4)

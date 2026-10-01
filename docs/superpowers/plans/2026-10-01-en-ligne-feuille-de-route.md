@@ -46,7 +46,7 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 | 0 | **Dépôt et CI Web seule** : création de `w3cdotorg/LeLion-web` (public, sans lien de fork) avec l'utilisateur ; exports Windows, Linux, macOS et job Release retirés ; l'export Web publié en artefact ; README recentré. | ✏️ `.github/workflows/ci.yml` ✏️ `export_presets.cfg` ✏️ `README.md` ➖ `docs/essai-lan.md` | Dépôt en ligne, CI verte, artefact `LeLion-web`. Faite (PR #1). |
 | 1 | **Transport** : Step 0 sur `Reseau.gd` (977 lignes : code mort, journaux), puis interface `Transport` et `TransportENet` extrait de `Reseau.gd` (qui ne nomme plus aucune classe ENet) ; battement applicatif d'une seconde et silence de 10 s pour tous (30 s au chargement) à la place des délais d'ENet ; départ volontaire par message fiable. Version 0.20, `PROTOCOLE_EMPREINTE` renotée. | ➕ `Scripts/Transport.gd` ➕ `Scripts/TransportENet.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Decouverte.gd` ✏️ `Scripts/Manche.gd` ✏️ `project.godot` ✏️ `tests/unitaires.gd` ✏️ `tests/reseau/joueur.gd` ✏️ `tests/reseau/lancer.sh` ✏️ spec ✏️ `README.md` | Les 13 scénarios réseau verts, scénario 11 allongé (silence de 10 s). Faite (PR #2). |
 | 2 | **Signalisation** : Worker et Durable Object `Salle` (§4 et §8.1 du spec : messages, plafonds, origine, expiration, identifiants TURN, hibernation), tests `vitest` dans l'environnement local de Cloudflare ; job CI du Worker. Vérifier ici : limitation de débit sur l'offre gratuite. | ➕ `signalisation/package.json` ➕ `signalisation/wrangler.jsonc` ➕ `signalisation/src/index.js` ➕ `signalisation/test/salle.test.js` ✏️ `.github/workflows/ci.yml` | `npm test` vert en local et en CI, sans compte Cloudflare. Faite (PR #3). |
-| 3 | **Écran En ligne** : remplace l'écran Réseau (pseudo, *Créer une partie*, *Rejoindre* avec un code) ; code de salle (alphabet, format `K7Q-2XM`, validation), lecture de `?salle=` ; le salon affiche le code et *Copier le lien*. Sur desktop (dev), le code est `ip:port` pour `TransportENet`. ◉ | ➕ `Scripts/CodeSalle.gd` ➕ `Scenes/EcranEnLigne.tscn` ➕ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Assets/Traductions/traductions.csv` | Parcours Titre → En ligne → Salon en ENet ; unitaires du code de salle. |
+| 3 | **Écran En ligne** : remplace l'écran Réseau (pseudo, *Créer une partie*, *Rejoindre* avec un code) ; code de salle (alphabet, format `K7Q-2XM`, validation), lecture de `?salle=` ; le salon affiche le code et *Copier le lien*. Sur desktop (dev), le code est `ip:port` pour `TransportENet`. ◉ | ➕ `Scripts/CodeSalle.gd` ➕ `Scenes/EcranEnLigne.tscn` ➕ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scenes/Salon.tscn` ✏️ `Scripts/Titre.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Transport.gd` ✏️ `Scripts/TransportENet.gd` ✏️ `project.godot` ✏️ `Assets/Traductions/traductions.csv` ✏️ tests (`unitaires`, `smoke_test`, `screenshots`, `deux_fenetres`, `reseau/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Parcours Titre → En ligne → Salon en ENet ; unitaires du code de salle. Faite (PR #4). |
 | 3 bis | **Retrait de la découverte** : `Decouverte.gd`, son autoload, l'écran Réseau, les scénarios de découverte et `DIFFUSION=1` ; tests adaptés à l'écran En ligne. | ➖ `Scripts/Decouverte.gd` ➖ `Scenes/EcranReseau.tscn` ✏️ `project.godot` ✏️ tests (`smoke_test`, `screenshots`, `deux_fenetres`, `unitaires`, `reseau/`) | Plus aucune référence à `Decouverte` ; captures à jour (compte de la CI ajusté). |
 | 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/Reseau.gd` (choix du transport) ➕ `tests/web/bout_en_bout.spec.js` ➕ `tests/web/playwright.config.js` ✏️ `.github/workflows/ci.yml` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. |
 | 5 | **Déploiement** (compte Cloudflare, application TURN et secrets prêts, avec l'utilisateur) : tag `vX.Y` → `wrangler deploy` puis GitHub Pages ; URL du Worker dans le réglage `lelion/signalisation/url`. Vérifier ici : TURN sans carte bancaire. | ✏️ `.github/workflows/ci.yml` ✏️ `project.godot` ✏️ `signalisation/wrangler.jsonc` ✏️ `README.md` | Première partie en ligne sur `https://w3cdotorg.github.io/LeLion-web/`. |
@@ -107,3 +107,38 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
   par identifiant ; plafonner la dépense ou poser des alertes si une carte est exigée.
 - Workers Logs : un événement par invocation du Durable Object, sur 200 000 par jour.
 - Le job CI du Worker n'a pas encore tourné sur GitHub avant le push de la phase 2.
+
+### Notes de la revue de la phase 3 (pour les phases 3 bis, 4 et 6)
+
+**Phase 3 bis** (retrait de la découverte) :
+
+- Décider si `adresses_hote` passe dans `TransportENet` (l'hôte ENet du desktop afficherait ses
+  adresses locales, au lieu de `127.0.0.1:7777` qui ne vaut que pour lui) plutôt que d'être supprimé
+  avec `Decouverte`.
+
+**Phase 4** (`TransportWebRTC`) :
+
+- Traiter `erreur delai` côté client (arrivée non ouverte en 30 s) et le `depart` qui suit côté hôte.
+- Échec de création côté hôte avant `pret` (`erreur quota|debit|origine`, Worker injoignable) : le
+  contrat actuel (`Transport.echec` « chez un client », `_sur_transport_echec` seulement si
+  `_connexion_en_cours`) ne le route pas. Permettre `echec` chez l'hôte jusqu'à `pret`, et le router en
+  `connexion_echouee` + `raison_echec` (§9 : « Trop de parties en ce moment »), docstrings à jour.
+- `en_ligne()` (pair ≠ Offline) est faux pour un client WebRTC entre `rejoindre_partie` et `bienvenue`
+  (pair posé tard) ; l'écran ne doit pas s'y fier pendant la connexion.
+- Sur le Web, un code `ip:port` doit être refusé proprement (ERR_INVALID_PARAMETER, message de format).
+- `EcranEnLigne.creer_partie` ouvre le salon dès que `heberger` rend OK : avec WebRTC, un état
+  CRÉATION qui attend `pret` (le salon n'écoute pas `connexion_echouee`) ; émettre `salon_change` sur
+  `pret` (le salon relit `code_partie` à chaque affichage).
+- *Copier le lien* sous Safari/WebKit : Godot traite le clic hors du gestionnaire d'événement du
+  navigateur, `writeText` peut être refusé faute de geste de l'utilisateur ; à tester sous WebKit
+  (Playwright).
+
+**Phase 6** (mobiles) :
+
+- Le focus de l'accueil va à `bouton_creer`, caché sur mobile : passer par une aide qui choisit le
+  premier contrôle visible.
+- À 844×390, l'échelle est 0,35 : Rejoindre et Copier le lien font environ 22 à 25 px de haut (moins
+  que les 44 px d'une cible tactile).
+- Le clavier virtuel couvre le champ du code et le message.
+- La rangée d'invitation du salon touche le bas de l'écran (zone sûre).
+- Coller dans un champ Godot sur mobile est peu fiable : le lien d'invitation est le chemin principal.

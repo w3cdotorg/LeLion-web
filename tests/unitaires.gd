@@ -50,8 +50,10 @@ func _run() -> void:
 	_tester_placement_pseudos()
 	_tester_bilan_manche()
 	_tester_manches_enchainees()
+	_tester_code_salle()
 	_tester_transport_enet()
 	await _tester_battement()
+	await _tester_parties_en_ligne()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2453,6 +2455,90 @@ func _signature_protocole() -> PackedStringArray:
 	return lignes
 
 
+## Phase 3 du jeu en ligne : le code de salle (alphabet, celui du Worker ; saisie, format, lien
+## d'invitation, lecture de `?salle=`).
+func _tester_code_salle() -> void:
+	print("-- Code de salle (phase 3)")
+	var lettres := PackedStringArray()
+	for c in CodeSalle.ALPHABET:
+		lettres.append(c)
+	var distinctes := lettres.size() == 31
+	for c in lettres:
+		distinctes = distinctes and lettres.count(c) == 1 and not CodeSalle.CONFUSIONS.contains(c)
+	_check(distinctes and CodeSalle.LONGUEUR == 6 and CodeSalle.CONFUSIONS == "01ILO",
+		"31 caractères distincts, sans 0, O, 1, I ni L ; 6 par code")
+	var source := FileAccess.get_file_as_string("res://signalisation/src/code.js")
+	var alphabet_worker := RegEx.create_from_string("export const ALPHABET = \"([0-9A-Z]+)\";").search(source)
+	var longueur_worker := RegEx.create_from_string("export const LONGUEUR_CODE = ([0-9]+);").search(source)
+	_check(alphabet_worker != null and alphabet_worker.get_string(1) == CodeSalle.ALPHABET
+		and longueur_worker != null and longueur_worker.get_string(1).to_int() == CodeSalle.LONGUEUR,
+		"le même alphabet et la même longueur que le Worker (signalisation/src/code.js)")
+
+	# La saisie : sans casse, sans espaces ni tirets (ceux d'un traitement de texte ou d'un message
+	# compris : espace insécable, tirets typographiques, saut de ligne d'un copier-coller) ; un caractère
+	# qu'on confond a son propre message
+	_check(CodeSalle.normaliser(" k7q-2xm ") == "K7Q2XM" and CodeSalle.normaliser("k7q 2\txm") == "K7Q2XM",
+		"la saisie se lit sans casse, sans espaces, tabulations ni tirets (%s)" % CodeSalle.normaliser(" k7q-2xm "))
+	var insecable := "K7Q" + char(0xA0) + "2XM"
+	var cadratin := "K7Q" + char(0x2014) + "2XM"
+	var saut_final := "K7Q-2XM" + char(0x0D) + char(0x0A)
+	var bons := ["K7Q2XM", "K7Q-2XM", "k7q-2xm", " K7Q 2XM ", "2345-67", "zzz-zzz", "K7Q–2XM", insecable, cadratin, saut_final]
+	_check(bons.all(func(t: String) -> bool: return CodeSalle.erreur(t).is_empty() and CodeSalle.normaliser(t).length() == 6),
+		"des codes bien formés, tiret demi-cadratin, espace insécable, tiret cadratin et saut de ligne final compris (%s)" % [bons.map(func(t: String) -> String: return CodeSalle.normaliser(t).c_escape())])
+	var format := ["", "K7Q2X", "K7Q-2XM9", "K7Q_2XM", "K7Q.2XM", "K7Q#2XM", "ſ7Q2XM", "ÉÀÇ2XM"]
+	_check(format.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"mal formés : trop court, trop long, un autre séparateur (« _ », « . »), un caractère hors de l'alphabet, une lettre non ASCII qui ressemble à une lettre du code (« ſ »)")
+	# Le signe Kelvin (U+212A) a pour minuscule un k ASCII : une mise en majuscules Unicode ou une
+	# comparaison sans casse en ferait un K du code ; la saisie le garde tel quel, et le refuse
+	var kelvin := char(0x212A) + "7Q2XM"
+	_check(CodeSalle.erreur(kelvin) == CodeSalle.ERREUR_FORMAT and not CodeSalle.valide(CodeSalle.normaliser(kelvin)),
+		"le signe Kelvin n'est pas le K du code : « %s » est mal formé (%s)" % [kelvin, CodeSalle.erreur(kelvin)])
+	var confusions := ["K0Q2XM", "KOQ2XM", "K1Q2XM", "KIQ2XM", "KLQ2XM", "ko q2xm", "kl", "l7q2x"]
+	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
+		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
+	_check(not CodeSalle.valide("k7q2xm") and CodeSalle.valide("K7Q2XM"), "valide() attend un code déjà normalisé")
+
+	# L'affichage et le lien d'invitation
+	_check(CodeSalle.formater("K7Q2XM") == "K7Q-2XM" and CodeSalle.formater("127.0.0.1:7777") == "127.0.0.1:7777",
+		"un code s'affiche « K7Q-2XM » ; un autre texte (l'adresse d'un hôte ENet) tel quel")
+	_check(ProjectSettings.get_setting("lelion/page/url", "") == CodeSalle.URL_PAGE
+		and CodeSalle.lien("K7Q2XM") == "https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM",
+		"hors du Web, le lien d'invitation part du réglage lelion/page/url (%s)" % CodeSalle.lien("K7Q2XM"))
+
+	# `?salle=` : le premier paramètre salle, décodé et normalisé, s'il est un code
+	var recherches := {"?salle=K7Q2XM": "K7Q2XM", "?relais=1&salle=k7q-2xm": "K7Q2XM", "?salle=K7Q%2D2XM": "K7Q2XM",
+		"salle=K7Q2XM": "K7Q2XM", "?salle=K7Q2XM&salle=ABCDEF": "K7Q2XM", "?salle=K0Q2XM": "", "?salle=": "", "?salle": "",
+		"": "", "?": "", "?sallex=K7Q2XM": "", "?relais=1": ""}
+	var lues: Array[String] = []
+	for recherche: String in recherches:
+		if CodeSalle.lire_recherche(recherche) != recherches[recherche]:
+			lues.append("%s → %s" % [recherche, CodeSalle.lire_recherche(recherche)])
+	_check(lues.is_empty(), "?salle= lu sans casse ni tiret, décodé, parmi d'autres paramètres ; vide, absent ou mal formé : aucun code (%s)" % [lues])
+
+	# La saisie d'un joueur qui colle le lien d'invitation entier : son code ; sans « ? », un code tapé
+	var page := "https://w3cdotorg.github.io/LeLion-web/"
+	var saisies := {page + "?salle=K7Q2XM": "K7Q2XM", page + "?relais=1&salle=k7q-2xm#haut": "K7Q2XM",
+		" " + page + "?salle=K7Q2XM" + char(0x0A): "K7Q2XM", page + "?salle=K7Q2XM#salle=ABCDEF": "K7Q2XM",
+		page + "?relais=1": "", page + "?salle=K0Q2XM": "", page + "?salle=K7Q2X": "",
+		" k7q-2xm ": "K7Q2XM", "K0Q2XM": "K0Q2XM"}
+	var lus: Array[String] = []
+	for saisie: String in saisies:
+		if CodeSalle.lire_saisie(saisie) != saisies[saisie]:
+			lus.append("%s → %s" % [saisie.c_escape(), CodeSalle.lire_saisie(saisie)])
+	_check(lus.is_empty(), "lire_saisie : un lien collé entier donne son code (coupé au #, saut de ligne final compris), vide sans code valide ; sans « ? », la saisie normalisée (%s)" % [lus])
+	var liens_sans_code := [page + "?relais=1", page + "?salle=K0Q2XM", page + "?salle=", page + "?"]
+	_check(CodeSalle.erreur(page + "?relais=1&salle=k7q-2xm").is_empty()
+		and liens_sans_code.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"un lien collé avec son code est un code bien formé ; un lien sans code valide est mal formé, jamais une confusion (ses I, L et O ne sont pas un code) (%s)" % [liens_sans_code.map(func(t: String) -> String: return CodeSalle.erreur(t))])
+	CodeSalle.recherche_forcee = "?salle=k7q-2xm"
+	CodeSalle._page_lue = false
+	var premier := CodeSalle.prendre_code_de_la_page()
+	var second := CodeSalle.prendre_code_de_la_page()
+	CodeSalle.recherche_forcee = ""
+	CodeSalle._page_lue = false  # le lien lu ici : les suites suivantes retrouvent un lancement neuf
+	_check(premier == "K7Q2XM" and second.is_empty(), "le lien de la page ne sert qu'une fois par lancement (%s, puis « %s »)" % [premier, second])
+
+
 ## Phase 1 du jeu en ligne : le transport ENet, seul (sans `Reseau` ni `SceneMultiplayer`) : son code,
 ## l'ouverture du canal, le délai d'un client sans hôte, la libération d'un pair figé (I1), le départ
 ## (DISCONNECT après la file, servi par `servir()`), la fermeture immédiate.
@@ -2597,15 +2683,16 @@ func _tester_battement() -> void:
 	hote.pseudo = "Hôte"
 	client.pseudo = "Client"
 
-	# Le battement tient la session : chacun a entendu l'autre il y a moins d'une période et demie
+	# Le battement tient la session : chacun a entendu l'autre il y a moins de deux périodes (une période
+	# et demie laissait échouer un battement en retard de quelques ms sur une machine chargée : 1504 ms)
 	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
 	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
 	var id_client: int = arrives[0] if arrives.size() == 1 else -1
 	await create_timer(2.5).timeout
 	var ecart_hote: int = Time.get_ticks_msec() - hote._entendus.get(id_client, 0)
 	var ecart_client: int = Time.get_ticks_msec() - client._entendus.get(1, 0)
-	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 1500 and ecart_client <= 1500,
-		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms" % [ecart_hote, ecart_client])
+	_check(partis.is_empty() and pertes.is_empty() and ecart_hote <= 2000 and ecart_client <= 2000,
+		"un battement par seconde : 2,5 s plus tard, l'hôte a entendu le client il y a %d ms, le client l'hôte il y a %d ms (moins de deux périodes)" % [ecart_hote, ecart_client])
 
 	# Un client muet : l'hôte le déclare parti au bout du silence toléré, pas avant
 	hote.definir_silence(1.5)
@@ -2717,6 +2804,42 @@ func _tester_battement() -> void:
 	noeud.queue_free()
 	set_multiplayer(null, chemin)
 	hote.pseudo = ""
+
+
+## Phase 3 du jeu en ligne : les entrées de l'écran En ligne dans `Reseau` (créer une partie, en rejoindre
+## une par son code, une plateforme sans transport) et la raison d'un échec de connexion, donnée par le
+## transport (`raison_echec`).
+func _tester_parties_en_ligne() -> void:
+	print("-- Parties en ligne (phase 3)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var port := 17787
+	_check(reseau.transport_disponible, "hors du Web, ce poste a un transport pour jouer en réseau (ENet)")
+	_check(reseau.creer_partie(port) == OK and reseau.en_ligne() and root.multiplayer.is_server() and reseau.code_partie == "127.0.0.1:%d" % port,
+		"créer une partie : ce poste héberge, le code de la partie vient du transport (%s)" % reseau.code_partie)
+	_check(reseau.rejoindre_partie("K7Q2XM") == ERR_INVALID_PARAMETER and reseau.en_ligne() and root.multiplayer.is_server(),
+		"en ENet, un code de salle n'est pas une adresse : refusé sans toucher à la session en cours")
+	reseau.quitter()
+
+	var raisons: Array[String] = []
+	var sur_echec := func() -> void: raisons.append(reseau.raison_echec)
+	reseau.connexion_echouee.connect(sur_echec)
+	_check(reseau.rejoindre_partie(" 127.0.0.1:%d " % (port + 1)) == OK and reseau.en_ligne() and not root.multiplayer.is_server(),
+		"rejoindre une partie par son code : ce poste se connecte (« ip:port », espaces autour)")
+	reseau._transport.echec.emit(Transport.ECHEC_INCONNUE)  # ce que dira TransportWebRTC d'un code sans salle (phase 4)
+	_check(await _attendre(func() -> bool: return not raisons.is_empty(), 1.0) and raisons == [Transport.ECHEC_INCONNUE] and not reseau.en_ligne(),
+		"le transport échoue : connexion échouée, ce poste hors réseau, sa raison dans raison_echec (%s)" % [raisons])
+	_check(reseau.rejoindre_partie("127.0.0.1:%d" % (port + 1)) == OK, "(pré-condition) ce poste se connecte de nouveau")
+	reseau._sur_delai_depasse()  # la poignée de main sans réponse dans son délai
+	_check(await _attendre(func() -> bool: return raisons.size() == 2, 1.0) and raisons[1].is_empty(),
+		"un échec sans raison du transport (la poignée de main) : raison_echec vide, rien de l'échec précédent (%s)" % [raisons])
+	reseau.connexion_echouee.disconnect(sur_echec)
+
+	reseau.transport_disponible = false
+	_check(reseau.creer_partie(port) == ERR_UNAVAILABLE and reseau.rejoindre_partie("127.0.0.1:%d" % port) == ERR_UNAVAILABLE
+		and not reseau.en_ligne() and reseau._transport == null,
+		"sans transport sur ce poste (l'export Web avant la phase 4) : ni créer ni rejoindre, rien d'ouvert")
+	reseau.transport_disponible = true
+	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière

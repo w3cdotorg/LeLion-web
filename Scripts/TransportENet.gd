@@ -19,8 +19,9 @@ extends Transport
 
 const PORT := 7777
 ## L'adresse du code annoncé par `pret` : celle de ce poste vu de lui-même (les tests, le
-## développement sur un seul PC) ; les autres postes du réseau local prennent une des adresses que le
-## salon affiche.
+## développement sur un seul PC), que le salon de l'hôte affiche (« 127.0.0.1:7777 ») et qui ne vaut que
+## pour lui. Les autres postes du réseau local prennent l'adresse IP locale de l'hôte, celle que donne
+## son système (réglages réseau, `ipconfig`, `ip a`), suivie de `:7777`.
 const ADRESSE_LOCALE := "127.0.0.1"
 ## Connexions ENet (`max_clients`) acceptées au-delà des places : l'hôte ne consomme pas de connexion
 ## vers lui-même, donc `places - 1` suffiraient aux vrais clients ; ce solde donne de quoi recevoir, et

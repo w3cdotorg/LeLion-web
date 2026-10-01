@@ -83,8 +83,12 @@ picks **Rematch**, **Next level** or **Back to lobby** for everyone; anyone can 
 quitting ends the game for everyone (it asks first). Each player uses their own PC's keyboard or
 gamepad, with the solo controls; Esc opens a local menu that does not pause the round.
 
-Until online play lands, run the game from the editor (`godot .`) on each computer of the same
-local network: games are found automatically (UDP broadcast) or joined by the host's IP address.
+Until online play lands (in the browser, by room code or invitation link), run the game from the
+editor (`godot .`) on each computer: **Multiplayer** opens the Online screen, where one player
+creates a game and the others join it with the host's address as the code: the host's local IP
+address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
+followed by `:7777` (`192.168.1.20:7777`). The host's lobby shows `127.0.0.1:7777`, which only works
+on the host's own computer.
 Ready-made Windows, macOS and Linux builds of the LAN version are on
 [LeLion-multi's releases](https://github.com/w3cdotorg/LeLion-multi/releases/latest) (version 0.19).
 
@@ -100,7 +104,7 @@ godot .
 
 ```
 Scenes/     Titre (title), Main (a game), Intro (READY? VOMIT!), Lion, Ville (town), HUD, HUDBataille (battle HUD),
-            Resultats (battle results), EcranReseau (network screen), Salon (lobby), PauseMenu, Reglages (settings),
+            Resultats (battle results), EcranEnLigne (online screen), Salon (lobby), PauseMenu, Reglages (settings),
             ControlesTactiles (touch controls), GameOver (CONTINUE? + summary), ColorPickup, BonusPickup,
             CoeurPickup, Soucoupe, Coccinelle, Boss
 Scripts/    one script per scene; the autoloads GameState (game, players, levels, difficulties, arcade), Scores
@@ -134,7 +138,7 @@ Headless suites (the CI runs all but the last one); each ends on `== 0 échec(s)
 
 ```sh
 godot --headless --script tests/unitaires.gd                       # pure logic: territory, rules, lobby table, protocol guard…
-godot --headless --script tests/smoke_test.gd                      # solo game, title, network screen, lobby, a networked round
+godot --headless --script tests/smoke_test.gd                      # solo game, title, online screen, lobby, a networked round
 godot --headless --fixed-fps 60 --script tests/bataille_test.gd    # a 4-lion local battle, the Results screen, rematch
 godot --headless --fixed-fps 60 --script tests/prediction_test.gd  # client-side prediction under simulated latency
 bash tests/reseau/lancer.sh                                        # headless Godot processes on localhost; DIFFUSION=1 adds real broadcast

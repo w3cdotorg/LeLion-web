@@ -96,6 +96,10 @@ demarrer={
 ]
 }
 
+[lelion]
+
+page/url="https://w3cdotorg.github.io/LeLion-web/"
+
 [rendering]
 
 renderer/rendering_method="mobile"

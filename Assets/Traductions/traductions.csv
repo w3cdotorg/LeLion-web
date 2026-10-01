@@ -79,6 +79,20 @@ RESEAU_HOTE_PERDU,L'hôte a quitté la partie,The host left the game
 RESEAU_EXCLU,"Exclu : ta partie a mis trop de temps à charger.","Removed: your game took too long to load."
 RESEAU_PORT_OCCUPE,Impossible d'héberger : port %d occupé,Can't host: port %d in use
 RESEAU_HEBERGER_IMPOSSIBLE,Impossible d'héberger (erreur %d),Can't host (error %d)
+EN_LIGNE,En ligne,Online
+ENLIGNE_CREER,Créer une partie,Create a game
+ENLIGNE_OU,ou rejoins une partie avec son code,or join a game with its code
+ENLIGNE_CODE,Code,Code
+ENLIGNE_CODE_FORMAT,"Un code fait 6 caractères (ex. K7Q-2XM).","A code has 6 characters (e.g. K7Q-2XM)."
+ENLIGNE_CODE_CONFUSION,"Un code n'a ni 0, ni O, ni 1, ni I, ni L (ex. K7Q-2XM).","A code has no 0, O, 1, I or L (e.g. K7Q-2XM)."
+ENLIGNE_ADRESSE_INVALIDE,"Adresse invalide (ex. 192.168.1.20:7777)","Invalid address (e.g. 192.168.1.20:7777)"
+ENLIGNE_INVITATION,"Invitation reçue : choisis ton pseudo, puis Rejoindre.","You're invited: pick your name, then Join."
+ENLIGNE_SALLE_INCONNUE,Aucune partie avec ce code.,No game with this code.
+ENLIGNE_SERVICE_INDISPONIBLE,"Service de connexion indisponible, réessaie dans un instant.","Connection service unavailable, try again in a moment."
+ENLIGNE_QUOTA,"Trop de parties en ce moment, réessaie plus tard.","Too many games right now, try again later."
+ENLIGNE_ECHEC_CANAL,Connexion impossible avec l'hôte (réseau trop restrictif ?),Can't connect to the host (network too restrictive?)
+ENLIGNE_INDISPONIBLE,"Pas encore de jeu en ligne dans cette version : il arrive bientôt.","No online play in this version yet: coming soon."
+ENLIGNE_REJOINDRE_IMPOSSIBLE,Impossible de rejoindre (erreur %d),Can't join (error %d)
 SALON,Salon,Lobby
 SALON_NIVEAU,Niveau : %s,Level: %s
 SALON_HOTE,HÔTE,HOST
@@ -94,7 +108,9 @@ SALON_ATTENTE_HOTE,"Tout le monde est prêt : l'hôte peut démarrer.","Everyone
 SALON_DEMARRER,Démarrer la partie,Start the game
 SALON_AIDE,"Gauche/Droite : couleur   ·   Espace : prêt   ·   Échap : quitter","Left/Right: color   ·   Space: ready   ·   Esc: leave"
 SALON_AIDE_HOTE,"Gauche/Droite : couleur   ·   Haut/Bas : niveau   ·   Espace : prêt   ·   Tab : démarrer   ·   Échap : quitter","Left/Right: color   ·   Up/Down: level   ·   Space: ready   ·   Tab: start   ·   Esc: leave"
-SALON_ADRESSES,"Les autres te voient dans leur liste, ou tapent ton adresse : %s","Others see you in their list, or type your address: %s"
+SALON_CODE,Code de la partie : %s,Game code: %s
+SALON_COPIER_LIEN,Copier le lien,Copy link
+SALON_LIEN_COPIE,Lien copié !,Link copied!
 PAUSE_RESEAU,La partie continue,The game goes on
 QUITTER_PARTIE,Quitter la partie,Leave the game
 BATAILLE_JOUEUR,Joueur %d,Player %d

@@ -22,8 +22,20 @@ signal connecte()
 ## se ferme pas seul : l'appelant le quitte ensuite (`quitter()`).
 signal echec(raison: String)
 
-## Le canal vers l'hôte ne s'est pas ouvert dans le délai du transport.
+## Le canal vers l'hôte ne s'est pas ouvert dans le délai du transport (en WebRTC, aussi le refus `delai`
+## de la signalisation, le même mot : l'hôte n'a pas ouvert le canal à temps).
 const ECHEC_DELAI := "delai"
+## La signalisation n'a pas répondu à temps (`TransportWebRTC`, phase 4 ; spec §9 : 5 s).
+const ECHEC_INJOIGNABLE := "injoignable"
+## Les autres refus de la signalisation (son message `erreur`, spec §4.2), que `TransportWebRTC` (phase 4)
+## rend tels quels, la raison exacte écrite au journal : aucune salle de ce code, salle pleine, débit
+## dépassé, quota gratuit épuisé, origine refusée, salle expirée.
+const ECHEC_INCONNUE := "inconnue"
+const ECHEC_PLEINE := "pleine"
+const ECHEC_DEBIT := "debit"
+const ECHEC_QUOTA := "quota"
+const ECHEC_ORIGINE := "origine"
+const ECHEC_EXPIREE := "expiree"
 
 
 ## Ouvre une session hébergée ; `pret` part quand elle existe (pendant l'appel ou plus tard, selon le

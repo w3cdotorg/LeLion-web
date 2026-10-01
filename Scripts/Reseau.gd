@@ -69,15 +69,16 @@ signal inscrit(index: int, couleur: Color)
 ## pour l'écran Réseau de la phase 12), `version_hote` la version de l'hôte. Le poste est déjà
 ## revenu hors réseau quand le signal part.
 signal refuse(raison: String, version_hote: String)
-## Chez le client : pas d'inscription dans le délai (IP qui ne répond pas, port fermé). Le poste
-## est déjà revenu hors réseau quand le signal part.
+## Chez le client : pas d'inscription (le transport n'a pas ouvert son canal, ou la poignée de main n'a
+## pas fini dans son délai). Le poste est déjà revenu hors réseau quand le signal part ; `raison_echec`
+## dit pourquoi.
 signal connexion_echouee()
 ## Chez le client : l'hôte a quitté la partie ou ne répond plus. Le poste est déjà revenu hors
 ## réseau quand le signal part ; `raison_perte` dit pourquoi (phase 18 : un joueur exclu par la barrière
 ## de chargement le sait). N4 : si le pair de l'hôte tombe lui-même en erreur, ou si son transport se
 ## ferme de lui-même (`Transport.servir` faux), ce même signal part aussi chez l'hôte (server_disconnected
-## n'y distingue pas les deux cas) ; personne ne l'écoute encore côté hôte à cette phase, mais un futur
-## appelant ne doit pas supposer « jamais chez l'hôte ».
+## n'y distingue pas les deux cas) : le salon et la scène de jeu l'écoutent des deux côtés (l'hôte qui
+## perd sa session revient à l'écran En ligne, ou au titre depuis une manche, comme un client).
 signal hote_perdu()
 ## Sur chaque poste en session : la table du salon (`table_salon`), son niveau ou ses places ont
 ## changé ; chez l'hôte, aussi quand une place se réserve ou se libère (le bouton Démarrer en
@@ -184,6 +185,14 @@ var niveau_manche := 0
 ## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE ou PERTE_EXCLU), posé juste
 ## avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
 var raison_perte := PERTE_HOTE
+## Chez un client : pourquoi la dernière connexion a échoué, posé juste avant `connexion_echouee` : la raison
+## du transport (Transport.ECHEC_*), ou vide (la poignée de main sans réponse dans son délai, un transport
+## fermé de lui-même) ; ce que montre l'écran En ligne (spec §9).
+var raison_echec := ""
+## Vrai si ce poste a un transport pour jouer en réseau : ENet hors du Web (le desktop de développement, les
+## tests) ; faux dans l'export Web jusqu'à `TransportWebRTC` (phase 4) : `creer_partie` et
+## `rejoindre_partie` y renvoient ERR_UNAVAILABLE sans rien ouvrir. Modifiable par les tests.
+var transport_disponible := not OS.has_feature("web")
 ## Index et couleur de ce poste, attribués par l'hôte (-1 et transparente hors réseau).
 var index_local := -1
 var couleur_locale := Color.TRANSPARENT
@@ -215,6 +224,9 @@ var _connexion_en_cours := false
 ## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
 ## perte de l'hôte qui suit.
 var _exclu := false
+## Chez un client : la raison de l'échec du transport de la session (`Transport.echec`), jusqu'à l'échec
+## de connexion qui suit (`raison_echec`).
+var _raison_transport := ""
 ## Les pairs dont ce poste écoute le silence : par identifiant, l'instant (ms) où il a reçu d'eux pour
 ## la dernière fois. Chez l'hôte, chaque client arrivé (sa poignée de main finie) ; chez un client,
 ## l'hôte, une fois inscrit. Vide hors réseau.
@@ -268,14 +280,32 @@ func heberger(port := PORT) -> Error:
 	return OK
 
 
-## Rejoint l'hôte à `adresse` (une IPv4) et `port` : le code `adresse:port` du transport, qui refuse
-## tout autre texte (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution bloquerait le jeu)
-## avant que rien ne change, pas même la session en cours. La réponse arrive par `inscrit`, `refuse` ou
-## `connexion_echouee` (au plus tard après le délai du canal du transport, puis DELAI_CONNEXION). Renvoie
-## l'erreur du transport si le client ne peut même pas être créé.
+## Rejoint l'hôte ENet à `adresse` (une IPv4) et `port` : `rejoindre_partie` avec le code `adresse:port`
+## (les tests et le desktop de développement).
 func rejoindre(adresse: String, port := PORT) -> Error:
-	var transport := _nouveau_transport(port)
-	var erreur := transport.rejoindre("%s:%d" % [adresse.strip_edges(), port])
+	return rejoindre_partie("%s:%d" % [adresse.strip_edges(), port])
+
+
+## Crée une partie (l'écran En ligne) : `heberger(port)` si ce poste a un transport pour jouer en réseau
+## (`transport_disponible`), sinon ERR_UNAVAILABLE sans rien changer. Son code (`code_partie`) vient du
+## transport : `ip:port` en ENet, un code de salle en WebRTC (phase 4).
+func creer_partie(port := PORT) -> Error:
+	if not transport_disponible:
+		return ERR_UNAVAILABLE
+	return heberger(port)
+
+
+## Rejoint la partie `code` avec le transport de ce poste (l'écran En ligne) : un code de salle en WebRTC
+## (phase 4), le code `ip:port` (ou `ip`) d'un hôte en ENet. Un code que le transport refuse
+## (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution bloquerait le jeu), ou aucun transport
+## (`transport_disponible` faux : ERR_UNAVAILABLE), ne change rien, pas même la session en cours. La
+## réponse arrive par `inscrit`, `refuse` ou `connexion_echouee` (au plus tard après le délai du canal du
+## transport, puis DELAI_CONNEXION). Renvoie l'erreur du transport si le client ne peut même pas être créé.
+func rejoindre_partie(code: String) -> Error:
+	if not transport_disponible:
+		return ERR_UNAVAILABLE
+	var transport := _nouveau_transport(PORT)
+	var erreur := transport.rejoindre(code)
 	if erreur != OK:
 		return erreur
 	quitter()
@@ -313,6 +343,7 @@ func quitter() -> void:
 	silence = SILENCE_SESSION
 	_entendus.clear()
 	code_partie = ""
+	_raison_transport = ""
 	_connexion_en_cours = false
 	niveau_salon = 0
 	places_salon = EtatPartie.NB_JOUEURS_MAX
@@ -1073,10 +1104,11 @@ func _sur_transport_connecte(generation: int) -> void:
 		_delai.start(DELAI_CONNEXION)
 
 
-## Chez un client : le canal vers l'hôte ne s'ouvrira pas (`raison`, Transport.ECHEC_* : l'écran En
-## ligne, phase 3, en fera un message ; ici, un échec de connexion).
-func _sur_transport_echec(_raison: String, generation: int) -> void:
-	if generation == _generation and _connexion_en_cours:
+## Chez un client : le canal vers l'hôte ne s'ouvrira pas : un échec de connexion, dont `raison`
+## (Transport.ECHEC_*) devient `raison_echec`.
+func _sur_transport_echec(raison: String, generation: int) -> void:
+	if generation == _generation and _connexion_en_cours and not _issue_decidee:
+		_raison_transport = raison
 		_decider("connexion_echouee")
 
 
@@ -1099,7 +1131,10 @@ func _fermer_puis_emettre(nom: StringName, arguments: Array, generation: int) ->
 	if generation != _generation:
 		return
 	var exclu := _exclu
+	var raison_transport := _raison_transport
 	quitter()
 	if nom == &"hote_perdu":
 		raison_perte = PERTE_EXCLU if exclu else PERTE_HOTE
+	elif nom == &"connexion_echouee":
+		raison_echec = raison_transport
 	callv("emit_signal", [nom] + arguments)

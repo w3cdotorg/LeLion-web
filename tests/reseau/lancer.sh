@@ -330,7 +330,7 @@ else
 	echo "  (scénario 7, découverte en vraie diffusion : DIFFUSION=1 pour le lancer)"
 fi
 
-# 8. Salon (phase 13), par les vraies scènes : un hôte et trois clients passent par l'écran Réseau
+# 8. Salon (phase 13), par les vraies scènes : un hôte et trois clients passent par l'écran En ligne
 #    et le salon, arrivés dans l'ordre (index 1, 2, 3). B repart du salon par Retour : sa carte se
 #    libère chez tous, un trou reste à l'index 2. A et C demandent au même feu la couleur voisine
 #    (A la suivante, C la précédente : toutes deux visent celle de B) ; l'hôte arbitre, chacun garde
