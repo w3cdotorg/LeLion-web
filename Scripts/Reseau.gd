@@ -129,10 +129,6 @@ const SILENCE_SESSION := 10.0
 ## Pendant le chargement de la manche, du lancement à l'intro : un poste qui charge sa scène de jeu
 ## (ou compile ses shaders, sous Windows) ne répond plus, parfois plus de 5 s.
 const SILENCE_CHARGEMENT := 30.0
-## Une image plus longue que ce délai (ms) : ce poste était lui-même figé, et ce qu'il a reçu pendant
-## ce temps ne sera relevé qu'à l'image suivante ; son verdict sur les silences attend jusque-là
-## (`_ecouter`).
-const GEL_LOCAL := 250
 ## Canal du lancement et du retour au salon, table comprise : le canal fiable ordonné de la manche
 ## (`Manche.CANAL_PEINTURE`, spec §4), phase 18.
 const CANAL_ORDONNE := 1
@@ -225,7 +221,7 @@ var _exclu := false
 var _entendus: Dictionary[int, int] = {}
 ## L'instant (ms) du prochain battement de ce poste.
 var _prochain_battement := 0
-## L'instant (ms) de la dernière écoute des silences (`_ecouter`).
+## L'instant (ms) de la dernière écoute des silences (`_ecouter`) : celui du verdict de la suivante.
 var _derniere_ecoute := 0
 
 
@@ -387,15 +383,16 @@ func _battre(maintenant: int) -> void:
 
 
 ## L'écoute des silences, à `maintenant` (ms) : chez l'hôte, chaque client muet depuis plus de `silence`
-## est libéré ; chez un client, l'hôte muet est perdu. Après une image plus longue que GEL_LOCAL, ce poste
-## sort lui-même d'un gel : les paquets arrivés pendant ce temps ne sont relevés qu'à la prochaine image
-## (`SceneTree` relève les paquets avant les `_process`), le verdict attend donc une image.
+## est libéré ; chez un client, l'hôte muet est perdu. Le verdict se rend à l'instant de l'écoute
+## précédente, pas à `maintenant` : tout ce qui était arrivé avant elle a été relevé au début de cette
+## image (`SceneTree` relève les paquets avant les `_process`), alors que ce qui arrive pendant un gel de
+## ce poste (une longue image, un `_process` figé avant celui-ci) ne l'est pas encore. Un poste qui sort
+## d'un gel ne déclare donc personne parti à tort, et un poste lent (quelques images par seconde) rend
+## quand même son verdict, une image en retard.
 func _ecouter(maintenant: int) -> void:
-	var ecart := maintenant - _derniere_ecoute
+	var instant := _derniere_ecoute
 	_derniere_ecoute = maintenant
-	if ecart > GEL_LOCAL:
-		return
-	for id in pairs_muets(_entendus, maintenant, int(silence * 1000.0)):
+	for id in pairs_muets(_entendus, instant, int(silence * 1000.0)):
 		_entendus.erase(id)
 		if multiplayer.is_server():
 			_liberer(id, _generation)

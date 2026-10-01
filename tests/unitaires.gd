@@ -2536,14 +2536,25 @@ func _tester_battement() -> void:
 		"un pair est muet au-delà du silence toléré, pas à sa limite, dans l'ordre des identifiants (%s)" % [hote.pairs_muets(entendus, 4500, 2000)])
 	var port := 17786
 	_check(hote.heberger(port) == OK, "(pré-condition) ce poste héberge")
+	# Le verdict se rend à l'instant de l'écoute précédente : ce qui était arrivé avant a été relevé au début
+	# de cette image ; ce qui arrive pendant un gel de ce poste ne l'est pas encore
+	var silence_ms := int(hote.SILENCE_SESSION * 1000.0)
 	var maintenant := Time.get_ticks_msec()
-	hote._entendus[77] = maintenant - 20000  # un pair muet depuis 20 s (inconnu de SceneMultiplayer)
+	hote._entendus[77] = maintenant - silence_ms - 1000  # (inconnu de SceneMultiplayer) muet depuis 9 s quand le gel commence
 	hote._derniere_ecoute = maintenant - 2000  # ce poste sort lui-même d'un gel de 2 s
 	hote._ecouter(maintenant)
-	var suspendu: bool = hote._entendus.has(77)
+	var epargne: bool = hote._entendus.has(77)
 	hote._ecouter(maintenant + 16)
-	_check(suspendu and not hote._entendus.has(77),
-		"au sortir d'un gel de ce poste, le verdict attend une image (ce qu'il a reçu pendant le gel n'est pas encore relevé), puis tombe")
+	_check(epargne and not hote._entendus.has(77),
+		"au sortir d'un gel de 2 s de ce poste, personne n'est déclaré parti à la première image (ce qu'il a reçu pendant le gel n'est pas encore relevé) ; à la suivante, le pair resté muet l'est")
+	hote._entendus[76] = maintenant - silence_ms - 200  # muet depuis 10,2 s
+	hote._derniere_ecoute = maintenant - 333
+	var images := 0
+	while hote._entendus.has(76) and images < 6:
+		hote._ecouter(maintenant + images * 333)  # 3 images par seconde, soutenues
+		images += 1
+	_check(not hote._entendus.has(76) and images == 2,
+		"à 3 images par seconde, un pair muet est quand même déclaré parti, une image après son silence dépassé (%d images)" % images)
 	# Un silence raccourci (la fin du chargement : SILENCE_CHARGEMENT puis SILENCE_SESSION) repart de zéro
 	# pour chaque pair suivi : un poste figé au chargement n'a pas encore pu battre
 	hote.definir_silence(hote.SILENCE_CHARGEMENT)
@@ -2556,7 +2567,6 @@ func _tester_battement() -> void:
 	hote._ecouter(maintenant + 16)
 	_check(hote._entendus.has(78) and pose >= maintenant and hote._entendus.get(79, 0) == maintenant + 500,
 		"passer de 30 s à 10 s : un pair muet depuis 15 s n'est pas déclaré parti, son silence repart de zéro (instant posé à %+d ms)" % (pose - maintenant))
-	var silence_ms := int(hote.SILENCE_SESSION * 1000.0)
 	hote._ecouter(maintenant + silence_ms + 100)
 	hote._ecouter(maintenant + silence_ms + 200)
 	_check(not hote._entendus.has(78) and hote._entendus.has(79), "... il l'est s'il reste muet 10 s de plus")
