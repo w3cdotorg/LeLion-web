@@ -90,6 +90,7 @@ export class Salle extends DurableObject {
 		this.ctx.acceptWebSocket(serveur, ["hote"]);
 		serveur.serializeAttachment(nouvelleFiche("hote", ID_HOTE));
 		this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS pairs (id INTEGER PRIMARY KEY)");
+		await this.ctx.storage.setAlarm(Date.now() + LIMITES.DUREE_SALLE_MS);
 		envoyer(serveur, { t: "salle", code, id: ID_HOTE, ice: await fabriquerIce(this.env) });
 		return new Response(null, { status: 101, webSocket: client });
 	}
@@ -198,7 +199,10 @@ export class Salle extends DurableObject {
 		if (hote) envoyer(hote, { t: "depart", id: fiche.id });
 	}
 
-	/** Fin de la salle (hôte parti) : `erreur` puis fermeture pour tous, stockage effacé. */
+	/**
+	 * Fin de la salle (hôte parti, expiration) : `erreur` puis fermeture pour tous, stockage effacé,
+	 * alarme comprise (deleteAll l'efface depuis la date de compatibilité 2026-02-24).
+	 */
 	async fermerSalle(raison) {
 		for (const ws of this.vivantes()) {
 			const fiche = ws.deserializeAttachment();
@@ -208,5 +212,11 @@ export class Salle extends DurableObject {
 			fermer(ws, raison);
 		}
 		await this.ctx.storage.deleteAll();
+	}
+
+	/** 4 h après la création : la salle ferme (la partie continue en WebRTC, plus personne n'arrive). */
+	async alarm() {
+		journal("salle expirée");
+		await this.fermerSalle("expiree");
 	}
 }
