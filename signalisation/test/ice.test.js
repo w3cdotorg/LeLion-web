@@ -39,6 +39,27 @@ describe("fabriquerIce", () => {
 		}
 	});
 
+	it("le jeton d'API n'apparaît jamais au journal (refus 401, réseau coupé, JSON invalide)", async () => {
+		const jeton = "jeton-turn-qui-ne-doit-pas-fuiter";
+		const sorties = ["log", "info", "warn", "error", "debug"].map((nom) => vi.spyOn(console, nom).mockImplementation(() => {}));
+		const echecs = [
+			async () => new Response("non", { status: 401 }),
+			async () => {
+				throw new Error("réseau coupé");
+			},
+			async () => new Response("pas du JSON", { status: 201 }),
+		];
+		for (const echec of echecs) {
+			vi.mocked(fetch).mockImplementationOnce(echec);
+			const lignesAvant = sorties[0].mock.calls.length;
+			expect(await fabriquerIce({ ...SECRETS, TURN_KEY_API_TOKEN: jeton })).toEqual([{ urls: STUN }]);
+			expect(sorties[0].mock.calls.length - lignesAvant).toBe(1); // une ligne de journal par échec
+		}
+		const journalise = sorties.flatMap((sortie) => sortie.mock.calls.flat()).map((valeur) => (typeof valeur === "string" ? valeur : JSON.stringify(valeur)));
+		expect(journalise.length).toBe(3);
+		for (const ligne of journalise) expect(ligne).not.toContain(jeton);
+	});
+
 	it("ne garde que urls, username et credential d'un serveur TURN", async () => {
 		vi.mocked(fetch).mockImplementationOnce(async () =>
 			Response.json({ iceServers: [{ urls: ["turn:a:3478"], username: "u", credential: "c", autre: "x" }] }, { status: 201 }),
