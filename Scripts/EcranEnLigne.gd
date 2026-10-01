@@ -3,10 +3,11 @@ extends Control
 ## avec un code (rempli d'avance par le lien `?salle=`), messages des refus et des échecs. En 16:9, comme
 ## le salon ; le titre remet l'écran du solo au retour.
 ##
-## Le code : sur le Web, un code de salle (`CodeSalle`, « K7Q-2XM »), refusé à la saisie s'il est mal
-## formé ; sur le desktop de développement, l'adresse `ip:port` (ou `ip`) d'un hôte `TransportENet`
-## (`codes_de_salle` faux). Sans transport pour jouer en réseau (`Reseau.transport_disponible` : l'export
-## Web avant la phase 4), Créer et Rejoindre le disent sans rien ouvrir.
+## Le code : sur le Web, un code de salle (`CodeSalle`, « K7Q-2XM », ou le lien d'invitation collé
+## entier), refusé à la saisie s'il est mal formé ; sur le desktop de développement, l'adresse `ip:port`
+## (ou `ip`) d'un hôte `TransportENet` (`codes_de_salle` faux). Sans transport pour jouer en réseau
+## (`Reseau.transport_disponible` : l'export Web avant la phase 4), Créer et Rejoindre le disent sans
+## rien ouvrir.
 ##
 ## Trois états : ACCUEIL (tout est permis), CONNEXION (en attente de l'hôte) et SALON (partie créée, ou
 ## inscription reçue : en route vers le salon, tout reste grisé le temps du changement de scène). Retour
@@ -37,6 +38,10 @@ const MESSAGES_ECHEC := {
 }
 ## Un échec sans raison du transport (la poignée de main sans réponse) ou d'une raison inconnue.
 const ECHEC_PAR_DEFAUT := "ENLIGNE_ECHEC_CANAL"
+## Longueur permise dans le champ du code : un lien d'invitation collé entier (codes de salle), ou une
+## adresse `ip:port` (le desktop).
+const LONGUEUR_LIEN := 256
+const LONGUEUR_ADRESSE := 21
 
 ## Port de jeu de Créer une partie hors du Web (ENet ; modifiable par les tests).
 var port_jeu: int = Reseau.PORT
@@ -71,6 +76,8 @@ func _ready() -> void:
 	champ_pseudo.max_length = Reseau.PSEUDO_MAX
 	champ_pseudo.text = Reseau.pseudo_valide(str(Scores.preference("pseudo", "")))
 	champ_code.placeholder_text = "K7Q-2XM" if codes_de_salle else "192.168.1.20:%d" % Reseau.PORT
+	# Sur le Web, de quoi coller le lien d'invitation entier ; sur le desktop, « 255.255.255.255:65535 ».
+	champ_code.max_length = LONGUEUR_LIEN if codes_de_salle else LONGUEUR_ADRESSE
 	Reseau.inscrit.connect(_sur_inscription)
 	Reseau.refuse.connect(_sur_refus)
 	Reseau.connexion_echouee.connect(_sur_connexion_echouee)
@@ -171,15 +178,16 @@ static func cle_echec(raison: String) -> String:
 	return MESSAGES_ECHEC.get(raison, ECHEC_PAR_DEFAUT)
 
 
-## Le code saisi, tel que `Reseau.rejoindre_partie` l'attend (un code de salle normalisé, ou l'adresse
-## `ip:port` de l'hôte ENet sous sa forme normale) ; vide s'il est mal formé, son message affiché.
+## Le code saisi, tel que `Reseau.rejoindre_partie` l'attend (un code de salle normalisé, celui d'un lien
+## d'invitation collé entier compris, ou l'adresse `ip:port` de l'hôte ENet sous sa forme normale) ; vide
+## s'il est mal formé, son message affiché.
 func _lire_code() -> String:
 	if codes_de_salle:
 		var erreur := CodeSalle.erreur(champ_code.text)
 		if not erreur.is_empty():
 			_afficher_message(erreur, [], true)
 			return ""
-		return CodeSalle.normaliser(champ_code.text)
+		return CodeSalle.lire_saisie(champ_code.text)
 	var cible := TransportENet.lire_code(champ_code.text)
 	if cible.is_empty():
 		_afficher_message("ENLIGNE_ADRESSE_INVALIDE", [], true)

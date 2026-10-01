@@ -2514,6 +2514,22 @@ func _tester_code_salle() -> void:
 		if CodeSalle.lire_recherche(recherche) != recherches[recherche]:
 			lues.append("%s → %s" % [recherche, CodeSalle.lire_recherche(recherche)])
 	_check(lues.is_empty(), "?salle= lu sans casse ni tiret, décodé, parmi d'autres paramètres ; vide, absent ou mal formé : aucun code (%s)" % [lues])
+
+	# La saisie d'un joueur qui colle le lien d'invitation entier : son code ; sans « ? », un code tapé
+	var page := "https://w3cdotorg.github.io/LeLion-web/"
+	var saisies := {page + "?salle=K7Q2XM": "K7Q2XM", page + "?relais=1&salle=k7q-2xm#haut": "K7Q2XM",
+		" " + page + "?salle=K7Q2XM" + char(0x0A): "K7Q2XM", page + "?salle=K7Q2XM#salle=ABCDEF": "K7Q2XM",
+		page + "?relais=1": "", page + "?salle=K0Q2XM": "", page + "?salle=K7Q2X": "",
+		" k7q-2xm ": "K7Q2XM", "K0Q2XM": "K0Q2XM"}
+	var lus: Array[String] = []
+	for saisie: String in saisies:
+		if CodeSalle.lire_saisie(saisie) != saisies[saisie]:
+			lus.append("%s → %s" % [saisie.c_escape(), CodeSalle.lire_saisie(saisie)])
+	_check(lus.is_empty(), "lire_saisie : un lien collé entier donne son code (coupé au #, saut de ligne final compris), vide sans code valide ; sans « ? », la saisie normalisée (%s)" % [lus])
+	var liens_sans_code := [page + "?relais=1", page + "?salle=K0Q2XM", page + "?salle=", page + "?"]
+	_check(CodeSalle.erreur(page + "?relais=1&salle=k7q-2xm").is_empty()
+		and liens_sans_code.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"un lien collé avec son code est un code bien formé ; un lien sans code valide est mal formé, jamais une confusion (ses I, L et O ne sont pas un code) (%s)" % [liens_sans_code.map(func(t: String) -> String: return CodeSalle.erreur(t))])
 	CodeSalle.recherche_forcee = "?salle=k7q-2xm"
 	CodeSalle._page_lue = false
 	var premier := CodeSalle.prendre_code_de_la_page()

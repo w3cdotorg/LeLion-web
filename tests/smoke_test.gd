@@ -1832,6 +1832,21 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	ecran.creer_partie()
 	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == tr("ENLIGNE_INDISPONIBLE"),
 		"... et Créer une partie aussi")
+	# Le lien d'invitation collé entier dans le champ (avec le saut de ligne d'un message) : Rejoindre part
+	# avec son code ; un lien sans code valide est un code mal formé (pas une confusion : ses I, L et O)
+	ecran.champ_code.text = CodeSalle.lien("k7q2xm") + char(0x0A)
+	var colle: int = ecran.champ_code.text.length()
+	ecran.message.text = ""
+	ecran.rejoindre()
+	_check(ecran.champ_code.max_length == 256 and colle == CodeSalle.lien("k7q2xm").length() + 1
+		and ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.champ_code.text == "K7Q-2XM"
+		and ecran.message.text == tr("ENLIGNE_INDISPONIBLE"),
+		"le lien d'invitation collé entier (256 caractères permis, %d collés) : Rejoindre part avec son code, affiché « %s » (%s)" % [colle, ecran.champ_code.text, ecran.message.text])
+	ecran.champ_code.text = CodeSalle.url_page() + "?relais=1"
+	ecran.bouton_creer.grab_focus()
+	ecran.rejoindre()
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == tr("ENLIGNE_CODE_FORMAT")
+		and ecran.champ_code.has_focus(), "un lien sans code : « Un code fait 6 caractères (ex. K7Q-2XM). », le focus au code (%s)" % ecran.message.text)
 	reseau.transport_disponible = true
 
 	# Le desktop de développement : l'adresse ENet d'un hôte ; la connexion, le pseudo nettoyé
@@ -1989,6 +2004,8 @@ func _tester_titre_reseau(scores: Node) -> void:
 	var ecran: Control = (await _attendre_scene("res://Scenes/EcranEnLigne.tscn")) as Control
 	titre.free()
 	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn", "Multijoueur ouvre l'écran En ligne")
+	_check(ecran != null and not ecran.codes_de_salle and ecran.champ_code.max_length == 21,
+		"sur le desktop, le champ du code prend une adresse ip:port (21 caractères au plus)")
 	# Ne sauter que les vérifications qui dépendent de `ecran` : la remise à zéro de fin de fonction
 	# doit tourner même si cette précondition échoue (sinon un seul échec ici laisse decouverte et
 	# reseau dans un état anormal pour la suite de la fonction et pour `_tester_salon`).

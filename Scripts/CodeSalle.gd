@@ -55,10 +55,23 @@ static func valide(code: String) -> bool:
 	return true
 
 
-## Pourquoi la saisie `texte` n'est pas un code : ERREUR_CONFUSION si elle a un 0, un O, un 1, un I ou un
-## L (en minuscules aussi), ERREUR_FORMAT pour tout le reste ; vide si c'en est un.
+## Le code que porte la saisie `texte` d'un joueur, à valider (`valide`) : un lien d'invitation collé
+## entier (« https://…/?salle=K7Q2XM », tout texte qui a un « ? ») donne le code de son `?salle=` (après
+## le « ? », coupé au « # » : `lire_recherche`), vide s'il n'en porte pas de valide ; un code tapé est
+## normalisé (`normaliser`), valide ou non.
+static func lire_saisie(texte: String) -> String:
+	var debut := texte.find("?")
+	if debut < 0:
+		return normaliser(texte)
+	return lire_recherche(texte.substr(debut + 1).get_slice("#", 0))
+
+
+## Pourquoi la saisie `texte` (`lire_saisie` : un code ou un lien collé) n'est pas un code :
+## ERREUR_CONFUSION si un code tapé a un 0, un O, un 1, un I ou un L (en minuscules aussi), ERREUR_FORMAT
+## pour tout le reste, un lien sans code valide compris (ses lettres ne sont pas un code) ; vide si c'en
+## est un.
 static func erreur(texte: String) -> String:
-	var code := normaliser(texte)
+	var code := lire_saisie(texte)
 	if valide(code):
 		return ""
 	for c in code:
