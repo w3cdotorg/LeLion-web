@@ -1,0 +1,16 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "lelion-signalisation",
+	"main": "src/index.js",
+	"compatibility_date": "2026-10-01",
+	// Origines admises, séparées par des virgules ; « :* » = tout port (spec §8.1).
+	"vars": {
+		"ORIGINES": "https://w3cdotorg.github.io,http://localhost:*"
+	},
+	// Secrets (phase 5, jamais dans le dépôt) : TURN_KEY_ID, TURN_KEY_API_TOKEN. Absents : STUN seul.
+	"observability": {
+		"enabled": true,
+		"logs": { "enabled": true, "head_sampling_rate": 1 },
+		"traces": { "enabled": true, "head_sampling_rate": 0.05 }
+	}
+}
