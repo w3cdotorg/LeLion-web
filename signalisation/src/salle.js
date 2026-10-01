@@ -10,10 +10,13 @@ function nouvelleFiche(role, id) {
 	return { role, id, jetons: LIMITES.MESSAGES_PAR_SECONDE, instant: Date.now(), fin: null };
 }
 
-/** Prend un jeton du seau de `fiche` (rempli de 20 par seconde, 20 au plus) ; faux s'il est vide. */
+/**
+ * Prend un jeton du seau de `fiche` (rempli de 20 par seconde, 20 au plus) ; faux s'il est vide. Une
+ * horloge qui recule (autre machine après un déplacement de la salle) compte pour 0, sans vider le seau.
+ */
 function prendreJeton(fiche, maintenant) {
 	const debit = LIMITES.MESSAGES_PAR_SECONDE;
-	fiche.jetons = Math.min(debit, fiche.jetons + ((maintenant - fiche.instant) * debit) / 1000);
+	fiche.jetons = Math.min(debit, fiche.jetons + (Math.max(0, maintenant - fiche.instant) * debit) / 1000);
 	fiche.instant = maintenant;
 	if (fiche.jetons < 1) return false;
 	fiche.jetons -= 1;

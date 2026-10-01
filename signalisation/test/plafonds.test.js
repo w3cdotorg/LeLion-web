@@ -1,5 +1,6 @@
+import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { arriver, creerSalle, ouvrir } from "./aide.js";
+import { arriver, creerSalle, ouvrir, salleDe } from "./aide.js";
 
 const REPONSE = { t: "reponse", vers: 1, sdp: "v=0" };
 
@@ -85,6 +86,18 @@ describe("20 messages par seconde et par socket", () => {
 		expect(m).toEqual({ t: "erreur", raison: "inconnue" });
 		const tard = await ouvrir(`/v1/rejoindre/${code}`);
 		expect(await tard.suivant()).toEqual({ t: "erreur", raison: "inconnue" });
+	});
+
+	it("une horloge qui recule ne vide pas le seau (le temps écoulé compte pour 0)", async () => {
+		const { hote, code } = await creerSalle();
+		const a = await arriver(hote, code);
+		// L'instant du seau dans une minute : vu d'ici, l'horloge a reculé d'une minute.
+		await runInDurableObject(salleDe(code), (_salle, ctx) => {
+			for (const ws of ctx.getWebSockets(String(a.id))) ws.serializeAttachment({ ...ws.deserializeAttachment(), instant: Date.now() + 60000 });
+		});
+		for (let i = 0; i < 20; i++) a.client.envoyer(REPONSE);
+		for (let i = 0; i < 20; i++) expect(await hote.suivant()).toEqual({ t: "reponse", sdp: "v=0", de: a.id });
+		expect(a.client.enAttente()).toBe(0);
 	});
 
 	it("le battement ne compte pas : 50 ping de suite reçoivent 50 pong", async () => {
