@@ -90,8 +90,12 @@ func quitter() -> void:
 	_fin_canal = -1
 	if _pair == null or _fin_depart >= 0:
 		return
+	# Un pair déjà fermé par ENet (un client dont l'hôte est parti) n'a plus d'hôte ENet à lire.
+	if _pair.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
+		clore()
+		return
 	var connexion := _pair.host
-	if _pair.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED or connexion == null:
+	if connexion == null:
 		clore()
 		return
 	_prevenus.clear()
