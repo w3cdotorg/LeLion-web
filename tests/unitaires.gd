@@ -50,6 +50,7 @@ func _run() -> void:
 	_tester_placement_pseudos()
 	_tester_bilan_manche()
 	_tester_manches_enchainees()
+	_tester_code_salle()
 	_tester_transport_enet()
 	await _tester_battement()
 	_tester_protocole()
@@ -2451,6 +2452,62 @@ func _signature_protocole() -> PackedStringArray:
 		Territoire.OCTETS_PAR_CHANGEMENT])
 	lignes.append("balise " + load("res://Scripts/Decouverte.gd").encoder_balise("V", 1, 2, 3, true, 0, "P").get_string_from_utf8())
 	return lignes
+
+
+## Phase 3 du jeu en ligne : le code de salle (alphabet, celui du Worker ; saisie, format, lien
+## d'invitation, lecture de `?salle=`).
+func _tester_code_salle() -> void:
+	print("-- Code de salle (phase 3)")
+	var lettres := PackedStringArray()
+	for c in CodeSalle.ALPHABET:
+		lettres.append(c)
+	var distinctes := lettres.size() == 31
+	for c in lettres:
+		distinctes = distinctes and lettres.count(c) == 1 and not CodeSalle.CONFUSIONS.contains(c)
+	_check(distinctes and CodeSalle.LONGUEUR == 6 and CodeSalle.CONFUSIONS == "01ILO",
+		"31 caractères distincts, sans 0, O, 1, I ni L ; 6 par code")
+	var source := FileAccess.get_file_as_string("res://signalisation/src/code.js")
+	var alphabet_worker := RegEx.create_from_string("export const ALPHABET = \"([0-9A-Z]+)\";").search(source)
+	var longueur_worker := RegEx.create_from_string("export const LONGUEUR_CODE = ([0-9]+);").search(source)
+	_check(alphabet_worker != null and alphabet_worker.get_string(1) == CodeSalle.ALPHABET
+		and longueur_worker != null and longueur_worker.get_string(1).to_int() == CodeSalle.LONGUEUR,
+		"le même alphabet et la même longueur que le Worker (signalisation/src/code.js)")
+
+	# La saisie : sans casse, sans espaces ni tirets ; un caractère qu'on confond a son propre message
+	_check(CodeSalle.normaliser(" k7q-2xm ") == "K7Q2XM" and CodeSalle.normaliser("k7q 2\txm") == "K7Q2XM",
+		"la saisie se lit sans casse, sans espaces, tabulations ni tirets (%s)" % CodeSalle.normaliser(" k7q-2xm "))
+	var bons := ["K7Q2XM", "K7Q-2XM", "k7q-2xm", " K7Q 2XM ", "2345-67", "zzz-zzz"]
+	_check(bons.all(func(t: String) -> bool: return CodeSalle.erreur(t).is_empty()), "des codes bien formés (%s)" % [bons])
+	var format := ["", "K7Q2X", "K7Q-2XM9", "K7Q_2XM", "K7Q.2XM", "K7Q#2XM", "ſ7Q2XM", "K7Q–2XM", "ÉÀÇ2XM"]
+	_check(format.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"mal formés : trop court, trop long, un autre séparateur (« _ », « . », tiret long), un caractère hors de l'alphabet, une lettre non ASCII qui ressemble à une lettre du code (« ſ »)")
+	var confusions := ["K0Q2XM", "KOQ2XM", "K1Q2XM", "KIQ2XM", "KLQ2XM", "ko q2xm", "kl", "l7q2x"]
+	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
+		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
+	_check(not CodeSalle.valide("k7q2xm") and CodeSalle.valide("K7Q2XM"), "valide() attend un code déjà normalisé")
+
+	# L'affichage et le lien d'invitation
+	_check(CodeSalle.formater("K7Q2XM") == "K7Q-2XM" and CodeSalle.formater("127.0.0.1:7777") == "127.0.0.1:7777",
+		"un code s'affiche « K7Q-2XM » ; un autre texte (l'adresse d'un hôte ENet) tel quel")
+	_check(ProjectSettings.get_setting("lelion/page/url", "") == CodeSalle.URL_PAGE
+		and CodeSalle.lien("K7Q2XM") == "https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM",
+		"hors du Web, le lien d'invitation part du réglage lelion/page/url (%s)" % CodeSalle.lien("K7Q2XM"))
+
+	# `?salle=` : le premier paramètre salle, décodé et normalisé, s'il est un code
+	var recherches := {"?salle=K7Q2XM": "K7Q2XM", "?relais=1&salle=k7q-2xm": "K7Q2XM", "?salle=K7Q%2D2XM": "K7Q2XM",
+		"salle=K7Q2XM": "K7Q2XM", "?salle=K7Q2XM&salle=ABCDEF": "K7Q2XM", "?salle=K0Q2XM": "", "?salle=": "", "?salle": "",
+		"": "", "?": "", "?sallex=K7Q2XM": "", "?relais=1": ""}
+	var lues: Array[String] = []
+	for recherche: String in recherches:
+		if CodeSalle.lire_recherche(recherche) != recherches[recherche]:
+			lues.append("%s → %s" % [recherche, CodeSalle.lire_recherche(recherche)])
+	_check(lues.is_empty(), "?salle= lu sans casse ni tiret, décodé, parmi d'autres paramètres ; vide, absent ou mal formé : aucun code (%s)" % [lues])
+	CodeSalle.recherche_forcee = "?salle=k7q-2xm"
+	CodeSalle._page_lue = false
+	var premier := CodeSalle.prendre_code_de_la_page()
+	var second := CodeSalle.prendre_code_de_la_page()
+	CodeSalle.recherche_forcee = ""
+	_check(premier == "K7Q2XM" and second.is_empty(), "le lien de la page ne sert qu'une fois par lancement (%s, puis « %s »)" % [premier, second])
 
 
 ## Phase 1 du jeu en ligne : le transport ENet, seul (sans `Reseau` ni `SceneMultiplayer`) : son code,
