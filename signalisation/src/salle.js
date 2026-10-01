@@ -3,11 +3,28 @@
 // son stockage SQLite : il survit à l'hibernation, qui ne garde rien en mémoire.
 import { DurableObject } from "cloudflare:workers";
 import { fabriquerIce } from "./ice.js";
-import { ID_HOTE, PING, PONG, envoyer, fermer, refuser } from "./protocole.js";
+import { ID_HOTE, LIMITES, PING, PONG, envoyer, fermer, journal, refuser } from "./protocole.js";
 
-/** La fiche attachée à une socket (`serializeAttachment`) : rôle, identifiant, fin. */
+/** La fiche attachée à une socket (`serializeAttachment`) : rôle, identifiant, seau de jetons, fin. */
 function nouvelleFiche(role, id) {
-	return { role, id, fin: null };
+	return { role, id, jetons: LIMITES.MESSAGES_PAR_SECONDE, instant: Date.now(), fin: null };
+}
+
+/** Prend un jeton du seau de `fiche` (rempli de 20 par seconde, 20 au plus) ; faux s'il est vide. */
+function prendreJeton(fiche, maintenant) {
+	const debit = LIMITES.MESSAGES_PAR_SECONDE;
+	fiche.jetons = Math.min(debit, fiche.jetons + ((maintenant - fiche.instant) * debit) / 1000);
+	fiche.instant = maintenant;
+	if (fiche.jetons < 1) return false;
+	fiche.jetons -= 1;
+	return true;
+}
+
+/** Taille de `message` en octets (UTF-8 pour un texte). */
+function taille(message) {
+	if (typeof message !== "string") return message.byteLength;
+	if (message.length > LIMITES.OCTETS) return message.length; // au moins un octet par unité UTF-16
+	return new TextEncoder().encode(message).length;
 }
 
 const estTexte = (valeur) => typeof valeur === "string";
@@ -80,6 +97,7 @@ export class Salle extends DurableObject {
 	async accueillirClient() {
 		const hote = this.hote();
 		if (!hote) return refuser("inconnue");
+		if (this.vivantes().length >= LIMITES.SOCKETS) return refuser("pleine");
 		const id = this.tirerId();
 		const [client, serveur] = Object.values(new WebSocketPair());
 		this.ctx.acceptWebSocket(serveur, ["client", String(id)]);
@@ -107,6 +125,8 @@ export class Salle extends DurableObject {
 	async webSocketMessage(ws, message) {
 		const fiche = ws.deserializeAttachment();
 		if (!fiche || fiche.fin) return;
+		if (!prendreJeton(fiche, Date.now()) || taille(message) > LIMITES.OCTETS) return this.chasser(ws, fiche, "debit");
+		ws.serializeAttachment(fiche);
 		const m = lire(message);
 		if (m === null) return;
 		if (fiche.role === "hote") this.deLHote(m);
@@ -146,6 +166,17 @@ export class Salle extends DurableObject {
 			if (hote) envoyer(hote, { t: "depart", id: fiche.id });
 		}
 		fermer(ws, raison);
+	}
+
+	/** Une socket au-delà d'un plafond : un client est oublié, un hôte ferme la salle. */
+	async chasser(ws, fiche, raison) {
+		journal("plafond dépassé", { role: fiche.role, raison });
+		if (fiche.role === "client") return this.oublier(ws, raison);
+		fiche.fin = raison;
+		ws.serializeAttachment(fiche);
+		envoyer(ws, { t: "erreur", raison });
+		fermer(ws, raison);
+		await this.fermerSalle("inconnue");
 	}
 
 	async webSocketClose(ws) {

@@ -1,5 +1,5 @@
-// Le point d'entrée du Worker (spec §4.1, §8.1) : les routes /v1 et l'origine, puis la salle
-// (Durable Object `Salle`, un par code) qui garde la socket.
+// Le point d'entrée du Worker (spec §4.1, §8.1) : les routes /v1, l'origine, la limite de création
+// par IP, puis la salle (Durable Object `Salle`, un par code) qui garde la socket.
 // Le module principal n'exporte que des gestionnaires (`default`, `Salle`) : workerd refuse d'en
 // démarrer un qui exporte autre chose (constante, fonction).
 import { ESSAIS_CODE, lireCode, tirerCode } from "./code.js";
@@ -40,6 +40,11 @@ function salle(env, code) {
 
 /** Un code libre (la salle répond 409 si le sien a déjà un hôte), sa salle crée l'hôte. */
 async function creer(requete, env) {
+	const { success } = await env.LIMITE_CREATION.limit({ key: requete.headers.get("cf-connecting-ip") ?? "local" });
+	if (!success) {
+		journal("trop de salles créées par cette IP");
+		return refuser("debit");
+	}
 	try {
 		for (let essai = 0; essai < ESSAIS_CODE; essai++) {
 			const code = tirerCode();
