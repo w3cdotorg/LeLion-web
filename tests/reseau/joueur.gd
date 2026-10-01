@@ -341,6 +341,7 @@ func _jouer_hote() -> void:
 		var rester := _option("rester", "")
 		print("HOTE RESTE")
 		_check(await _attendre(func() -> bool: return FileAccess.file_exists(rester)), "lancer.sh laisse partir l'hôte (%s)" % rester)
+	print("ADIEU %d" % _horodatage())
 	reseau.quitter()  # son départ s'achève en arrière-plan : `_run` l'attend avant de sortir
 	if _options.has("apres-depart"):
 		# Le processus vit encore : si la balise ne suivait pas l'état de Reseau, elle continuerait.
@@ -394,6 +395,7 @@ func _jouer_client() -> void:
 				_check(await _attendre(func() -> bool: return reseau.table_salon.size() >= 3),
 					"un autre client est en vue dans la table de l'hôte (%d joueurs)" % reseau.table_salon.size())
 				await _pause(0.5)
+				print("ADIEU %d" % _horodatage())
 				reseau.quitter()
 				_check(_issue == "inscrit", "partir de soi-même n'émet ni échec ni hôte perdu (%s)" % _issue)
 			else:
@@ -704,6 +706,7 @@ func _sur_arrivee(id: int) -> void:
 
 func _sur_depart(id: int) -> void:
 	_departs.append(id)
+	print("DEPART_RECU %d" % _horodatage())
 
 
 func _sur_poignee_echouee(id: int) -> void:
@@ -727,6 +730,14 @@ func _sur_refus(raison: String, version_hote: String) -> void:
 ## client qui reste ; « refuse+echec » trahirait un double signal.
 func _ajouter_issue(quoi: String) -> void:
 	_issue = quoi if _issue.is_empty() else _issue + "+" + quoi
+	if quoi == "hote_perdu":
+		print("HOTE_PERDU_RECU %d" % _horodatage())
+
+
+## L'heure de l'horloge du système, en ms : la même pour tous les postes de ce PC (lancer.sh compare les
+## horodatages de deux journaux).
+func _horodatage() -> int:
+	return int(Time.get_unix_time_from_system() * 1000.0)
 
 
 

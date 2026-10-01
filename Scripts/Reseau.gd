@@ -22,11 +22,12 @@ extends Node
 ## fiable) ; tout ce que ce script reçoit d'un pair, battement ou RPC, remet son silence à zéro
 ## (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte comme chez un client,
 ## SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa scène ou compile ses
-## shaders ne répond plus). Chez l'hôte, un client muet ou exclu est libéré (`_liberer`, puis
+## shaders ne répond plus). Chez l'hôte, un client parti, muet ou exclu est libéré (`_liberer`, puis
 ## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs.
-## `quitter()` part proprement : le transport ferme sa session après l'envoi de ce qui est en file
-## (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est coupé
-## (`server_relay`) : tout passe par l'hôte.
+## `quitter()` part proprement (spec §5) : un adieu fiable (`_recevoir_adieu`), que l'autre côté traite
+## aussitôt (l'hôte libère ce client, un client perd l'hôte), puis le transport ferme sa session une fois
+## l'adieu envoyé (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est
+## coupé (`server_relay`) : tout passe par l'hôte.
 ##
 ## La poignée de main passe par l'authentification de `SceneMultiplayer` : des octets bruts
 ## (`var_to_bytes` d'un dictionnaire), échangés avant tout RPC, si bien que deux versions
@@ -290,14 +291,15 @@ func rejoindre(adresse: String, port := PORT) -> Error:
 	return OK
 
 
-## Quitte le réseau : part proprement (les autres postes voient partir ce joueur, ou l'hôte : le
-## transport ferme sa session une fois ce qui est en file envoyé, en arrière-plan), remet
+## Quitte le réseau : part proprement (les autres postes voient partir ce joueur, ou l'hôte, tout de
+## suite : son adieu, puis le transport ferme sa session une fois l'adieu envoyé, en arrière-plan), remet
 ## `OfflineMultiplayerPeer` et oublie inscrits, table du salon, index, couleur, scènes chargées, code et
 ## manche en cours (une session hébergée finie n'a plus lieu d'être). Sans effet visible hors réseau :
 ## chaque chemin de retour au titre peut l'appeler (point de vigilance des phases 12/13).
 func quitter() -> void:
 	_generation += 1
 	_delai.stop()
+	_dire_adieu()
 	if _transport != null:
 		_transport.quitter()
 		if _transport.servir():
@@ -419,6 +421,29 @@ func _battement() -> void:
 	_entendre(multiplayer.get_remote_sender_id())
 
 
+## Le départ volontaire de ce poste, annoncé à ses pairs (spec §5) : un adieu fiable, que le transport
+## envoie avant de fermer (`Transport.quitter`). Rien hors session, ni avant l'inscription (aucune RPC
+## ne passe encore).
+func _dire_adieu() -> void:
+	if not en_ligne() or multiplayer.get_peers().is_empty():
+		return
+	if multiplayer.is_server():
+		_recevoir_adieu.rpc()
+	else:
+		_recevoir_adieu.rpc_id(MultiplayerPeer.TARGET_PEER_SERVER)
+
+
+## L'adieu d'un pair qui part : chez l'hôte, ce client est libéré tout de suite (une fois ses paquets en
+## cours relevés) ; chez un client, l'hôte est perdu, sans attendre son silence.
+@rpc("any_peer", "call_remote", "reliable")
+func _recevoir_adieu() -> void:
+	var id := multiplayer.get_remote_sender_id()
+	if multiplayer.is_server():
+		_liberer.call_deferred(id, _generation)
+	elif id == MultiplayerPeer.TARGET_PEER_SERVER:
+		_decider("hote_perdu")
+
+
 ## Chez l'hôte : le joueur `id` n'a pas chargé sa scène de jeu à temps (la barrière de la manche,
 ## `Manche._exclure`) : il apprend son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU, pas
 ## « L'hôte a quitté la partie ») et s'en va de lui-même ; DELAI_EXCLUSION plus tard, l'hôte le libère
@@ -431,7 +456,7 @@ func exclure(id: int) -> void:
 	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_liberer.bind(id, _generation))
 
 
-## Chez l'hôte : libère le client `id` (muet ou exclu), s'il est encore là dans la même session
+## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la même session
 ## (`generation`) : son silence n'est plus écouté, et son transport le ferme sur-le-champ, sans attendre
 ## d'accusé de réception (I1, revue finale phase 14 : un pair figé, qui charge ou compile ses shaders,
 ## ou mort n'en enverra pas) ; son départ part aussitôt par `peer_disconnected` (`_sur_pair_deconnecte`).

@@ -204,6 +204,16 @@ arracher() {
 	NOMS=(${NOMS[@]+"${NOMS[@]}"})
 }
 
+# ecart_ms <nom_a> <repère_a> <nom_b> <repère_b> : l'écart, en ms, entre l'horodatage de la première
+# ligne « <repère_a> <ms> » du journal de <nom_a> et celui de la première « <repère_b> <ms> » du journal
+# de <nom_b> (l'horloge du système, la même pour tous les postes) ; rien si l'une manque.
+ecart_ms() {
+	local a b
+	a=$(sed -n "s/^$2 \([0-9]*\)$/\1/p" "$JOURNAUX/$1.log" 2>/dev/null | head -1)
+	b=$(sed -n "s/^$4 \([0-9]*\)$/\1/p" "$JOURNAUX/$3.log" 2>/dev/null | head -1)
+	[ -n "$a" ] && [ -n "$b" ] && echo $((b - a))
+}
+
 # compter <motif> <nom…> : nombre de lignes qui contiennent le motif dans les journaux nommés.
 compter() {
 	local motif="$1" nom total=0 n
@@ -218,7 +228,8 @@ compter() {
 echo "== test réseau LeLion (journaux : $JOURNAUX) =="
 
 # 1. Hôte + 2 clients ; un troisième se présente avec une autre version. L'un des deux clients
-#    repart de lui-même, puis l'hôte quitte : l'autre le voit partir.
+#    repart de lui-même, puis l'hôte quitte : l'autre le voit partir. Chaque départ est vu en moins
+#    d'une seconde (phase 1 : l'adieu), pas au bout des 10 s du battement.
 P=$((PORT_BASE + 1))
 lancer hote1 --role=hote --port=$P --pseudo=Hote --clients=2 --partants=1 --refus=1
 if attendre_hote hote1; then
@@ -227,6 +238,11 @@ if attendre_hote hote1; then
 	lancer ancien1 --role=client --port=$P --pseudo=Ancien --attendu=refus_version --version=0.0-ancienne
 fi
 terminer "hôte + 2 clients, départ d'un client et de l'hôte, version différente refusée"
+ecart1=$(ecart_ms partant1 ADIEU hote1 DEPART_RECU)
+ecart1h=$(ecart_ms hote1 ADIEU reste1 HOTE_PERDU_RECU)
+echo "  (départs) le client parti vu par l'hôte en ${ecart1:-?} ms, l'hôte parti vu par l'autre client en ${ecart1h:-?} ms"
+[ -n "$ecart1" ] && [ "$ecart1" -le 1000 ] && [ -n "$ecart1h" ] && [ "$ecart1h" -le 1000 ] \
+	|| echec "départs volontaires : chacun doit être vu en moins d'une seconde (l'adieu), pas au bout du silence du battement"
 
 # 2. Partie à 2 places, deux demandes simultanées : exactement une acceptée, l'autre refusée. Les
 #    deux rivaux démarrent, puis partent au même feu : la course ne dépend pas de leurs démarrages.

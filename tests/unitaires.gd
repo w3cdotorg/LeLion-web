@@ -5,7 +5,7 @@ extends SceneTree
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
 const PROTOCOLE_VERSION := "0.20"
-const PROTOCOLE_EMPREINTE := 322872843
+const PROTOCOLE_EMPREINTE := 815376087
 
 
 func _init() -> void:
@@ -2599,6 +2599,41 @@ func _tester_battement() -> void:
 	hote.set_process(true)
 	_check(perdu_apres >= 1500 and perdu_apres <= 2500 and pertes.size() == 2 and pertes[1] == client.PERTE_HOTE and not client.en_ligne(),
 		"... %d ms après son dernier battement (silence de 1,5 s) : « L'hôte a quitté la partie »" % perdu_apres)
+
+	# Départ volontaire (spec §5), sous un silence de 30 s : vu tout de suite, par l'adieu. D'abord l'adieu
+	# seul (le poste ne quitte pas : son transport ne dit rien), puis un vrai `quitter()`.
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une troisième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 3 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	var partis_avant := partis.size()
+	var pertes_avant := pertes.size()
+	var adieu_a := Time.get_ticks_msec()
+	client._recevoir_adieu.rpc_id(1)
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1, 1.0),
+		"l'adieu d'un client : l'hôte le voit partir tout de suite (%d ms), sans attendre son silence" % (Time.get_ticks_msec() - adieu_a))
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and not client.en_ligne(),
+		"(le client libéré se retrouve hors réseau)")
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une quatrième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 4 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	pertes_avant = pertes.size()
+	adieu_a = Time.get_ticks_msec()
+	hote._recevoir_adieu.rpc()
+	_check(await _attendre(func() -> bool: return pertes.size() == pertes_avant + 1, 1.0) and pertes[-1] == client.PERTE_HOTE,
+		"l'adieu de l'hôte : le client le perd tout de suite (%d ms), « L'hôte a quitté la partie »" % (Time.get_ticks_msec() - adieu_a))
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) le client rejoint une cinquième fois")
+	_check(await _attendre(func() -> bool: return arrives.size() == 5 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	hote.definir_silence(30.0)
+	client.definir_silence(30.0)
+	partis_avant = partis.size()
+	var transport_client: Transport = client._transport
+	client.quitter()
+	_check(not client.en_ligne() and client._partants.has(transport_client), "quitter() : ce poste est hors réseau aussitôt, son départ continue en arrière-plan")
+	var quitte_a := Time.get_ticks_msec()
+	_check(await _attendre(func() -> bool: return partis.size() == partis_avant + 1 and not client._partants.has(transport_client), 1.5),
+		"un client qui quitte : l'hôte le voit partir, son transport se ferme une fois l'adieu envoyé (%d ms)" % (Time.get_ticks_msec() - quitte_a))
 
 	hote.quitter()
 	client.quitter()
