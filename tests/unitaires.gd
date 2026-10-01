@@ -2544,6 +2544,25 @@ func _tester_battement() -> void:
 	hote._ecouter(maintenant + 16)
 	_check(suspendu and not hote._entendus.has(77),
 		"au sortir d'un gel de ce poste, le verdict attend une image (ce qu'il a reçu pendant le gel n'est pas encore relevé), puis tombe")
+	# Un silence raccourci (la fin du chargement : SILENCE_CHARGEMENT puis SILENCE_SESSION) repart de zéro
+	# pour chaque pair suivi : un poste figé au chargement n'a pas encore pu battre
+	hote.definir_silence(hote.SILENCE_CHARGEMENT)
+	maintenant = Time.get_ticks_msec()
+	hote._entendus[78] = maintenant - 15000  # muet depuis 15 s, toléré sous 30 s
+	hote._entendus[79] = maintenant + 500  # entendu plus tard que l'instant posé : jamais reculé
+	hote.definir_silence(hote.SILENCE_SESSION)
+	var pose: int = hote._entendus.get(78, 0)
+	hote._derniere_ecoute = maintenant
+	hote._ecouter(maintenant + 16)
+	_check(hote._entendus.has(78) and pose >= maintenant and hote._entendus.get(79, 0) == maintenant + 500,
+		"passer de 30 s à 10 s : un pair muet depuis 15 s n'est pas déclaré parti, son silence repart de zéro (instant posé à %+d ms)" % (pose - maintenant))
+	var silence_ms := int(hote.SILENCE_SESSION * 1000.0)
+	hote._ecouter(maintenant + silence_ms + 100)
+	hote._ecouter(maintenant + silence_ms + 200)
+	_check(not hote._entendus.has(78) and hote._entendus.has(79), "... il l'est s'il reste muet 10 s de plus")
+	var avant: Dictionary[int, int] = hote._entendus.duplicate()
+	hote.definir_silence(hote.SILENCE_CHARGEMENT)
+	_check(hote._entendus == avant, "un silence allongé ne touche à aucun instant")
 	hote.quitter()
 
 	var noeud := Node.new()

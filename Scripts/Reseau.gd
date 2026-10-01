@@ -361,9 +361,15 @@ func _clore_partants() -> void:
 
 
 ## Le silence toléré des pairs de cette session devient `secondes` (SILENCE_SESSION ou
-## SILENCE_CHARGEMENT). Le silence déjà écoulé compte : passer de SILENCE_CHARGEMENT à SILENCE_SESSION
-## déclare parti à la prochaine écoute un pair muet depuis plus de SILENCE_SESSION.
+## SILENCE_CHARGEMENT). Raccourci (la fin du chargement), le silence déjà écoulé ne compte plus : chaque
+## pair suivi a un délai de grâce neuf, `secondes` à partir de maintenant (un hôte figé au chargement, ou
+## un client figé après sa scène chargée, n'a pas encore pu battre quand l'intro passe à SILENCE_SESSION).
+## Allongé, rien d'autre ne change.
 func definir_silence(secondes: float) -> void:
+	if secondes < silence:
+		var maintenant := Time.get_ticks_msec()
+		for id: int in _entendus:
+			_entendus[id] = maxi(_entendus[id], maintenant)
 	silence = secondes
 
 
