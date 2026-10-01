@@ -2,7 +2,8 @@ class_name CodeSalle
 extends RefCounted
 ## Le code d'une salle de la signalisation (spec §2, §4.4 du jeu en ligne) : 6 caractères d'un alphabet
 ## sans 0/O ni 1/I/L, affiché « K7Q-2XM », et le lien d'invitation qui le porte (`?salle=K7Q2XM`).
-## Logique pure, sans autoload : la saisie d'un joueur se lit sans casse, sans espaces ni tirets (le
+## Logique pure, sans autoload : la saisie d'un joueur se lit sans casse, sans espaces ni tirets, ceux
+## qu'un copier-coller apporte compris (espace insécable, tirets typographiques, saut de ligne ; le
 ## Worker refuse le tiret : le jeu l'enlève) ; un caractère qu'on confond (0, O, 1, I, L) est refusé
 ## avec son propre message plutôt que remplacé en silence (un O lu comme un 0 mènerait chez un autre).
 
@@ -11,8 +12,13 @@ const ALPHABET := "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 const LONGUEUR := 6
 ## Les caractères qu'on prend pour d'autres, absents de l'alphabet.
 const CONFUSIONS := "01ILO"
-## Ce que la saisie ignore : espaces et tirets (« K7Q-2XM », « k7q 2xm »).
-const SEPARATEURS := " \t-"
+## Ce que la saisie ignore : espaces et tirets (« K7Q-2XM », « k7q 2xm »), et ce qu'un copier-coller
+## depuis un message ou un traitement de texte y met : saut de ligne (LF, CR), espace insécable (U+00A0)
+## et fine insécable (U+202F), trait d'union (U+2010) et trait d'union insécable (U+2011), tiret
+## numérique (U+2012), demi-cadratin (U+2013), cadratin (U+2014), signe moins (U+2212). « _ » et « . »
+## restent refusés : ce ne sont pas des tirets.
+const SEPARATEURS := " \t-" + char(0x0A) + char(0x0D) + char(0xA0) + char(0x202F) + char(0x2010) + char(0x2011) \
+	+ char(0x2012) + char(0x2013) + char(0x2014) + char(0x2212)
 ## Le paramètre de l'adresse de la page qui porte le code (`?salle=K7Q2XM`).
 const PARAMETRE := "salle"
 ## L'adresse de la page du jeu en ligne (spec §2), si le réglage `lelion/page/url` manque.
@@ -27,9 +33,9 @@ static var recherche_forcee := ""
 static var _page_lue := false
 
 
-## `texte` sans espaces ni tirets, ses lettres ASCII en majuscules ; rien d'autre ne change (un caractère
-## hors ASCII reste tel quel, et le code est alors refusé : aucune lettre accentuée ni « ſ » n'y devient
-## une lettre de l'alphabet).
+## `texte` sans ses SEPARATEURS (espaces, tirets, sauts de ligne), ses lettres ASCII en majuscules ;
+## rien d'autre ne change (un autre caractère hors ASCII reste tel quel, et le code est alors refusé :
+## aucune lettre accentuée, ni « ſ », ni le signe Kelvin n'y devient une lettre de l'alphabet).
 static func normaliser(texte: String) -> String:
 	var sortie := ""
 	for c in texte:

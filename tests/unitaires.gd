@@ -2474,14 +2474,20 @@ func _tester_code_salle() -> void:
 		and longueur_worker != null and longueur_worker.get_string(1).to_int() == CodeSalle.LONGUEUR,
 		"le même alphabet et la même longueur que le Worker (signalisation/src/code.js)")
 
-	# La saisie : sans casse, sans espaces ni tirets ; un caractère qu'on confond a son propre message
+	# La saisie : sans casse, sans espaces ni tirets (ceux d'un traitement de texte ou d'un message
+	# compris : espace insécable, tirets typographiques, saut de ligne d'un copier-coller) ; un caractère
+	# qu'on confond a son propre message
 	_check(CodeSalle.normaliser(" k7q-2xm ") == "K7Q2XM" and CodeSalle.normaliser("k7q 2\txm") == "K7Q2XM",
 		"la saisie se lit sans casse, sans espaces, tabulations ni tirets (%s)" % CodeSalle.normaliser(" k7q-2xm "))
-	var bons := ["K7Q2XM", "K7Q-2XM", "k7q-2xm", " K7Q 2XM ", "2345-67", "zzz-zzz"]
-	_check(bons.all(func(t: String) -> bool: return CodeSalle.erreur(t).is_empty()), "des codes bien formés (%s)" % [bons])
-	var format := ["", "K7Q2X", "K7Q-2XM9", "K7Q_2XM", "K7Q.2XM", "K7Q#2XM", "ſ7Q2XM", "K7Q–2XM", "ÉÀÇ2XM"]
+	var insecable := "K7Q" + char(0xA0) + "2XM"
+	var cadratin := "K7Q" + char(0x2014) + "2XM"
+	var saut_final := "K7Q-2XM" + char(0x0D) + char(0x0A)
+	var bons := ["K7Q2XM", "K7Q-2XM", "k7q-2xm", " K7Q 2XM ", "2345-67", "zzz-zzz", "K7Q–2XM", insecable, cadratin, saut_final]
+	_check(bons.all(func(t: String) -> bool: return CodeSalle.erreur(t).is_empty() and CodeSalle.normaliser(t).length() == 6),
+		"des codes bien formés, tiret demi-cadratin, espace insécable, tiret cadratin et saut de ligne final compris (%s)" % [bons.map(func(t: String) -> String: return CodeSalle.normaliser(t).c_escape())])
+	var format := ["", "K7Q2X", "K7Q-2XM9", "K7Q_2XM", "K7Q.2XM", "K7Q#2XM", "ſ7Q2XM", "ÉÀÇ2XM"]
 	_check(format.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
-		"mal formés : trop court, trop long, un autre séparateur (« _ », « . », tiret long), un caractère hors de l'alphabet, une lettre non ASCII qui ressemble à une lettre du code (« ſ »)")
+		"mal formés : trop court, trop long, un autre séparateur (« _ », « . »), un caractère hors de l'alphabet, une lettre non ASCII qui ressemble à une lettre du code (« ſ »)")
 	var confusions := ["K0Q2XM", "KOQ2XM", "K1Q2XM", "KIQ2XM", "KLQ2XM", "ko q2xm", "kl", "l7q2x"]
 	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
 		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
