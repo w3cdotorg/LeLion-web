@@ -2080,7 +2080,7 @@ func _tester_salon(params: Node) -> void:
 	await _appuyer(&"deplacer_droite", false)
 	Input.action_release("deplacer_droite")
 
-	# L'hôte seul : sa carte, les places libres, le niveau du titre, ses adresses ; aucun focus
+	# L'hôte seul : sa carte, les places libres, le niveau du titre, le code de la partie ; aucun focus
 	var c0: Dictionary = salon.cartes[0]
 	_check(root.content_scale_size == Vector2i(2000, 1125) and salon.cartes.size() == 6
 		and salon.cartes.all(func(c: Dictionary) -> bool: return c.cadre.visible), "le salon est en 16:9, une carte par place (6)")
@@ -2095,15 +2095,24 @@ func _tester_salon(params: Node) -> void:
 	_check(salon.cartes.slice(1).all(func(c: Dictionary) -> bool: return c.pseudo.text == tr("SALON_LIBRE") and c.lion.material == null),
 		"les autres places sont libres : une silhouette sans couleur")
 	_check(salon.titre_niveau.text == "Niveau : Métropole" and reseau.niveau_salon == 1 and salon.aide.text == tr("SALON_AIDE_HOTE")
-		and salon.adresses.visible and salon.etat.text == tr("SALON_ATTENTE_JOUEURS") and salon.bouton_demarrer.visible and salon.bouton_demarrer.disabled,
-		"le niveau choisi au titre, l'aide de l'hôte, ses adresses, Démarrer grisé : « Il faut au moins 2 joueurs pour démarrer. »")
-	_check(root.gui_get_focus_owner() == null and salon.bouton_retour.focus_mode == Control.FOCUS_NONE,
+		and salon.etat.text == tr("SALON_ATTENTE_JOUEURS") and salon.bouton_demarrer.visible and salon.bouton_demarrer.disabled,
+		"le niveau choisi au titre, l'aide de l'hôte, Démarrer grisé : « Il faut au moins 2 joueurs pour démarrer. »")
+	_check(salon.rangee_invitation.visible and salon.etiquette_code.text == "Code de la partie : 127.0.0.1:17797" and not salon.bouton_copier.visible
+		and salon.copier_lien().is_empty(), "sur le desktop, le code de la partie ENet (son adresse), sans lien à copier (%s)" % salon.etiquette_code.text)
+	_check(root.gui_get_focus_owner() == null and salon.bouton_retour.focus_mode == Control.FOCUS_NONE and salon.bouton_copier.focus_mode == Control.FOCUS_NONE,
 		"aucun contrôle ne prend le focus : flèches, croix, stick, vomir et démarrer vont au salon")
-	var adresses_lues: PackedStringArray = salon._adresses_hote
-	salon._adresses_hote = PackedStringArray(["10.9.9.9"])
+	# Une salle de la signalisation (le Web, phase 4) : son code, et « Copier le lien »
+	var code_enet: String = reseau.code_partie
+	reseau.code_partie = "K7Q2XM"
 	reseau.salon_change.emit()
-	_check(salon.adresses.text.contains("10.9.9.9"), "M4 : les adresses de l'hôte sont relevées une fois, à l'ouverture, pas à chaque changement du salon")
-	salon._adresses_hote = adresses_lues
+	_check(salon.etiquette_code.text == "Code de la partie : K7Q-2XM" and salon.bouton_copier.visible and salon.bouton_copier.text == "SALON_COPIER_LIEN",
+		"un code de salle : « Code de la partie : K7Q-2XM » et « Copier le lien », relus à chaque changement du salon (%s)" % salon.etiquette_code.text)
+	_check(salon.copier_lien() == "https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM" and salon.bouton_copier.text == "SALON_LIEN_COPIE"
+		and tr(salon.bouton_copier.text) == "Lien copié !", "Copier le lien : le lien d'invitation, et « Lien copié ! »")
+	await create_timer(salon.DUREE_LIEN_COPIE + 0.2).timeout
+	_check(salon.bouton_copier.text == "SALON_COPIER_LIEN", "%.0f s plus tard, le bouton redit « Copier le lien »" % salon.DUREE_LIEN_COPIE)
+	reseau.code_partie = code_enet
+	reseau.salon_change.emit()
 
 	# Une place réservée (poignée de main en cours) n'a pas de carte ; un joueur arrivé a la sienne
 	reseau.inscrits[7] = {"index": 2, "couleur": palette[2], "pseudo": "Rita", "arrive": false, "pret": false}
@@ -2198,13 +2207,13 @@ func _tester_salon(params: Node) -> void:
 		and reseau.manche_lancee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty(),
 		"le salon fermé ne laisse aucune connexion aux autoloads")
 
-	# Un client : ni niveau ni adresses ; l'hôte perdu ramène à l'écran Réseau, avec son message
+	# Un client : ni niveau ni code ; l'hôte perdu ramène à l'écran En ligne, avec son message
 	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est un client")
 	var salon_client: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
-	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.adresses.visible and not salon_client.bouton_demarrer.visible,
-		"un client : l'aide sans le niveau ni Démarrer, pas d'adresses, pas de bouton")
+	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible,
+		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton")
 	salon_client.changer_niveau(1)
 	salon_client.demarrer()
 	_check(reseau.niveau_salon == 0 and not reseau.manche_en_cours, "un client ne change pas le niveau et ne démarre pas la partie")
@@ -2224,23 +2233,23 @@ func _tester_salon(params: Node) -> void:
 			% [attente_client, attente_arrivee, salon_client.etat.text])
 	reseau.quitter()
 	reseau.hote_perdu.emit()
-	var ecran: Node = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.etat == ecran.Etat.ACCUEIL
-		and ecran.message.text == tr("RESEAU_HOTE_PERDU"), "hôte perdu : retour à l'écran Réseau, « L'hôte a quitté la partie »")
+	var ecran: Node = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.etat == ecran.Etat.ACCUEIL
+		and ecran.message.text == tr("RESEAU_HOTE_PERDU"), "hôte perdu : retour à l'écran En ligne, « L'hôte a quitté la partie »")
 	salon_client.free()
 	if ecran != null:
 		ecran.free()
 
-	# Échap (ou B) : quitte le réseau, écran Réseau sans message (celui de l'hôte perdu ne s'affiche
+	# Échap (ou B) : quitte le réseau, écran En ligne sans message (celui de l'hôte perdu ne s'affiche
 	# qu'une fois)
 	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est de nouveau un client")
 	salon_client = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
 	await _appuyer(&"ui_cancel", true)
-	ecran = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(not reseau.en_ligne() and ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.message.text.is_empty(),
-		"Échap (ou B) quitte le réseau et revient à l'écran Réseau, sans message")
+	ecran = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(not reseau.en_ligne() and ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.message.text.is_empty(),
+		"Échap (ou B) quitte le réseau et revient à l'écran En ligne, sans message")
 	salon_client.free()
 	if ecran != null:
 		ecran.free()
@@ -2249,9 +2258,9 @@ func _tester_salon(params: Node) -> void:
 	# trouvé personne)
 	var orphelin: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(orphelin)
-	ecran = await _attendre_scene("res://Scenes/EcranReseau.tscn")
-	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranReseau.tscn" and ecran.message.text == tr("RESEAU_HOTE_PERDU"),
-		"un salon ouvert hors réseau revient à l'écran Réseau avec « L'hôte a quitté la partie »")
+	ecran = await _attendre_scene("res://Scenes/EcranEnLigne.tscn")
+	_check(ecran != null and ecran.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran.message.text == tr("RESEAU_HOTE_PERDU"),
+		"un salon ouvert hors réseau revient à l'écran En ligne avec « L'hôte a quitté la partie »")
 	orphelin.free()
 	if ecran != null:
 		ecran.free()

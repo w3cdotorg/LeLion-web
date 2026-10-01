@@ -107,7 +107,9 @@ SALON_ATTENTE_HOTE,"Tout le monde est prêt : l'hôte peut démarrer.","Everyone
 SALON_DEMARRER,Démarrer la partie,Start the game
 SALON_AIDE,"Gauche/Droite : couleur   ·   Espace : prêt   ·   Échap : quitter","Left/Right: color   ·   Space: ready   ·   Esc: leave"
 SALON_AIDE_HOTE,"Gauche/Droite : couleur   ·   Haut/Bas : niveau   ·   Espace : prêt   ·   Tab : démarrer   ·   Échap : quitter","Left/Right: color   ·   Up/Down: level   ·   Space: ready   ·   Tab: start   ·   Esc: leave"
-SALON_ADRESSES,"Les autres te voient dans leur liste, ou tapent ton adresse : %s","Others see you in their list, or type your address: %s"
+SALON_CODE,Code de la partie : %s,Game code: %s
+SALON_COPIER_LIEN,Copier le lien,Copy link
+SALON_LIEN_COPIE,Lien copié !,Link copied!
 PAUSE_RESEAU,La partie continue,The game goes on
 QUITTER_PARTIE,Quitter la partie,Leave the game
 BATAILLE_JOUEUR,Joueur %d,Player %d

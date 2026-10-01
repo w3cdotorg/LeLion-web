@@ -9,14 +9,18 @@ extends Control
 ## Vomissez ! ») : chaque poste branche les règles de bataille et la table des joueurs
 ## (`GameState.configurer_bataille_reseau`), puis charge la scène de jeu. En 16:9 (spec §7).
 ##
-## Retour (ou Échap, B à la manette) quitte le réseau et ramène à l'écran Réseau ; un hôte perdu y
+## L'hôte voit le code de la partie (`Reseau.code_partie`, relu à chaque affichage) : un code de salle
+## (« K7Q-2XM ») et « Copier le lien », qui met le lien d'invitation dans le presse-papiers (spec §4.4) ;
+## sur le desktop de développement, l'adresse `ip:port` de l'hôte ENet, sans lien.
+##
+## Retour (ou Échap, B à la manette) quitte le réseau et ramène à l'écran En ligne ; un hôte perdu y
 ## ramène avec « L'hôte a quitté la partie ». Aucun contrôle ne prend le focus (les boutons se
 ## cliquent à la souris) : les flèches, la croix, le stick, vomir et démarrer arrivent tous à
 ## `_unhandled_input`.
 
 const SCENE_JEU := "res://Scenes/Main.tscn"
-const SCENE_RESEAU := "res://Scenes/EcranReseau.tscn"
-const _EcranReseau := preload("res://Scripts/EcranReseau.gd")
+const SCENE_EN_LIGNE := "res://Scenes/EcranEnLigne.tscn"
+const _EcranEnLigne := preload("res://Scripts/EcranEnLigne.gd")
 const TEXTURE_LION := preload("res://Assets/Sprites/LionHead.png")
 const SHADER_TEINTE := preload("res://Shaders/Lion.gdshader")
 ## Six cartes et leurs écarts tiennent dans les 2000 px ; un pseudo de 12 caractères larges
@@ -27,6 +31,8 @@ const COULEUR_BADGE := Color(1, 0.85, 0.2)
 const COULEUR_PRET := Color(0.55, 1.0, 0.55)
 const COULEUR_ATTENTE := Color(1, 1, 1, 0.55)
 const COULEUR_CONTOUR := Color(0.1, 0.05, 0.15, 1)
+## Secondes pendant lesquelles « Copier le lien » dit « Lien copié ! ».
+const DUREE_LIEN_COPIE := 2.0
 ## Actions du salon, prises à l'appui (voir `_unhandled_input`).
 const ACTIONS: Array[StringName] = [&"deplacer_gauche", &"deplacer_droite", &"deplacer_haut", &"deplacer_bas",
 	&"vomir", &"demarrer"]
@@ -38,7 +44,9 @@ var cartes: Array[Dictionary] = []
 @onready var rangee_cartes: HBoxContainer = $Centre/Colonne/Cartes
 @onready var etat: Label = $Centre/Colonne/Etat
 @onready var aide: Label = $Centre/Colonne/Aide
-@onready var adresses: Label = $Centre/Colonne/Adresses
+@onready var rangee_invitation: HBoxContainer = $Centre/Colonne/Invitation
+@onready var etiquette_code: Label = $Centre/Colonne/Invitation/Code
+@onready var bouton_copier: Button = $Centre/Colonne/Invitation/CopierLien
 @onready var bouton_demarrer: Button = $Centre/Colonne/Demarrer
 @onready var bouton_retour: Button = $BoutonRetour
 
@@ -49,9 +57,6 @@ var _lance := false
 ## relevées à l'ouverture (phase 18, M3 de la revue finale 13 : un stick déjà penché en arrivant, d'une
 ## manche ou de l'écran Résultats, n'agit pas une fois de lui-même).
 var _tenues: Dictionary[StringName, bool] = {}
-## Chez l'hôte, ses adresses (`Decouverte.adresses_hote`), relevées une fois à l'ouverture (phase 18, M4
-## de la revue finale 13 : pas à chaque changement du salon).
-var _adresses_hote := PackedStringArray()
 
 
 func _ready() -> void:
@@ -68,10 +73,9 @@ func _ready() -> void:
 	Parametres.langue_changee.connect(_sur_langue_changee)
 	if not Reseau.en_ligne():
 		# L'hôte est parti entre l'inscription et l'arrivée ici : son signal n'a trouvé personne.
-		_revenir_au_reseau.call_deferred(Reseau.raison_perte)
+		_revenir_a_l_ecran_en_ligne.call_deferred(Reseau.raison_perte)
 		return
 	if multiplayer.is_server():
-		_adresses_hote = Decouverte.adresses_hote(IP.get_local_interfaces())
 		Reseau.ouvrir_salon(GameState.niveau_courant)
 	_sur_salon_change()
 
@@ -136,12 +140,30 @@ func demarrer() -> void:
 		_afficher()
 
 
-## Quitte le réseau (l'hôte : ses clients le voient partir) et revient à l'écran Réseau.
+## Quitte le réseau (l'hôte : ses clients le voient partir) et revient à l'écran En ligne.
 ## `changer_scene` à faux pour les tests.
 func retour(changer_scene := true) -> void:
 	Reseau.quitter()
 	if changer_scene:
-		get_tree().change_scene_to_file(SCENE_RESEAU)
+		get_tree().change_scene_to_file(SCENE_EN_LIGNE)
+
+
+## L'hôte : met le lien d'invitation de sa salle dans le presse-papiers (spec §4.4). Sur le Web, l'API du
+## presse-papiers exige le geste d'un clic : c'est le clic sur le bouton qui appelle ceci. Le bouton dit
+## « Lien copié ! » DUREE_LIEN_COPIE secondes. Renvoie le lien copié (vide sans code de salle).
+func copier_lien() -> String:
+	if not CodeSalle.valide(Reseau.code_partie):
+		return ""
+	var lien := CodeSalle.lien(Reseau.code_partie)
+	if DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
+		DisplayServer.clipboard_set(lien)
+	bouton_copier.text = "SALON_LIEN_COPIE"
+	get_tree().create_timer(DUREE_LIEN_COPIE).timeout.connect(_remettre_bouton_copier)
+	return lien
+
+
+func _remettre_bouton_copier() -> void:
+	bouton_copier.text = "SALON_COPIER_LIEN"
 
 
 func _agir(action: StringName) -> void:
@@ -196,17 +218,17 @@ static func entrer_en_manche(arbre: SceneTree, fiches: Array[Dictionary]) -> voi
 
 
 func _sur_hote_perdu() -> void:
-	_revenir_au_reseau(Reseau.raison_perte)
+	_revenir_a_l_ecran_en_ligne(Reseau.raison_perte)
 
 
 func _sur_langue_changee(_langue: String) -> void:
 	_afficher()
 
 
-## Retour à l'écran Réseau, qui affiche le message `cle` en arrivant.
-func _revenir_au_reseau(cle: String) -> void:
-	_EcranReseau.message_a_l_arrivee = cle
-	get_tree().change_scene_to_file(SCENE_RESEAU)
+## Retour à l'écran En ligne, qui affiche le message `cle` en arrivant.
+func _revenir_a_l_ecran_en_ligne(cle: String) -> void:
+	_EcranEnLigne.message_a_l_arrivee = cle
+	get_tree().change_scene_to_file(SCENE_EN_LIGNE)
 
 
 func _afficher() -> void:
@@ -220,13 +242,9 @@ func _afficher() -> void:
 	var hote := multiplayer.is_server()
 	titre_niveau.text = tr("SALON_NIVEAU") % tr(GameState.NIVEAUX[Reseau.niveau_salon].nom)
 	aide.text = tr("SALON_AIDE_HOTE" if hote else "SALON_AIDE")
-	adresses.visible = hote
-	if hote:
-		# I1 (revue finale 12 bis) : triées par interface (physique d'abord), pas seulement par plage
-		# IPv4, sans quoi une carte virtuelle (bridge, vEthernet, VMware…) pouvait passer devant le
-		# Wi-Fi ; l'écran Réseau utilisait la même liste pour l'hébergement, le salon la reprend ici.
-		var liste := ", ".join(_adresses_hote)
-		adresses.text = tr("SALON_ADRESSES") % (liste if not liste.is_empty() else "?")
+	rangee_invitation.visible = hote and not Reseau.code_partie.is_empty()
+	etiquette_code.text = tr("SALON_CODE") % CodeSalle.formater(Reseau.code_partie)
+	bouton_copier.visible = CodeSalle.valide(Reseau.code_partie)
 	_afficher_etat()
 
 

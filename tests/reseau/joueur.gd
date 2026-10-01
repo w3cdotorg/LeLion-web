@@ -43,8 +43,8 @@ extends SceneTree
 ##   plus PERIODE_BALISE + DELAI_EXPIRATION (plus une marge) après le départ de l'hôte. Avec
 ##   --occupe : un second écouteur sur un port de balises déjà pris ; `ecouter()` doit renvoyer une
 ##   erreur sans planter (deux LeLion sur un même PC).
-## Salon (phase 13), par les vraies scènes : l'écran Réseau (Héberger, ou Rejoindre par IP vers
-##   127.0.0.1), qui passe la main au salon, puis la scène de jeu. Chaque poste écrit
+## Salon (phase 13), par les vraies scènes : l'écran En ligne (Créer une partie, ou Rejoindre avec le
+##   code « 127.0.0.1:--port »), qui passe la main au salon, puis la scène de jeu. Chaque poste écrit
 ##   « SALON OUVERT » à l'ouverture de son salon, note la ligne d'état du salon après chaque
 ##   `salon_change` (vérifiée à la fin), et écrit « MANCHE <empreinte> » une fois la scène de jeu
 ##   chargée (identifiant, pseudo et couleur de chaque index de `GameState.joueurs`, puis le
@@ -56,7 +56,7 @@ extends SceneTree
 ##   fois, il attend qu'un client repasse non prêt (le bouton se regrise), essaie quand même de
 ##   démarrer (« DEMARRAGE REFUSE » : la manche ne part pas) ; la seconde, il démarre.
 ##   Salon-client : --voir=N (attend d'avoir vu la table compter N joueurs : « SALON VU N »), puis
-##   --partir (quitte le salon par Retour : l'écran Réseau revient) ou --reste=M (attend que la
+##   --partir (quitte le salon par Retour : l'écran En ligne revient) ou --reste=M (attend que la
 ##   table compte M joueurs ; défaut 2), --couleur=S et --feu=chemin (« ATTEND LE FEU », puis
 ##   demande la couleur voisine dans le sens S au feu : « COULEUR <html> »), prêt ensuite ;
 ##   --annuler=chemin (une fois ce fichier créé, repasse non prêt : « PLUS PRET » ; puis se
@@ -126,7 +126,7 @@ extends SceneTree
 ##   --quitte quitte l'écran Résultats par Échap (« QUITTE », le titre) ; les autres le voient partir
 ##   (« DEPART VU ») ; l'hôte choisit Retour au salon : chacun y revient, la même table sans le partant,
 ##   personne prêt (« SALON <table> », la même ligne) ; puis l'hôte quitte le salon et l'autre client
-##   revient à l'écran Réseau, « L'hôte a quitté la partie ».
+##   revient à l'écran En ligne, « L'hôte a quitté la partie ».
 ##   Chrono-hôte : --clients=N, --niveau=L, --duree-manche=S, --duree-revanche=S, --revanche=chemin
 ##   (choisit Revanche une fois ce fichier créé par lancer.sh), --salon=chemin (Retour au salon, de même),
 ##   --rester=chemin (quitte le salon, de même).
@@ -543,7 +543,7 @@ func _jouer_ecouteur() -> void:
 
 
 ## Rôles « salon-hote » et « salon-client » (phase 13, voir l'en-tête) : un poste passe par l'écran
-## Réseau et le salon comme un joueur, jusqu'à la scène de jeu.
+## En ligne et le salon comme un joueur, jusqu'à la scène de jeu.
 func _jouer_salon(hote: bool) -> void:
 	var scores: Node = root.get_node("Scores")
 	var gs: Node = root.get_node("GameState")
@@ -553,17 +553,8 @@ func _jouer_salon(hote: bool) -> void:
 	reseau.salon_change.connect(func() -> void: _tailles_vues.append(reseau.table_salon.size()))
 	reseau.manche_lancee.connect(func(fiches: Array[Dictionary]) -> void: _fiches_manche.assign(fiches))
 	reseau.hote_perdu.connect(_ajouter_issue.bind("hote_perdu"))
-	change_scene_to_file("res://Scenes/EcranReseau.tscn")
-	_check(await _attendre(func() -> bool: return _scene_est("EcranReseau")), "l'écran Réseau s'ouvre")
-	var ecran: Node = current_scene
-	ecran.port_jeu = int(_option("port", "17777"))
-	ecran.champ_pseudo.text = reseau.pseudo
-	if hote:
-		ecran.heberger()
-	else:
-		ecran.champ_ip.text = "127.0.0.1"
-		ecran.rejoindre_par_ip()
-	_check(await _attendre(func() -> bool: return _scene_est("Salon")), "l'écran Réseau passe la main au salon")
+	await _ouvrir_la_partie(hote)
+	_check(await _attendre(func() -> bool: return _scene_est("Salon")), "l'écran En ligne passe la main au salon")
 	if not _scene_est("Salon"):
 		reseau.quitter()
 		return
@@ -643,10 +634,8 @@ func _animer_salon_client(salon: Node) -> bool:
 		print("SALON VU %d" % voir)
 	if _options.has("partir"):
 		salon.retour()
-		_check(await _attendre(func() -> bool: return _scene_est("EcranReseau")) and not reseau.en_ligne(),
-			"Retour quitte le réseau et ramène à l'écran Réseau")
-		if current_scene != null:
-			current_scene.free()  # son écoute des balises se ferme avec lui
+		_check(await _attendre(func() -> bool: return _scene_est("EcranEnLigne")) and not reseau.en_ligne(),
+			"Retour quitte le réseau et ramène à l'écran En ligne")
 		return false
 	var reste := int(_option("reste", "2"))
 	_check(await _attendre(func() -> bool: return reseau.table_salon.size() == reste), "la table compte %d joueurs (%s)" % [reste, _tailles_vues])
@@ -669,6 +658,23 @@ func _animer_salon_client(salon: Node) -> bool:
 		_check(await _attendre(func() -> bool: return FileAccess.file_exists(_option("relance", ""))), "lancer.sh relance (%s)" % _option("relance", ""))
 		salon.basculer_pret()
 	return true
+
+
+## L'écran En ligne, puis Créer une partie (l'hôte, ENet sur --port) ou Rejoindre avec le code
+## « 127.0.0.1:--port » (un client), comme un joueur.
+func _ouvrir_la_partie(hote: bool) -> void:
+	change_scene_to_file("res://Scenes/EcranEnLigne.tscn")
+	_check(await _attendre(func() -> bool: return _scene_est("EcranEnLigne")), "l'écran En ligne s'ouvre")
+	if not _scene_est("EcranEnLigne"):
+		return
+	var ecran: Node = current_scene
+	ecran.port_jeu = int(_option("port", "17777"))
+	ecran.champ_pseudo.text = reseau.pseudo
+	if hote:
+		ecran.creer_partie()
+	else:
+		ecran.champ_code.text = "127.0.0.1:%d" % ecran.port_jeu
+		ecran.rejoindre()
 
 
 func _scene_est(nom: String) -> bool:
@@ -803,7 +809,7 @@ func _jouer_manche(hote: bool) -> void:
 
 
 ## Du salon à la scène de jeu d'une manche (rôles « manche-… » et « bout-… »), par les vraies scènes :
-## l'écran Réseau (Héberger, ou Rejoindre par IP vers 127.0.0.1), le salon (l'hôte y choisit
+## l'écran En ligne (`_ouvrir_la_partie`), le salon (l'hôte y choisit
 ## --niveau, attend 1 + --clients joueurs et démarre quand tous sont prêts), puis la scène de jeu.
 ## Renvoie la scène de jeu, ou null si ce poste n'y arrive pas (il a alors quitté le réseau).
 func _rejoindre_la_manche(hote: bool) -> Node:
@@ -814,17 +820,8 @@ func _rejoindre_la_manche(hote: bool) -> Node:
 	script_manche.delai_chargement = float(_option("delai-chargement", str(script_manche.DELAI_CHARGEMENT)))
 	reseau.hote_perdu.connect(_ajouter_issue.bind("hote_perdu"))
 	reseau.joueur_parti.connect(_sur_depart)
-	change_scene_to_file("res://Scenes/EcranReseau.tscn")
-	_check(await _attendre(func() -> bool: return _scene_est("EcranReseau")), "l'écran Réseau s'ouvre")
-	var ecran: Node = current_scene
-	ecran.port_jeu = int(_option("port", "17777"))
-	ecran.champ_pseudo.text = reseau.pseudo
-	if hote:
-		ecran.heberger()
-	else:
-		ecran.champ_ip.text = "127.0.0.1"
-		ecran.rejoindre_par_ip()
-	_check(await _attendre(func() -> bool: return _scene_est("Salon")), "l'écran Réseau passe la main au salon")
+	await _ouvrir_la_partie(hote)
+	_check(await _attendre(func() -> bool: return _scene_est("Salon")), "l'écran En ligne passe la main au salon")
 	if not _scene_est("Salon"):
 		reseau.quitter()
 		return null
@@ -1420,12 +1417,12 @@ func _enchainer(premiere: Node, hote: bool, script_regles: Script) -> void:
 	if hote:
 		_check(await _attendre(func() -> bool: return FileAccess.file_exists(_option("rester", ""))), "lancer.sh laisse partir l'hôte")
 		salon.retour()
-		_check(await _attendre(func() -> bool: return _scene_est("EcranReseau")) and not reseau.en_ligne(), "l'hôte quitte le salon : l'écran Réseau, hors réseau")
+		_check(await _attendre(func() -> bool: return _scene_est("EcranEnLigne")) and not reseau.en_ligne(), "l'hôte quitte le salon : l'écran En ligne, hors réseau")
 	else:
-		_check(await _attendre(func() -> bool: return _scene_est("EcranReseau")) and not reseau.en_ligne()
+		_check(await _attendre(func() -> bool: return _scene_est("EcranEnLigne")) and not reseau.en_ligne()
 			and current_scene.message.text == tr("RESEAU_HOTE_PERDU"),
-			"l'hôte parti du salon : l'écran Réseau, « L'hôte a quitté la partie »")
-	change_scene_to_file("res://Scenes/Titre.tscn")  # l'écran Réseau écoute les balises : le titre, non
+			"l'hôte parti du salon : l'écran En ligne, « L'hôte a quitté la partie »")
+	change_scene_to_file("res://Scenes/Titre.tscn")  # le joueur en a fini : le titre
 	_check(await _attendre(func() -> bool: return _scene_est("Titre")), "puis le titre")
 
 
