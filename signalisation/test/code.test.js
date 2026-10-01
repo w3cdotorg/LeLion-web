@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ALPHABET, LONGUEUR_CODE, lireCode, tirerCode } from "../src/code.js";
 
 describe("alphabet des codes", () => {
@@ -21,9 +21,23 @@ describe("tirerCode", () => {
 		expect(vus.size).toBe(31);
 	});
 
-	it("ne tire pas deux fois le même code en 1000 tirages", () => {
+	it("1000 tirages : au plus un doublon (31⁶ codes ; deux doublons ou plus : ~1,6e-7)", () => {
 		const codes = new Set(Array.from({ length: 1000 }, tirerCode));
-		expect(codes.size).toBe(1000);
+		expect(codes.size).toBeGreaterThanOrEqual(999);
+	});
+
+	it("rejette les octets 248 à 255 (tirage sans biais) et garde 247", () => {
+		// 248 = 8 × 31 : un octet au-delà donnerait plus souvent les 8 premiers caractères.
+		const tirages = [
+			new Uint8Array([255, 254, 253, 252, 251, 250, 249, 248, 255, 254, 253, 252]),
+			new Uint8Array([247, 0, 1, 2, 3, 4, 248, 5, 6, 7, 8, 9]),
+		];
+		const espion = vi.spyOn(crypto, "getRandomValues").mockImplementation((tableau) => {
+			tableau.set(tirages.shift());
+			return tableau;
+		});
+		expect(tirerCode()).toBe("Z23456");
+		expect(espion).toHaveBeenCalledTimes(2);
 	});
 });
 
