@@ -10,6 +10,36 @@ function nouvelleFiche(role, id) {
 	return { role, id, fin: null };
 }
 
+const estTexte = (valeur) => typeof valeur === "string";
+const estIndex = (valeur) => Number.isInteger(valeur) && valeur >= 0;
+
+/** Les champs de chaque message relayé, en plus de `t` et `vers` : aucun autre n'est admis. */
+const RELAYES = {
+	offre: { sdp: estTexte },
+	reponse: { sdp: estTexte },
+	candidat: { media: estTexte, index: estIndex, nom: estTexte },
+};
+
+/** Le message décodé s'il est un objet JSON à champ `t` texte, sinon `null`. */
+function lire(message) {
+	if (typeof message !== "string") return null;
+	try {
+		const objet = JSON.parse(message);
+		return objet !== null && typeof objet === "object" && !Array.isArray(objet) && estTexte(objet.t) ? objet : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Vrai si `m` a exactement les champs `t`, `vers` (entier) et ceux de son type, bien typés. */
+function relayable(m) {
+	const champs = Object.hasOwn(RELAYES, m.t) ? RELAYES[m.t] : null; // ni « constructor » ni « __proto__ »
+	if (!champs || !Number.isInteger(m.vers)) return false;
+	const noms = Object.keys(m);
+	if (noms.length !== Object.keys(champs).length + 2) return false;
+	return noms.every((nom) => nom === "t" || nom === "vers" || (Object.hasOwn(champs, nom) && champs[nom](m[nom])));
+}
+
 export class Salle extends DurableObject {
 	constructor(ctx, env) {
 		super(ctx, env);
@@ -30,6 +60,11 @@ export class Salle extends DurableObject {
 
 	hote() {
 		return this.vivantes("hote")[0] ?? null;
+	}
+
+	/** Le client `id` encore suivi par la salle, ou `null`. */
+	client(id) {
+		return this.vivantes(String(id)).find((ws) => ws.deserializeAttachment().role === "client") ?? null;
 	}
 
 	async accueillirHote(code) {
@@ -67,6 +102,50 @@ export class Salle extends DurableObject {
 			sql.exec("INSERT INTO pairs (id) VALUES (?)", id);
 			return id;
 		}
+	}
+
+	async webSocketMessage(ws, message) {
+		const fiche = ws.deserializeAttachment();
+		if (!fiche || fiche.fin) return;
+		const m = lire(message);
+		if (m === null) return;
+		if (fiche.role === "hote") this.deLHote(m);
+		else this.duClient(fiche, m);
+	}
+
+	/** `ouvert` (la salle oublie ce client), ou un relais vers un client suivi ; le reste est ignoré. */
+	deLHote(m) {
+		if (m.t === "ouvert") {
+			if (Object.keys(m).length !== 2 || !Number.isInteger(m.id)) return;
+			const client = this.client(m.id);
+			if (client) this.oublier(client, "ouvert");
+			return;
+		}
+		if (!relayable(m)) return;
+		const client = this.client(m.vers);
+		const { vers, ...contenu } = m;
+		if (client) envoyer(client, { ...contenu, de: ID_HOTE });
+	}
+
+	/** Un relais vers l'hôte seulement, jamais vers un autre client ; le reste est ignoré. */
+	duClient(fiche, m) {
+		if (!relayable(m) || m.vers !== ID_HOTE) return;
+		const hote = this.hote();
+		const { vers, ...contenu } = m;
+		if (hote) envoyer(hote, { ...contenu, de: fiche.id });
+	}
+
+	/** La salle ne suit plus le client `ws` (`ouvert`, ou chassé) et le ferme ; `depart` à l'hôte sauf après `ouvert`. */
+	oublier(ws, raison) {
+		const fiche = ws.deserializeAttachment();
+		fiche.fin = raison;
+		ws.serializeAttachment(fiche);
+		if (raison !== "ouvert") {
+			envoyer(ws, { t: "erreur", raison });
+			const hote = this.hote();
+			if (hote) envoyer(hote, { t: "depart", id: fiche.id });
+		}
+		fermer(ws, raison);
 	}
 
 	async webSocketClose(ws) {
