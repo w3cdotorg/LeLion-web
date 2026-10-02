@@ -82,6 +82,7 @@ ENLIGNE_QUOTA,"Trop de parties en ce moment, réessaie plus tard.","Too many gam
 ENLIGNE_ECHEC_CANAL,Connexion impossible avec l'hôte (réseau trop restrictif ?),Can't connect to the host (network too restrictive?)
 ENLIGNE_INDISPONIBLE,"Pas encore de jeu en ligne dans cette version : il arrive bientôt.","No online play in this version yet: coming soon."
 ENLIGNE_REJOINDRE_IMPOSSIBLE,Impossible de rejoindre (erreur %d),Can't join (error %d)
+ENLIGNE_CREATION,Création de la partie…,Creating the game…
 SALON,Salon,Lobby
 SALON_NIVEAU,Niveau : %s,Level: %s
 SALON_HOTE,HÔTE,HOST
@@ -100,6 +101,8 @@ SALON_AIDE_HOTE,"Gauche/Droite : couleur   ·   Haut/Bas : niveau   ·   Espace 
 SALON_CODE,Code de la partie : %s,Game code: %s
 SALON_COPIER_LIEN,Copier le lien,Copy link
 SALON_LIEN_COPIE,Lien copié !,Link copied!
+SALON_SALLE_EXPIREE,Salle expirée : crée une nouvelle partie pour inviter,Room expired: create a new game to invite
+SALON_SALLE_FERMEE,Invitations coupées : crée une nouvelle partie pour inviter,Invitations closed: create a new game to invite
 PAUSE_RESEAU,La partie continue,The game goes on
 QUITTER_PARTIE,Quitter la partie,Leave the game
 BATAILLE_JOUEUR,Joueur %d,Player %d

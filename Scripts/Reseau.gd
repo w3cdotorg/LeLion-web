@@ -199,10 +199,11 @@ var raison_echec := ""
 ## Transport.ECHEC_EXPIREE, ou une autre raison), vide tant que la salle accueille ; le salon le dit à la
 ## place du code. La partie continue. Vide hors réseau et chez un client.
 var raison_salle_fermee := ""
-## Vrai si ce poste a un transport pour jouer en réseau : ENet hors du Web (le desktop de développement, les
-## tests) ; faux dans l'export Web jusqu'à `TransportWebRTC` (phase 4) : `creer_partie` et
-## `rejoindre_partie` y renvoient ERR_UNAVAILABLE sans rien ouvrir. Modifiable par les tests.
-var transport_disponible := not OS.has_feature("web")
+## Vrai si ce poste a un transport pour jouer en réseau : ENet sur le desktop (le développement, les
+## tests), WebRTC dans l'export Web (phase 4). Les tests le mettent à faux : `creer_partie` et
+## `rejoindre_partie` renvoient alors ERR_UNAVAILABLE sans rien ouvrir (le garde-fou d'une plateforme
+## sans transport, et son message à l'écran En ligne).
+var transport_disponible := true
 ## Si valide, fabrique le transport de chaque nouvelle session à la place de `_nouveau_transport`
 ## (`func(port: int) -> Transport`) : les tests y mettent un transport simulé. Invalide dans le jeu.
 var fabrique_transport := Callable()
@@ -306,7 +307,8 @@ func rejoindre(adresse: String, port := PORT) -> Error:
 
 ## Crée une partie (l'écran En ligne) : `heberger(port)` si ce poste a un transport pour jouer en réseau
 ## (`transport_disponible`), sinon ERR_UNAVAILABLE sans rien changer. Son code (`code_partie`) vient du
-## transport : `ip:port` en ENet, un code de salle en WebRTC (phase 4).
+## transport : `ip:port` en ENet, pendant l'appel ; un code de salle en WebRTC, plus tard, quand la salle de
+## la signalisation existe (`salon_change`), ou `connexion_echouee` si elle ne peut pas exister.
 func creer_partie(port := PORT) -> Error:
 	if not transport_disponible:
 		return ERR_UNAVAILABLE
@@ -314,7 +316,7 @@ func creer_partie(port := PORT) -> Error:
 
 
 ## Rejoint la partie `code` avec le transport de ce poste (l'écran En ligne) : un code de salle en WebRTC
-## (phase 4), le code `ip:port` (ou `ip`) d'un hôte en ENet. Un code que le transport refuse
+## (l'export Web, qui refuse une adresse `ip:port`), le code `ip:port` (ou `ip`) d'un hôte en ENet. Un code que le transport refuse
 ## (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution bloquerait le jeu), ou aucun transport
 ## (`transport_disponible` faux : ERR_UNAVAILABLE), ne change rien, pas même la session en cours. La
 ## réponse arrive par `inscrit`, `refuse` ou `connexion_echouee` (au plus tard après le délai du canal du
@@ -380,11 +382,13 @@ func quitter() -> void:
 	_issue_decidee = false
 
 
-## Le transport d'une nouvelle session : celui de `fabrique_transport` (les tests), sinon ENet (le
-## desktop, les tests ; WebRTC dans l'export Web, phase 4).
+## Le transport d'une nouvelle session (spec §3.1) : celui de `fabrique_transport` (les tests), sinon
+## WebRTC dans l'export Web (`port` n'y sert pas), ENet ailleurs (le desktop, les tests).
 func _nouveau_transport(port: int) -> Transport:
 	if fabrique_transport.is_valid():
 		return fabrique_transport.call(port)
+	if OS.has_feature("web"):
+		return TransportWebRTC.new()
 	return TransportENet.new(port, places)
 
 

@@ -6,16 +6,18 @@ extends Control
 ## Le code : sur le Web, un code de salle (`CodeSalle`, « K7Q-2XM », ou le lien d'invitation collé
 ## entier), refusé à la saisie s'il est mal formé ; sur le desktop de développement, l'adresse `ip:port`
 ## (ou `ip`) d'un hôte `TransportENet` (`codes_de_salle` faux). Sans transport pour jouer en réseau
-## (`Reseau.transport_disponible` : l'export Web avant la phase 4), Créer et Rejoindre le disent sans
-## rien ouvrir.
+## (`Reseau.transport_disponible` faux : les tests), Créer et Rejoindre le disent sans rien ouvrir.
 ##
-## Trois états : ACCUEIL (tout est permis), CONNEXION (en attente de l'hôte) et SALON (partie créée, ou
-## inscription reçue : en route vers le salon, tout reste grisé le temps du changement de scène). Retour
+## Quatre états : ACCUEIL (tout est permis), CREATION (la partie attend son code : en WebRTC, la salle de
+## la signalisation ; `Reseau.connexion_echouee` si elle ne vient pas), CONNEXION (en attente de l'hôte)
+## et SALON (partie créée, ou inscription reçue : en route vers le salon, tout reste grisé le temps du
+## changement de scène). Pendant une création ou une connexion, l'écran ne se fie pas à
+## `Reseau.en_ligne()` (faux chez un client WebRTC avant son identifiant), seulement aux signaux. Retour
 ## (ou Échap, B à la manette) annule l'état en cours, puis ramène au titre. Le salon revient ici avec un
 ## message (`message_a_l_arrivee`) si l'hôte est perdu ; le titre y vient avec le code du lien de la page
 ## (`code_a_l_arrivee`).
 
-enum Etat { ACCUEIL, CONNEXION, SALON }
+enum Etat { ACCUEIL, CREATION, CONNEXION, SALON }
 
 const SCENE_TITRE := "res://Scenes/Titre.tscn"
 const SCENE_SALON := "res://Scenes/Salon.tscn"
@@ -82,6 +84,7 @@ func _ready() -> void:
 	Reseau.refuse.connect(_sur_refus)
 	Reseau.connexion_echouee.connect(_sur_connexion_echouee)
 	Reseau.hote_perdu.connect(_sur_hote_perdu)
+	Reseau.salon_change.connect(_sur_salon_change)
 	Parametres.langue_changee.connect(_sur_langue_changee)
 	_changer_etat(Etat.ACCUEIL)
 	if not code_a_l_arrivee.is_empty():
@@ -104,6 +107,7 @@ func _exit_tree() -> void:
 	Reseau.refuse.disconnect(_sur_refus)
 	Reseau.connexion_echouee.disconnect(_sur_connexion_echouee)
 	Reseau.hote_perdu.disconnect(_sur_hote_perdu)
+	Reseau.salon_change.disconnect(_sur_salon_change)
 	Parametres.langue_changee.disconnect(_sur_langue_changee)
 
 
@@ -121,7 +125,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	retour()
 
 
-## Crée une partie avec le pseudo saisi (hors du Web, ENet sur `port_jeu`).
+## Crée une partie avec le pseudo saisi (hors du Web, ENet sur `port_jeu`) : le salon s'ouvre quand elle a
+## son code, tout de suite en ENet, à la salle de la signalisation en WebRTC (CREATION d'ici là).
 func creer_partie() -> void:
 	if etat != Etat.ACCUEIL:
 		return
@@ -134,6 +139,9 @@ func creer_partie() -> void:
 		_afficher_message("RESEAU_PORT_OCCUPE", [port_jeu], true)
 	elif erreur != OK:
 		_afficher_message("RESEAU_HEBERGER_IMPOSSIBLE", [erreur], true)
+	elif Reseau.code_partie.is_empty():
+		_changer_etat(Etat.CREATION)
+		_afficher_message("ENLIGNE_CREATION", [], false)
 	else:
 		_ouvrir_salon()
 
@@ -249,6 +257,12 @@ func _rendre_message() -> void:
 func _reprendre_focus_echec() -> void:
 	if _par_le_code:
 		champ_code.grab_focus()
+
+
+## La partie en création a son code (le `pret` du transport, qui émet `salon_change`) : le salon.
+func _sur_salon_change() -> void:
+	if etat == Etat.CREATION and not Reseau.code_partie.is_empty():
+		_ouvrir_salon()
 
 
 func _sur_inscription(_index: int, _couleur: Color) -> void:
