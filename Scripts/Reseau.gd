@@ -26,7 +26,10 @@ extends Node
 ## (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte comme chez un client,
 ## SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa scène ou compile ses
 ## shaders ne répond plus). Chez l'hôte, un client parti, muet ou exclu est libéré (`_liberer`, puis
-## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs.
+## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs. L'hôte
+## exclut un joueur du salon (phase 7 du jeu en ligne, spec §8.2 : `exclure_du_salon`, la croix de sa
+## carte) comme la barrière de chargement exclut un absent (`exclure`) : l'exclu l'apprend, part de
+## lui-même, et l'hôte le libère au plus tard peu après.
 ## `quitter()` part proprement (spec §5) : un adieu fiable (`_recevoir_adieu`), que l'autre côté traite
 ## aussitôt (l'hôte libère ce client, un client perd l'hôte), puis le transport ferme sa session une fois
 ## l'adieu envoyé (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est
@@ -118,12 +121,18 @@ const REFUS_PLEIN := "RESEAU_REFUS_PLEIN"
 const REFUS_MANCHE := "RESEAU_REFUS_MANCHE"
 const REFUS_DEMANDE := "RESEAU_REFUS_DEMANDE"
 ## Pourquoi l'hôte est perdu (`raison_perte`), en clés de traduction : il est parti (ou ne répond
-## plus), ou il a exclu ce poste (barrière de chargement, phase 18).
+## plus), il a exclu ce poste de la manche (la barrière de chargement, phase 18), ou du salon (phase 7 du
+## jeu en ligne : « L'hôte t'a exclu de la partie. »).
 const PERTE_HOTE := "RESEAU_HOTE_PERDU"
 const PERTE_EXCLU := "RESEAU_EXCLU"
+const PERTE_EXCLU_HOTE := "RESEAU_EXCLU_HOTE"
 ## Entre l'annonce de son exclusion à un joueur et sa libération par l'hôte, en secondes : le temps que
-## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même.
+## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même. À la barrière de
+## chargement, la manche attend ce départ ; au salon, rien ne l'attend : le délai y est plus long, pour
+## qu'une annonce retardée (une 4G qui la renvoie) arrive avant la fermeture, qui dirait sinon « L'hôte a
+## quitté la partie ».
 const DELAI_EXCLUSION := 0.5
+const DELAI_EXCLUSION_SALON := 2.0
 ## Pourquoi l'hôte ne peut pas encore démarrer la partie (`raison_attente`), en clés de traduction.
 const ATTENTE_JOUEURS := "SALON_ATTENTE_JOUEURS"
 const ATTENTE_ARRIVEE := "SALON_ATTENTE_ARRIVEE"
@@ -192,8 +201,8 @@ var numero_table := 0
 ## devancé (M6). Ce que charge chaque poste (`Salon.entrer_en_manche`). Valide d'un lancement au
 ## suivant ; remis à 0 par `quitter()`.
 var niveau_manche := 0
-## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE ou PERTE_EXCLU), posé juste
-## avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
+## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE, PERTE_EXCLU ou
+## PERTE_EXCLU_HOTE), posé juste avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
 var raison_perte := PERTE_HOTE
 ## Chez un client, ou chez l'hôte dont la partie n'a pas pu être créée : pourquoi la dernière connexion a
 ## échoué, posé juste avant `connexion_echouee` : la raison du transport (Transport.ECHEC_*), ou vide (la
@@ -244,9 +253,9 @@ var _connexion_en_cours := false
 ## (WebRTC : la salle de la signalisation) ; un échec ou une fermeture pendant ce temps est un échec de
 ## connexion : la partie n'a jamais existé.
 var _creation_en_cours := false
-## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
-## perte de l'hôte qui suit.
-var _exclu := false
+## Chez un client : la raison de son exclusion annoncée par l'hôte (`_recevoir_exclusion` : PERTE_EXCLU ou
+## PERTE_EXCLU_HOTE), jusqu'à la perte de l'hôte qui suit ; vide sinon.
+var _exclusion := ""
 ## Chez un client : la raison de l'échec du transport de la session (`Transport.echec`), jusqu'à l'échec
 ## de connexion qui suit (`raison_echec`).
 var _raison_transport := ""
@@ -383,7 +392,7 @@ func quitter() -> void:
 	places_reservees = 0
 	numero_table = 0
 	niveau_manche = 0
-	_exclu = false
+	_exclusion = ""
 	index_local = -1
 	couleur_locale = Color.TRANSPARENT
 	manche_en_cours = false
@@ -523,16 +532,32 @@ func _recevoir_adieu() -> void:
 		_decider("hote_perdu")
 
 
-## Chez l'hôte : le joueur `id` n'a pas chargé sa scène de jeu à temps (la barrière de la manche,
-## `Manche._exclure`) : il apprend son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU, pas
-## « L'hôte a quitté la partie ») et s'en va de lui-même ; DELAI_EXCLUSION plus tard, l'hôte le libère
+## Chez l'hôte : exclut le joueur `id`, qui n'a pas chargé sa scène de jeu à temps (la barrière de la
+## manche, `Manche._exclure`), ou que l'hôte exclut du salon (`par_l_hote`, `exclure_du_salon`) : il apprend
+## son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU ou PERTE_EXCLU_HOTE, pas « L'hôte a quitté la
+## partie ») et s'en va de lui-même ; DELAI_EXCLUSION (DELAI_EXCLUSION_SALON) plus tard, l'hôte le libère
 ## s'il est encore là (`_liberer` : figé, il n'a pas lu l'annonce) : son départ arrive par
 ## `joueur_parti`.
-func exclure(id: int) -> void:
+func exclure(id: int, par_l_hote := false) -> void:
 	if not multiplayer.is_server() or not multiplayer.get_peers().has(id):
 		return
-	_recevoir_exclusion.rpc_id(id)
-	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_liberer.bind(id, _generation))
+	_recevoir_exclusion.rpc_id(id, par_l_hote)
+	var delai := DELAI_EXCLUSION_SALON if par_l_hote else DELAI_EXCLUSION
+	get_tree().create_timer(delai, true).timeout.connect(_liberer.bind(id, _generation))
+
+
+## Chez l'hôte, depuis le salon (la croix de sa carte, spec §8.2) : exclut le joueur arrivé `id`, qui lit
+## « L'hôte t'a exclu de la partie. » et s'en va (`exclure`). Faux, sans rien faire, chez un client, pendant
+## une manche, pour l'hôte lui-même, un inconnu ou une place seulement réservée (pas de carte). Sans compte,
+## rien n'identifie durablement un joueur (spec §13) : un exclu peut revenir avec le code, en nouvel
+## arrivant, et l'hôte l'exclut de nouveau.
+func exclure_du_salon(id: int) -> bool:
+	var fiche: Dictionary = inscrits.get(id, {})
+	if not multiplayer.is_server() or manche_en_cours or id == multiplayer.get_unique_id() or fiche.is_empty() \
+			or not fiche.arrive or not multiplayer.get_peers().has(id):
+		return false
+	exclure(id, true)
+	return true
 
 
 ## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la
@@ -547,13 +572,14 @@ func _liberer(id: int, generation: int) -> void:
 	_transport.liberer(id)
 
 
-## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps) ; ce poste s'en va
-## aussitôt, et la perte de l'hôte le dit (`raison_perte` : PERTE_EXCLU). L'annonce est fiable, la
-## libération par l'hôte qui suit ne l'est pas (`_liberer`).
+## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps), ou du salon
+## (`par_l_hote` vrai) ; ce poste s'en va aussitôt, et la perte de l'hôte le dit (`raison_perte` :
+## PERTE_EXCLU, ou PERTE_EXCLU_HOTE). L'annonce est fiable, la libération par l'hôte qui suit ne l'est pas
+## (`_liberer`).
 @rpc("authority", "call_remote", "reliable")
-func _recevoir_exclusion() -> void:
+func _recevoir_exclusion(par_l_hote: Variant) -> void:
 	_entendre(multiplayer.get_remote_sender_id())
-	_exclu = true
+	_exclusion = PERTE_EXCLU_HOTE if par_l_hote is bool and par_l_hote else PERTE_EXCLU
 	_decider("hote_perdu")
 
 
@@ -1216,11 +1242,11 @@ func _decider(nom: StringName, arguments: Array = []) -> void:
 func _fermer_puis_emettre(nom: StringName, arguments: Array, generation: int) -> void:
 	if generation != _generation:
 		return
-	var exclu := _exclu
+	var exclusion := _exclusion
 	var raison_transport := _raison_transport
 	quitter()
 	if nom == &"hote_perdu":
-		raison_perte = PERTE_EXCLU if exclu else PERTE_HOTE
+		raison_perte = exclusion if not exclusion.is_empty() else PERTE_HOTE
 	elif nom == &"connexion_echouee":
 		raison_echec = raison_transport
 	callv("emit_signal", [nom] + arguments)

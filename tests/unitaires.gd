@@ -4,8 +4,8 @@ extends SceneTree
 
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
-const PROTOCOLE_VERSION := "0.20"
-const PROTOCOLE_EMPREINTE := 2553814265
+const PROTOCOLE_VERSION := "0.21"
+const PROTOCOLE_EMPREINTE := 1188810746
 
 
 func _init() -> void:
@@ -58,6 +58,7 @@ func _run() -> void:
 	_tester_mobile()
 	_tester_limites()
 	await _tester_demandes_salon()
+	await _tester_exclusion()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -1553,12 +1554,16 @@ func _tester_reseau_manche() -> void:
 	var raisons: Array[String] = []
 	var sur_perte := func() -> void: raisons.append(reseau.raison_perte)
 	reseau.hote_perdu.connect(sur_perte)
-	reseau._recevoir_exclusion()
+	reseau._recevoir_exclusion(false)
 	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._recevoir_exclusion(true)
+	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._recevoir_exclusion("oui")
 	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
 	reseau.hote_perdu.disconnect(sur_perte)
-	_check(raisons == [reseau.PERTE_EXCLU, reseau.PERTE_HOTE] and not reseau._exclu,
-		"l'hôte perdu après une exclusion : « exclu » ; la perte suivante, de nouveau « l'hôte a quitté la partie » (%s)" % [raisons])
+	_check(raisons == [reseau.PERTE_EXCLU, reseau.PERTE_HOTE, reseau.PERTE_EXCLU_HOTE, reseau.PERTE_EXCLU] and reseau._exclusion.is_empty(),
+		"l'hôte perdu après une exclusion : « exclu » ; la perte suivante, de nouveau « l'hôte a quitté la partie » ; phase 7 : exclu du salon par l'hôte, « L'hôte t'a exclu de la partie. » ; une annonce illisible, l'exclusion de la barrière (%s)" % [raisons])
 	_check(reseau.heberger(17788) == OK, "(pré-condition) l'hôte écoute de nouveau")
 	reseau.definir_silence(reseau.SILENCE_SESSION)
 	_check(reseau.silence == reseau.SILENCE_SESSION, "fin du chargement : silence de session")
@@ -2293,6 +2298,73 @@ func _tester_demandes_salon() -> void:
 	_check(await _attendre(func() -> bool: return not hote.inscrits.has(id_client), 1.0) and not hote._limite_salon.rejets.has(id_client),
 		"le client parti, l'hôte oublie son seau et ses rejets")
 	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : l'hôte exclut un joueur du salon (la croix de sa carte), entre
+## l'autoload, hôte, et un second poste client dans ce même processus : l'exclu lit « L'hôte t'a exclu de la
+## partie. » et s'en va de lui-même ; il revient avec le code, en nouvel arrivant, et l'hôte l'exclut de
+## nouveau ; un exclu qui ne s'en va pas est libéré par l'hôte DELAI_EXCLUSION_SALON plus tard.
+func _tester_exclusion() -> void:
+	print("-- Exclusion par l'hôte (phase 7)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var client := _poste_client("PosteExclu")
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Gêneur"
+	var port := 17783
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id: int = arrives[0] if arrives.size() == 1 else -1
+	_check(not hote.exclure_du_salon(1) and not hote.exclure_du_salon(4242) and not client.exclure_du_salon(1),
+		"refusée : l'hôte ne s'exclut pas lui-même, ni un inconnu ; un client n'exclut personne")
+	hote.manche_en_cours = true
+	var en_manche: bool = hote.exclure_du_salon(id)
+	hote.manche_en_cours = false
+	hote.inscrits[id].arrive = false
+	var reservee: bool = hote.exclure_du_salon(id)
+	hote.inscrits[id].arrive = true
+	await _attendre(func() -> bool: return false, 0.3)
+	_check(not en_manche and not reservee and pertes.is_empty() and client.en_ligne(),
+		"refusée pendant une manche (seul le salon a la croix), et pour une place seulement réservée (pas de carte)")
+	var exclu_a := Time.get_ticks_msec()
+	_check(hote.exclure_du_salon(id), "l'hôte exclut le client du salon")
+	var parti := await _attendre(func() -> bool: return pertes.size() == 1 and partis.size() == 1, 1.5)
+	var apres := Time.get_ticks_msec() - exclu_a
+	_check(parti and pertes == [client.PERTE_EXCLU_HOTE] and partis == [id] and not client.en_ligne() and not hote.inscrits.has(id)
+		and apres < int(hote.DELAI_EXCLUSION_SALON * 1000.0),
+		"l'exclu lit « L'hôte t'a exclu de la partie. » et s'en va de lui-même, en %d ms (avant le secours de l'hôte, %.0f s) ; sa place se libère"
+			% [apres, hote.DELAI_EXCLUSION_SALON])
+	# Sans compte, rien ne le retient : il revient avec le code, en nouvel arrivant, que l'hôte exclut de nouveau
+	_check(client.rejoindre("127.0.0.1", port) == OK and await _attendre(func() -> bool: return arrives.size() == 2, 3.0) and arrives[1] != id,
+		"l'exclu revient avec le code : accepté, en nouvel arrivant (un autre identifiant)")
+	_check(arrives.size() == 2 and hote.exclure_du_salon(arrives[1])
+		and await _attendre(func() -> bool: return pertes.size() == 2 and partis.size() == 2, 1.5) and pertes[1] == client.PERTE_EXCLU_HOTE,
+		"... et l'hôte l'exclut de nouveau : « L'hôte t'a exclu de la partie. »")
+	# Un exclu qui ne s'en va pas (figé, ou qui ignore l'annonce) : l'hôte le libère au bout de son délai
+	_check(client.rejoindre("127.0.0.1", port) == OK and await _attendre(func() -> bool: return arrives.size() == 3, 3.0),
+		"(pré-condition) il revient une troisième fois")
+	client._issue_decidee = true  # ce poste n'agira pas sur l'annonce
+	exclu_a = Time.get_ticks_msec()
+	_check(arrives.size() == 3 and hote.exclure_du_salon(arrives[2]), "(pré-condition) l'hôte l'exclut encore")
+	parti = await _attendre(func() -> bool: return partis.size() == 3, hote.DELAI_EXCLUSION_SALON + 2.0)
+	apres = Time.get_ticks_msec() - exclu_a
+	_check(parti and apres >= int(hote.DELAI_EXCLUSION_SALON * 1000.0) - 50 and apres <= int(hote.DELAI_EXCLUSION_SALON * 1000.0) + 1000,
+		"un exclu qui ne s'en va pas : l'hôte le libère au bout de %d ms (son délai de secours : %.0f s)" % [apres, hote.DELAI_EXCLUSION_SALON])
+	client._issue_decidee = false
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	client.hote_perdu.disconnect(sur_perte)
 	hote.quitter()
 	await _retirer_poste(client)
 	hote.pseudo = ""
