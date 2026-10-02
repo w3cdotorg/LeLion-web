@@ -4,7 +4,7 @@
 	"main": "src/index.js",
 	// Jamais sous 2026-04-07 : l'auto-réponse au ping après la fermeture, deleteAll qui efface l'alarme (phase 2).
 	"compatibility_date": "2026-10-01",
-	// L'adresse publique : https://lelion-signalisation.<sous-domaine>.workers.dev (phase 5) ; aucune adresse
+	// L'adresse publique : https://lelion-web.w3cdotorg.workers.dev (phase 5) ; aucune adresse
 	// de préversion (une par version déployée : autant d'adresses à surveiller pour rien).
 	"workers_dev": true,
 	"preview_urls": false,
