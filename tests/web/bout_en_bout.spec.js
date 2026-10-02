@@ -73,6 +73,9 @@ async function attendre(page, condition, message, delai = 30_000) {
 }
 
 test("une manche à trois pages par le lien d'invitation, un joueur exclu qui revient, les lions qui se croisent : même empreinte partout, départ de l'hôte vu @manche", async ({ browser }) => {
+	// Le plus long des tests : 216 s mesurés sur les 300 s du réglage commun, quand la machine est bridée
+	// (Chromium ralenti rend la manche de 14 s en plus de 60 s) ; une marge, sans toucher aux autres tests.
+	test.setTimeout(420_000);
 	const consoles = [];
 	const hote = await ouvrir(browser, "/", consoles);
 	await commander(hote, "duree", 14);
@@ -112,7 +115,8 @@ test("une manche à trois pages par le lien d'invitation, un joueur exclu qui re
 	await hote.mouse.click(salon.table[2].croix[0], salon.table[2].croix[1]);
 	// Sous Xvfb, sans gestionnaire de fenêtres, le clic monte la fenêtre de l'hôte au-dessus des autres : Firefox
 	// ne dessine plus celle d'Anna, entièrement couverte, et son jeu s'y fige (mesuré : 2 images en 3 s). Les
-	// fenêtres des invités remontent, dans leur ordre.
+	// fenêtres des invités remontent, dans leur ordre. Fait sous chaque navigateur (Chromium compris, sans dommage) :
+	// le test ne dépend pas du navigateur qui le joue.
 	for (const page of invites) await page.bringToFront();
 	const exclu = await attendre(bruno, (e) => e.scene === "EcranEnLigne" && e.pertes.includes(EXCLU), "Bruno, exclu, revient à l'écran En ligne");
 	expect(exclu.ecran.message).toBe(EXCLU);
