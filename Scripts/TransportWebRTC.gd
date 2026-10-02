@@ -23,9 +23,11 @@ extends Transport
 ## sans `ouvert`, ou un canal fermé DELAI_CANAL après `bienvenue`.
 ##
 ## Envois : en texte seulement (`send_text` : la salle ignore une trame binaire, et ne répond pas à un
-## `ping` binaire), par une file cadencée à ENVOIS_PAR_SECONDE (la salle chasse au-delà de 20 par
-## seconde ; six arrivées font environ 70 messages), dans l'ordre (une offre avant ses candidats).
-## Réception : tous les messages en attente sont lus, même la socket fermée ; leurs identifiants (des
+## `ping` binaire), par une file cadencée à ENVOIS_PAR_SECONDE, espacés d'ECART_ENVOIS au moins (la
+## salle chasse au-delà de 20 par seconde ; six arrivées font environ 70 messages), dans l'ordre (une offre
+## avant ses candidats), et seulement tant que la salle peut les relayer (`_signaler_vers`).
+## Réception : tous les messages en attente sont lus, même la socket fermée, jusqu'à la fin de la
+## signalisation (une `erreur`, une fermeture, le délai du canal d'un client) ; leurs identifiants (des
 ## flottants dans le JSON de Godot) deviennent des entiers (`decoder`). La raison d'une `erreur` est
 ## écrite au journal (spec §9) ; sans elle, la raison de la fermeture en tient lieu.
 ##
@@ -51,8 +53,10 @@ const DELAI_SIGNALISATION := 5.0
 ## §4.3 : 15 s, la moitié du délai d'arrivée de la salle).
 const DELAI_CANAL := 15.0
 ## Envois au plus dans toute seconde vers la salle (elle en admet 20 : un seau de 20 jetons, rempli de
-## 20 par seconde).
+## 20 par seconde), et l'écart minimal entre deux envois, en ms : sans lui, une rafale de 15 retardée par
+## TCP arriverait d'un coup, avec les suivantes, et viderait le seau de la salle, qui fermerait la socket.
 const ENVOIS_PAR_SECONDE := 15
+const ECART_ENVOIS := 50
 ## Période du `ping` de l'hôte, en secondes (la salle y répond sans se réveiller, spec §4.2), et son
 ## texte exact.
 const PERIODE_PING := 30.0
@@ -260,8 +264,11 @@ static func decoder(texte: String) -> Dictionary:
 	return message
 
 
-## Un message reçu de la salle (le texte d'une trame).
+## Un message reçu de la salle (le texte d'une trame) ; ignoré une fois la signalisation finie (son issue
+## est dite : rien de ce qui suit ne compte plus).
 func recevoir(texte: String) -> void:
+	if _signalisation_finie:
+		return
 	var message := decoder(texte)
 	if message.is_empty():
 		push_warning("Signalisation : message ignoré")
@@ -328,6 +335,7 @@ func _signalisation_perdue(raison: String) -> void:
 	if _hote and _identifie:
 		salle_fermee.emit(raison)
 	elif not _canal_ouvert:
+		_fin_canal = -1  # l'échec est dit : le délai du canal n'en ferait pas un second
 		echec.emit(raison)
 
 
@@ -339,6 +347,7 @@ func _surveiller(maintenant: int) -> void:
 		_signalisation_perdue(ECHEC_INJOIGNABLE)
 	if _fin_canal >= 0 and maintenant >= _fin_canal:
 		_fin_canal = -1
+		_signalisation_finie = true  # l'échec est dit : rien de reçu ensuite, ni la fermeture qui suit, ne compte
 		if _actif:
 			echec.emit(ECHEC_DELAI)
 	for id: int in _arrivees.keys():
@@ -351,11 +360,14 @@ func _surveiller(maintenant: int) -> void:
 
 
 ## Envoie les messages de la file à `maintenant` (ms), dans l'ordre, tant qu'il le peut : la socket
-## ouverte, et pas plus de ENVOIS_PAR_SECONDE dans la seconde qui précède.
+## ouverte, ECART_ENVOIS ms au moins après l'envoi précédent, et pas plus de ENVOIS_PAR_SECONDE dans la
+## seconde qui précède.
 func _vider_file(maintenant: int) -> void:
 	if not _socket_prete():
 		return
 	while not _file.is_empty():
+		if not _derniers_envois.is_empty() and maintenant - _derniers_envois[-1] < ECART_ENVOIS:
+			return
 		if _derniers_envois.size() == ENVOIS_PAR_SECONDE and maintenant - _derniers_envois[0] < 1000:
 			return
 		_ecrire(_file[0])
@@ -382,14 +394,15 @@ func _poser_pair(pair_session: WebRTCMultiplayerPeer) -> void:
 
 
 ## Chez l'hôte : le client `id` arrive ; sa connexion se crée avec les serveurs ICE `ice` de son arrivée
-## (des identifiants TURN neufs), son offre part, son canal a DELAI_CANAL pour s'ouvrir.
+## (des identifiants TURN neufs), son offre part, son canal a DELAI_CANAL pour s'ouvrir. Il est arrivant
+## avant `_relier` : une offre prête pendant l'appel part (`_signaler_vers`) ; plus sur une erreur.
 func _accueillir(id: int, ice: Array) -> void:
 	_ice = ice
+	_arrivees[id] = Time.get_ticks_msec() + int(DELAI_CANAL * 1000.0)
 	var erreur := _relier(id)
 	if erreur != OK:
+		_arrivees.erase(id)
 		push_error("TransportWebRTC : connexion impossible vers %d (erreur %d)" % [id, erreur])
-		return
-	_arrivees[id] = Time.get_ticks_msec() + int(DELAI_CANAL * 1000.0)
 
 
 ## Chez un client : son identifiant `id` est arrivé ; son pair naît (`pair_pret`), relié à l'hôte, dont
@@ -427,17 +440,28 @@ func _sur_pair_parti(id: int) -> void:
 
 
 ## La description locale `type` (« offer » chez l'hôte, « answer » chez un client) de la connexion vers
-## `id` est prête : posée, puis envoyée par la salle.
+## `id` est prête : posée, puis envoyée par la salle (si elle peut encore servir, `_signaler_vers`).
 func _sur_description(type: String, sdp: String, id: int) -> void:
 	var connexion: WebRTCPeerConnection = _connexions.get(id)
 	if connexion != null:
 		connexion.set_local_description(type, sdp)
-	_envoyer({"t": "offre" if type == "offer" else "reponse", "vers": id, "sdp": sdp})
+	if _signaler_vers(id):
+		_envoyer({"t": "offre" if type == "offer" else "reponse", "vers": id, "sdp": sdp})
 
 
-## Un candidat ICE local de la connexion vers `id`, envoyé par la salle.
+## Un candidat ICE local de la connexion vers `id`, envoyé par la salle (si elle peut encore servir).
 func _sur_candidat(media: String, index: int, nom: String, id: int) -> void:
-	_envoyer({"t": "candidat", "vers": id, "media": media, "index": index, "nom": nom})
+	if _signaler_vers(id):
+		_envoyer({"t": "candidat", "vers": id, "media": media, "index": index, "nom": nom})
+
+
+## Vrai si la salle doit encore porter la signalisation vers `id` : chez l'hôte, un arrivant au canal pas
+## encore ouvert (ni ouvert, ni parti, ni retiré) ; chez un client, tant que sa socket vit et que sa
+## signalisation n'est pas finie. Sinon, rien ne part : la salle ne le relaierait à personne.
+func _signaler_vers(id: int) -> bool:
+	if _hote:
+		return _arrivees.has(id)
+	return _ws != null and not _signalisation_finie
 
 
 ## Vrai si aucun canal d'aucun pair n'a encore de données à envoyer.
@@ -495,7 +519,8 @@ func _fermer_socket() -> void:
 
 
 ## Crée la connexion WebRTC vers `id` (les serveurs ICE `_ice`), l'ajoute au pair ; chez l'hôte, son
-## offre se prépare (`_sur_description`).
+## offre se prépare (`_sur_description`). Sur une erreur, rien ne reste : ni connexion, ni pair à moitié
+## ajouté.
 func _relier(id: int) -> Error:
 	var connexion := WebRTCPeerConnection.new()
 	var erreur := connexion.initialize(configuration_ice(_ice, relais))
@@ -508,7 +533,15 @@ func _relier(id: int) -> Error:
 		connexion.close()
 		return erreur
 	_connexions[id] = connexion
-	return connexion.create_offer() if _hote else OK
+	if not _hote:
+		return OK
+	erreur = connexion.create_offer()
+	if erreur != OK:
+		_connexions.erase(id)
+		connexion.close()
+		if _pair.has_peer(id):
+			_pair.remove_peer(id)
+	return erreur
 
 
 ## Retire l'arrivant `id`, au canal encore fermé (délai, `depart`) : sa connexion se ferme.

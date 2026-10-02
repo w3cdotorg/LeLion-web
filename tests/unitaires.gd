@@ -2811,6 +2811,18 @@ func _tester_transport_webrtc() -> void:
 	_check(hote.appels.slice(3) == ["relier 6", "retirer 6", "relier 7", "retirer 7"],
 		"un depart après ouvert est ignoré ; un arrivant parti, ou au canal fermé 15 s après son arrivée, est retiré (%s)" % [hote.appels.slice(3)])
 	hote._file.clear()
+	hote._sur_candidat("0", 1, "candidate:5", 5)
+	hote._sur_candidat("0", 1, "candidate:6", 6)
+	hote._sur_description("offer", "SDP-7", 7)
+	_check(hote._file.is_empty(), "rien ne part plus pour un pair au canal ouvert, parti ou retiré (%s)" % [hote._file])
+	hote.offre_synchrone = true
+	hote.recevoir('{"t":"arrivee","id":8,"ice":[]}')
+	_check(Array(hote._file) == ['{"sdp":"SDP-S","t":"offre","vers":8}'],
+		"une offre prête pendant la création de la connexion part quand même (%s)" % [hote._file])
+	hote.offre_synchrone = false
+	hote._retirer(8)
+	hote._arrivees.erase(8)
+	hote._file.clear()
 	hote._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.PERIODE_PING * 1000.0) + 1)
 	_check(Array(hote._file) == ['{"t":"ping"}'], "toutes les 30 s, l'hôte envoie le ping, ce texte exact")
 	hote.recevoir('{"t":"pong"}')
@@ -2818,6 +2830,9 @@ func _tester_transport_webrtc() -> void:
 	hote._sur_socket_fermee(1000, "expiree")
 	_check(hote.signaux == ["pret K7Q2XM", "salle_fermee expiree"] and hote.servir(),
 		"la salle expire après pret : seulement salle_fermee (une fois), la session continue (%s)" % [hote.signaux])
+	var appels_avant := hote.appels.size()
+	hote.recevoir('{"t":"arrivee","id":9,"ice":[]}')
+	_check(hote.appels.size() == appels_avant, "la signalisation finie, plus rien de reçu ne compte (%s)" % [hote.appels.slice(appels_avant)])
 	hote.quitter()
 	_check(not hote.servir() and hote.pair() == null and hote.appels[-1] == "fermer socket",
 		"quitter sans pair connecté : la socket se ferme, le transport aussi")
@@ -2858,6 +2873,11 @@ func _tester_transport_webrtc() -> void:
 		and Array(client._file) == ['{"sdp":"SDP-R","t":"reponse","vers":1}'],
 		"l'offre et les candidats de l'hôte s'appliquent (pas ceux d'un autre), sa réponse part (%s)" % [client.appels])
 	client._sur_socket_fermee(1000, "ouvert")
+	client._file.clear()
+	client._sur_candidat("0", 1, "candidate:7", 1)
+	client.recevoir('{"t":"candidat","de":1,"media":"0","index":1,"nom":"candidate:8"}')
+	_check(client._file.is_empty() and client.appels.size() == 3,
+		"la socket fermée (1000 ouvert), plus rien ne part ni ne s'applique par la salle (%s, %s)" % [client._file, client.appels])
 	client._sur_pair_connecte(1)
 	client._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
 	_check(client.signaux == ["pair_pret", "connecte"] and client.appels.count("fermer socket") == 0,
@@ -2871,6 +2891,7 @@ func _tester_transport_webrtc() -> void:
 	retarde.rejoindre("K7Q2XM")
 	retarde.recevoir('{"t":"bienvenue","id":43,"ice":[]}')
 	retarde.recevoir('{"t":"erreur","raison":"delai"}')
+	retarde._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)  # pas un second échec
 	var inconnu := TransportWebRTCSimule.new()
 	inconnu.rejoindre("K7Q2XM")
 	inconnu.recevoir('{"t":"erreur","raison":"inconnue"}')
@@ -2883,6 +2904,16 @@ func _tester_transport_webrtc() -> void:
 		and inconnu.signaux == ["echec inconnue"] and perdu.signaux == ["pair_pret", "echec injoignable"],
 		"un client échoue : canal fermé 15 s après bienvenue, erreur delai de la salle, salle inconnue, socket coupée avant ouvert (%s, %s, %s, %s)"
 		% [lent.signaux, retarde.signaux, inconnu.signaux, perdu.signaux])
+	var expire := TransportWebRTCSimule.new()
+	expire.rejoindre("K7Q2XM")
+	expire.recevoir('{"t":"bienvenue","id":45,"ice":[]}')
+	expire._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	expire.recevoir('{"t":"offre","de":1,"sdp":"SDP-T"}')
+	expire._sur_description("answer", "SDP-U", 1)
+	expire._sur_socket_fermee(1006, "")
+	_check(expire.signaux == ["pair_pret", "echec delai"] and expire.appels == ["relier 1"] and expire._file.is_empty(),
+		"le délai de 15 s du client finit sa signalisation : rien de reçu ni d'envoyé ensuite, sa fermeture n'est pas un second échec (%s, %s)"
+		% [expire.signaux, expire.appels])
 
 	# La file cadencée
 	var file := TransportWebRTCSimule.new()
@@ -2902,6 +2933,18 @@ func _tester_transport_webrtc() -> void:
 		and file.ecrits == range(20).map(func(i: int) -> String: return JSON.stringify({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})),
 		"la file attend la socket ouverte, puis envoie 15 messages au plus par seconde, tous, dans l'ordre (%d, %d, %d)"
 		% [avant_ouverture, en_une_seconde, file.ecrits.size()])
+	var espacee := TransportWebRTCSimule.new()
+	espacee.rejoindre("K7Q2XM")
+	for i in range(5):
+		espacee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	var instants: Array[int] = []
+	for t in range(200000, 200400, 10):  # une image toutes les 10 ms
+		var avant := espacee.ecrits.size()
+		espacee._vider_file(t)
+		for k in range(espacee.ecrits.size() - avant):
+			instants.append(t)
+	_check(instants == [200000, 200050, 200100, 200150, 200200],
+		"deux envois sont espacés de 50 ms au moins, en plus du plafond par seconde (une rafale retardée par TCP arriverait d'un coup à la salle) (%s)" % [instants])
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
@@ -3046,6 +3089,8 @@ class TransportWebRTCSimule extends TransportWebRTC:
 	var ecrits: Array[String] = []
 	var appels: Array[String] = []
 	var signaux: Array[String] = []
+	## Vrai : l'offre de l'hôte est prête pendant `_relier` (avant son retour).
+	var offre_synchrone := false
 
 	func _init() -> void:
 		pret.connect(func(code: String) -> void: signaux.append("pret " + code))
@@ -3056,6 +3101,7 @@ class TransportWebRTCSimule extends TransportWebRTC:
 
 	func _ouvrir_socket(adresse: String) -> Error:
 		url = adresse
+		_ws = WebSocketPeer.new()  # jamais relevée (`_servir_socket` ne fait rien) : seulement « ouverte »
 		return OK
 
 	func _servir_socket() -> void:
@@ -3069,10 +3115,13 @@ class TransportWebRTCSimule extends TransportWebRTC:
 
 	func _fermer_socket() -> void:
 		appels.append("fermer socket")
+		_ws = null
 
 	func _relier(id: int) -> Error:
 		_connexions[id] = null
 		appels.append("relier %d" % id)
+		if offre_synchrone and _hote:
+			_sur_description("offer", "SDP-S", id)
 		return OK
 
 	func _retirer(id: int) -> void:
