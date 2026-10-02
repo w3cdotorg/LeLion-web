@@ -1,8 +1,9 @@
 name: CI
 
 # Sur main et sur chaque PR : les tests, l'export Web en artefact ; rien n'est mis en ligne. Sur un tag vX.Y
-# (= application/config/version, spec §11), les mêmes jobs, puis, s'ils sont tous verts, le Worker
-# (wrangler deploy), puis la page (GitHub Pages) : l'artefact LeLion-web de ce passage, rien d'autre.
+# (= application/config/version, sur un commit de main, spec §11 : le job verifier-tag), les mêmes jobs, puis,
+# s'ils sont tous verts, le Worker (wrangler deploy), puis la page (GitHub Pages) : l'artefact LeLion-web de ce
+# passage, rien d'autre.
 on:
   push:
     branches: [main]
@@ -210,10 +211,34 @@ jobs:
           path: tests/web/playwright-report
           retention-days: 7
 
+  verifier-tag:
+    name: Le tag (la version du jeu, sur main)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # tout l'historique et origin/main, pour merge-base
+          persist-credentials: false
+
+      - name: Le tag est la version du jeu (application/config/version)
+        shell: bash
+        run: |
+          version="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' project.godot)"
+          [ -n "$version" ] && [ "$GITHUB_REF_NAME" = "v$version" ] \
+            || { echo "::error::le tag $GITHUB_REF_NAME n'est pas v$version (config/version de project.godot)"; exit 1; }
+
+      - name: Le commit du tag est sur main (un ancêtre de origin/main)
+        shell: bash
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::le commit $GITHUB_SHA du tag $GITHUB_REF_NAME n'est pas sur main : rien n'est déployé"; exit 1; }
+
   deploiement-worker:
     name: Déploiement du Worker (tag vX.Y)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test-et-export, signalisation, bout-en-bout]
+    needs: [verifier-tag, test-et-export, signalisation, bout-en-bout]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -224,12 +249,6 @@ jobs:
         working-directory: signalisation
     steps:
       - uses: actions/checkout@v5
-
-      - name: Le tag est la version du jeu (application/config/version)
-        shell: bash
-        run: |
-          version="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' ../project.godot)"
-          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::le tag $GITHUB_REF_NAME n'est pas v$version (project.godot)"; exit 1; }
 
       - name: Installer Node
         uses: actions/setup-node@v6
