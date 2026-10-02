@@ -18,7 +18,12 @@ extends Control
 ## Retour (ou Échap, B à la manette) quitte le réseau et ramène à l'écran En ligne ; un hôte perdu y
 ## ramène avec « L'hôte a quitté la partie ». Aucun contrôle ne prend le focus (les boutons se
 ## cliquent à la souris) : les flèches, la croix, le stick, vomir et démarrer arrivent tous à
-## `_unhandled_input`.
+## `_unhandled_input`, comme les boutons tactiles (`ControlesTactiles`, disposition SALON : les flèches
+## de la couleur et PRÊT, qui poussent leurs actions à l'appui).
+##
+## Mobiles (spec §6, `Parametres.mobile`) : Retour agrandi pour le doigt, l'état et l'aide (celle du
+## tactile) lisibles à l'échelle d'un téléphone. Sur un ordinateur, le bouton Plein écran (en haut à
+## droite : le navigateur exige le geste d'un clic).
 
 const SCENE_JEU := "res://Scenes/Main.tscn"
 const SCENE_EN_LIGNE := "res://Scenes/EcranEnLigne.tscn"
@@ -51,6 +56,8 @@ var cartes: Array[Dictionary] = []
 @onready var bouton_copier: Button = $Centre/Colonne/Invitation/CopierLien
 @onready var bouton_demarrer: Button = $Centre/Colonne/Demarrer
 @onready var bouton_retour: Button = $BoutonRetour
+@onready var bouton_plein_ecran: Button = $BoutonPleinEcran
+@onready var controles_tactiles: CanvasLayer = $ControlesTactiles
 
 ## Vrai une fois la manche lancée : plus rien ne se décide ici pendant le changement de scène.
 var _lance := false
@@ -61,12 +68,21 @@ var _lance := false
 var _tenues: Dictionary[StringName, bool] = {}
 
 
+## Avant les _ready des enfants : les contrôles tactiles se placent sur l'écran du salon (16:9).
+func _enter_tree() -> void:
+	Regles.appliquer_ecran(get_tree(), ReglesBataille.TAILLE_ECRAN)
+
+
 func _ready() -> void:
 	# Au retour de l'écran Résultats (phase 18), l'arbre est encore en pause (la fin de manche l'a figé).
 	get_tree().paused = false
 	for action in ACTIONS:
 		_tenues[action] = Input.is_action_pressed(action)
-	Regles.appliquer_ecran(get_tree(), ReglesBataille.TAILLE_ECRAN)
+	bouton_plein_ecran.visible = not Parametres.mobile
+	if Parametres.mobile:
+		Parametres.agrandir(bouton_retour, 40)
+		etat.add_theme_font_size_override("font_size", 48)
+		aide.add_theme_font_size_override("font_size", 40)
 	for i in range(EtatPartie.NB_JOUEURS_MAX):
 		cartes.append(_creer_carte())
 	Reseau.salon_change.connect(_sur_salon_change)
@@ -164,6 +180,11 @@ func copier_lien() -> String:
 	return lien
 
 
+## Sur un ordinateur : le plein écran, ou la fenêtre (le clic sur le bouton est le geste du navigateur).
+func basculer_plein_ecran() -> void:
+	Parametres.basculer_plein_ecran()
+
+
 func _remettre_bouton_copier() -> void:
 	bouton_copier.text = "SALON_COPIER_LIEN"
 
@@ -242,7 +263,7 @@ func _afficher() -> void:
 		_afficher_carte(cartes[i], par_index.get(i, {}), id_local)
 	var hote := multiplayer.is_server()
 	titre_niveau.text = tr("SALON_NIVEAU") % tr(GameState.NIVEAUX[Reseau.niveau_salon].nom)
-	aide.text = tr("SALON_AIDE_HOTE" if hote else "SALON_AIDE")
+	aide.text = tr("SALON_AIDE_HOTE" if hote else ("SALON_AIDE_TACTILE" if Parametres.mobile else "SALON_AIDE"))
 	rangee_invitation.visible = hote and not Reseau.code_partie.is_empty()
 	if Reseau.raison_salle_fermee.is_empty():
 		etiquette_code.text = tr("SALON_CODE") % CodeSalle.formater(Reseau.code_partie)

@@ -2189,8 +2189,125 @@ func _tester_mobile(params: Node) -> void:
 		and texte.mouse_filter == Control.MOUSE_FILTER_IGNORE and tr(texte.text) == "Tourne ton téléphone" and not paused,
 		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter ni mettre en pause" % voile.layer)
 	params.actualiser_voile(Vector2i(844, 390))
+	await _tester_tactile_mobile(params)
 	params.mobile = false
 	params.plein_ecran_demande = false
+
+
+## Phase 6 : les contrôles tactiles d'un mobile, en jeu (sur l'écran du solo et sur celui de la bataille)
+## et au salon (la couleur et Prêt au doigt, une action par appui), Retour agrandi ; sur ordinateur, le
+## bouton Plein écran du salon, et la rangée d'invitation loin du bas de l'écran.
+func _tester_tactile_mobile(params: Node) -> void:
+	var reseau: Node = root.get_node("Reseau")
+	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
+	var cible: int = params.CIBLE_TACTILE
+	# En jeu : le stick, VOMIR en bas à droite et la pause, sur l'écran du mode, chaque bouton à MARGE px des
+	# bords, de CIBLE_TACTILE px au moins
+	var places := {}
+	var dedans := true
+	for taille: Vector2i in [Vector2i(2000, 648), Vector2i(2000, 1125)]:
+		root.content_scale_size = taille
+		var jeu: CanvasLayer = load("res://Scenes/ControlesTactiles.tscn").instantiate()
+		root.add_child(jeu)
+		places[taille] = [jeu.bouton_vomir.position, jeu.bouton_pause.position]
+		for bouton: TouchScreenButton in [jeu.bouton_vomir, jeu.bouton_pause]:
+			var rect := Rect2(bouton.position, bouton.texture_normal.get_size() * bouton.scale)
+			dedans = dedans and rect.size.x >= cible and Rect2(Vector2.ONE * jeu.MARGE, Vector2(taille) - Vector2.ONE * 2 * jeu.MARGE).encloses(rect)
+		dedans = dedans and jeu.visible and jeu.joystick.visible and not jeu.bouton_gauche.visible and not jeu.bouton_droite.visible
+		jeu.free()
+	_check(dedans and places[Vector2i(2000, 648)] == [Vector2(1780, 428), Vector2(1780, 140)] and places[Vector2i(2000, 1125)] == [Vector2(1780, 905), Vector2(1780, 140)],
+		"en jeu, un mobile a le stick, VOMIR en bas à droite et la pause sous le HUD, à %d px des bords, de %d px au moins, sur l'écran du solo comme sur celui de la bataille (%s)" % [60, cible, places])
+
+	# Au salon, sur un mobile : les flèches de la couleur et PRÊT, ni stick ni pause ; Retour agrandi, pas de
+	# Plein écran
+	reseau.pseudo = "Mo"
+	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
+	var salon: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(salon)
+	await process_frame
+	var tactile: CanvasLayer = salon.controles_tactiles
+	_check(tactile.visible and tactile.disposition == tactile.Disposition.SALON and tactile.bouton_gauche.visible and tactile.bouton_droite.visible
+		and tactile.bouton_vomir.visible and not tactile.joystick.visible and not tactile.bouton_pause.visible and tr(tactile.etiquette_vomir.text) == "PRÊT"
+		and tactile.bouton_gauche.action == "deplacer_gauche" and tactile.bouton_droite.action == "deplacer_droite" and tactile.bouton_vomir.action == "vomir",
+		"au salon, un mobile a les flèches de la couleur et PRÊT, sans stick ni pause")
+	_check(not salon.bouton_plein_ecran.visible and salon.bouton_retour.size.y >= cible and salon.etat.get_theme_font_size("font_size") == 48
+		and salon.aide.get_theme_font_size("font_size") == 40, "un mobile n'a pas Plein écran ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
+	var centre := func(bouton: TouchScreenButton) -> Vector2: return bouton.position + bouton.texture_normal.get_size() / 2.0
+	await _toucher(centre.call(tactile.bouton_droite), true)
+	await _toucher(centre.call(tactile.bouton_droite), true, 1)  # un deuxième doigt sur la flèche déjà tenue
+	var tenue: Color = reseau.inscrits[1].couleur
+	await _toucher(centre.call(tactile.bouton_droite), false, 1)
+	await _toucher(centre.call(tactile.bouton_droite), false)
+	await _toucher(centre.call(tactile.bouton_droite), true)
+	await _toucher(centre.call(tactile.bouton_droite), false)
+	var deux_fois: Color = reseau.inscrits[1].couleur
+	await _toucher(centre.call(tactile.bouton_gauche), true)
+	await _toucher(centre.call(tactile.bouton_gauche), false)
+	_check(tenue == palette[1] and deux_fois == palette[2] and reseau.inscrits[1].couleur == palette[1],
+		"la flèche droite touchée : la couleur suivante, une seule fois tant qu'elle est tenue (même d'un deuxième doigt), puis encore ; la gauche : la précédente")
+	await _toucher(centre.call(tactile.bouton_vomir), true)
+	await _toucher(centre.call(tactile.bouton_vomir), false)
+	var pret: bool = reseau.inscrits[1].pret
+	await _toucher(centre.call(tactile.bouton_vomir), true)
+	await _toucher(centre.call(tactile.bouton_vomir), false)
+	_check(pret and not reseau.inscrits[1].pret, "PRÊT touché : prêt, puis plus prêt")
+	await _appuyer(&"deplacer_droite", true)
+	await _appuyer(&"deplacer_droite", false)
+	_check(reseau.inscrits[1].couleur == palette[2], "le clavier (et la manette) changent toujours la couleur à côté du tactile")
+	salon.retour(false)
+	salon.free()
+	# Un client (le seul rôle d'un mobile) : l'aide du tactile ; les boutons tactiles ne couvrent ni les
+	# cartes, ni l'état, ni le texte de l'aide
+	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est un client")
+	var client: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(client)
+	await process_frame
+	_check(client.aide.text == tr("SALON_AIDE_TACTILE") and tr("SALON_AIDE_TACTILE").begins_with("Flèches : ta couleur"),
+		"un client sur mobile lit l'aide du tactile : « %s »" % client.aide.text)
+	var couverts: Array[String] = []
+	for langue in ["fr", "en"]:
+		params.definir_langue(langue)
+		for cle in ["SALON_ATTENTE_JOUEURS", "SALON_ATTENTE_ARRIVEE", "SALON_ATTENTE_PRETS", "SALON_ATTENTE_HOTE"]:
+			client.etat.text = tr(cle)
+			await process_frame
+			for bouton: TouchScreenButton in [client.controles_tactiles.bouton_gauche, client.controles_tactiles.bouton_droite, client.controles_tactiles.bouton_vomir]:
+				var rect := Rect2(bouton.position, bouton.texture_normal.get_size())
+				for zone: Array in [["cartes", client.rangee_cartes.get_global_rect()], [cle, _rect_du_texte(client.etat)], ["aide", _rect_du_texte(client.aide)]]:
+					if rect.intersects(zone[1]):
+						couverts.append("%s sur %s (%s)" % [bouton.name, zone[0], langue])
+	params.definir_langue("fr")
+	_check(couverts.is_empty(), "les boutons tactiles ne couvrent ni les cartes, ni l'état (chacun de ses textes), ni l'aide d'un client, en français comme en anglais (%s)" % [couverts])
+	client.retour(false)
+	client.free()
+
+	# Sur ordinateur : pas de tactile (pas d'écran tactile ici), le bouton Plein écran en haut à droite ; la
+	# rangée d'invitation de l'hôte reste à 60 px au moins du bas de l'écran
+	params.mobile = false
+	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
+	reseau.code_partie = "K7Q2XM"
+	var bureau: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(bureau)
+	await process_frame
+	var plein: Rect2 = bureau.bouton_plein_ecran.get_global_rect()
+	_check(not bureau.controles_tactiles.visible and bureau.bouton_plein_ecran.visible and plein.end.x <= 2000 - 20 and plein.position.y <= 30
+		and bureau.bouton_plein_ecran.focus_mode == Control.FOCUS_NONE and tr(bureau.bouton_plein_ecran.text) == "Plein écran",
+		"sur ordinateur : pas de tactile, « Plein écran » en haut à droite, sans focus")
+	bureau.bouton_plein_ecran.pressed.emit()
+	_check(params.plein_ecran, "Plein écran, cliqué : le plein écran")
+	params.definir_plein_ecran(false)
+	var bas: float = bureau.rangee_invitation.get_global_rect().end.y
+	_check(bureau.rangee_invitation.visible and bas <= 1125 - 60, "la rangée d'invitation de l'hôte finit à %d px du bas de l'écran (60 au moins : la zone sûre)" % (1125 - bas))
+	bureau.retour(false)
+	bureau.free()
+	reseau.pseudo = ""
+	params.mobile = true
+
+
+## Le rectangle (px de l'écran) du texte d'une étiquette centrée sur une ligne, plus étroit qu'elle.
+func _rect_du_texte(etiquette: Label) -> Rect2:
+	var largeur: float = etiquette.get_theme_font("font").get_string_size(etiquette.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+		etiquette.get_theme_font_size("font_size")).x
+	return Rect2(etiquette.global_position + Vector2((etiquette.size.x - largeur) / 2.0, 0), Vector2(largeur, etiquette.size.y))
 
 
 ## Un toucher (ou son relâchement) du doigt `index` en `position` (px de l'écran du jeu), comme un écran
