@@ -54,7 +54,7 @@ minor-key theme for the painter.
 | Puke | Space, Enter | A | PUKE button, bottom right |
 | Pause (Resume / Settings / Back to menu) | Esc, P | Start | II button, top right |
 
-Touch controls only appear on devices with a touch screen. The **Settings** screen (title
+Touch controls appear on phones and on other touch screens. The **Settings** screen (title
 screen or pause menu) has music and sound-effect volumes, fullscreen, an optional CRT filter
 (scanlines, curvature, color bleed) and the language (French or English; the default follows
 your system). Difficulty, last level, settings and best
@@ -89,6 +89,10 @@ needs the signalling Worker (`signalisation/`, deployed with the page in a later
 `npm ci` in `signalisation/` (and in `tests/web/` for the end-to-end test below),
 `npm --prefix signalisation run dev` serves it on `ws://localhost:8787` (the `lelion/signalisation/url`
 project setting), and the Web export must be served from `http://localhost:<port>` (not `127.0.0.1`).
+Phones (Android, iOS) join only, by the link: no **Create a game**; their first touch goes full screen
+(a computer has a **Full screen** button in the lobby). In the lobby, the arrows pick a color and
+**READY** gets ready; in the round, the stick and **PUKE**. Held upright, a phone shows « Tourne ton
+téléphone » over the game, which keeps running.
 From the editor (`godot .`), desktop builds play over ENet instead: **Multiplayer** opens the Online
 screen, where one player creates a game and the others join it with the host's address as the code: the host's local IP
 address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
@@ -157,8 +161,9 @@ The network test needs GNU `timeout` (coreutils) and takes about three minutes; 
 a time (they share local ports).
 
 The end-to-end test plays a real online round in three browser pages (Chromium and Firefox; WebKit
-checks **Copy link**), on the "Web pilote" export and a local Worker that it starts itself
-(`python3` serves the export on port 8060, `wrangler dev` listens on 8787):
+checks **Copy link**; an emulated Android phone, in Chromium, joins a desktop host and plays by touch),
+on the "Web pilote" export and a local Worker that it starts itself (`python3` serves the export on
+port 8060, `wrangler dev` listens on 8787):
 
 ```sh
 godot --headless --export-release "Web pilote" export/web-pilote/index.html
@@ -179,7 +184,7 @@ docker run --rm --init -v "$PWD":/depot -v lelion-modules-signalisation:/depot/s
 Screenshots, with a real renderer (windows open while the scripts run):
 
 ```sh
-godot --path . --rendering-driver opengl3 --script tests/screenshots.gd -- --dossier=/output/path [--parties=solo,reseau,salon,bataille,resultats]
+godot --path . --rendering-driver opengl3 --script tests/screenshots.gd -- --dossier=/output/path [--parties=solo,reseau,salon,bataille,resultats,mobile]
 godot --path . --rendering-driver opengl3 --script tests/deux_fenetres.gd -- --role=hote --dossier=/output/path
 godot --path . --rendering-driver opengl3 --script tests/deux_fenetres.gd -- --role=client --dossier=/output/path
 godot --path . --rendering-driver opengl3 --fixed-fps 60 --script tests/bataille_test.gd -- --captures=/output/path

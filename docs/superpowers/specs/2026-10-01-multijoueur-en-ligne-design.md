@@ -142,7 +142,9 @@ retour au titre ne rouvre pas l'écran En ligne).
 - **Redondance des commandes**, prédiction du lion local, interpolation des lions distants : inchangées.
   Le banc de la prédiction gagne un **profil mobile** (150 ms de latence, 60 ms de gigue, 8 % de
   pertes) ; `InterpolationLion.RETARD` (6 ticks aujourd'hui) et les seuils de `PredictionLocale` ne
-  se règlent que sur ses mesures.
+  se règlent que sur ses mesures. Phase 6 : sous ce profil, le parcours tient les seuils du Wi-Fi (aucun
+  recalage, aucun à-coup, le lion distant à 4,83 à 6,44 px par tick pour 5,83), un étourdissement coûte
+  41,5 px de prédiction sans recalage, un choc un pas (5,83 px) : constantes inchangées.
 - **Onglet caché ou téléphone verrouillé** :
   - un client caché n'envoie plus rien : 10 s après, l'hôte le déclare parti (son lion disparaît, ses
     cellules restent, comme au LAN). À son retour, son poste voit « Tu as été déconnecté » et revient
@@ -165,6 +167,17 @@ retour au titre ne rouvre pas l'écran En ligne).
   (les navigateurs exigent un geste, `Parametres.gd` le respecte déjà).
 - Son : `audio/general/default_playback_type.web` en `Stream` (plantage de Safari iOS connu en
   lecture `Sample` après 10 à 30 min).
+- Tel que construit (phase 6) : la détection est `Parametres.mobile`, que les tests forcent (le desktop
+  n'a ni `web_android` ni `web_ios`). Une cible au doigt fait 150 px de l'écran du jeu au moins
+  (`Parametres.CIBLE_TACTILE` : 44 px CSS à l'échelle 0,30 d'un iPhone en paysage sous les barres de
+  Safari) ; les boutons tactiles restent à 60 px des bords (zone sûre). Écran En ligne d'un mobile : le
+  focus au premier contrôle visible, un champ en édition remonte en haut de l'écran au-dessus du
+  clavier virtuel (`html/experimental_virtual_keyboard`, dans les deux préréglages Web), Rejoindre agit à
+  l'appui ; le lien reste le chemin principal (coller y est peu fiable). Au salon, les flèches de la
+  couleur et PRÊT poussent leurs actions comme des touches : une action par appui (phase 18). Le voile
+  suit la taille de la fenêtre à chaque image ; il couvre l'écran du jeu, pas les bandes noires autour.
+  Le plein écran se demande une fois par page (Safari sur iPhone n'en a pas pour un canevas : rien ne
+  se passe).
 
 ## 7. Viewport, HUD, Résultats
 
@@ -270,7 +283,9 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   `http://localhost:8060`, le Worker en local (`wrangler dev`), 3 pages. Création, arrivée de deux pages
   par le lien, Prêt, manche de 10 s où chacun peint, même empreinte sur les 3 pages (lue dans la
   console), départ de l'hôte vu par les autres avant les 10 s de silence ; sous WebKit, *Copier le lien*
-  sous un vrai clic. L'exclusion d'un joueur s'y ajoute avec elle (phase 7). Le TURN ne se teste pas en
+  sous un vrai clic ; un mobile émulé par Chromium (Android en paysage) rejoint un hôte de bureau par le
+  lien et joue au doigt (Rejoindre, la couleur, PRÊT, le stick et VOMIR : de vrais touchers), voit le
+  voile en portrait (phase 6). L'exclusion d'un joueur s'y ajoute avec elle (phase 7). Le TURN ne se teste pas en
   local.
 - **Essai réel** : `docs/essai-en-ligne.md` (hôte sur ordinateur, au moins un mobile en 4G, un joueur
   dans un autre foyer ; une manche avec le relais TURN forcé par `?relais=1`, paramètre de
