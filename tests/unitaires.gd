@@ -55,6 +55,7 @@ func _run() -> void:
 	await _tester_parties_en_ligne()
 	await _tester_transport_tardif()
 	_tester_transport_webrtc()
+	_tester_mobile()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2189,6 +2190,19 @@ func _tester_manches_enchainees() -> void:
 	gs.partie_en_cours = false
 
 
+## Phase 6 du jeu en ligne (spec §6) : un mobile se reconnaît aux fonctionnalités `web_android` et
+## `web_ios` de l'export Web, que le desktop n'a pas ; le son du Web se lit en Stream (Safari iOS plante en
+## lecture Sample après 10 à 30 min).
+func _tester_mobile() -> void:
+	print("-- Mobiles (phase 6)")
+	var params: Node = root.get_node("Parametres")  # autoload : jamais nommé
+	_check(not params.mobile and params.tentatives_plein_ecran == 0 and not params.plein_ecran_obtenu and params.CIBLE_TACTILE == 150,
+		"le desktop n'est pas un mobile (ni web_android ni web_ios) ; une cible au doigt fait 150 px (44 px CSS à l'échelle 0,30 d'un iPhone en paysage sous les barres de Safari)")
+	# L'énumération du réglage : 0 Stream, 1 Sample (pas celle d'AudioServer.PlaybackType).
+	_check(ProjectSettings.get_setting("audio/general/default_playback_type.web") == 0,
+		"le son du Web se lit en Stream (audio/general/default_playback_type.web = 0), pas en Sample")
+
+
 ## Phase 19 (M7 de la revue de la phase 11) : `application/config/version` est aussi la version du
 ## protocole, présentée à la poignée de main ; deux postes de versions différentes se
 ## refusent (« Version différente de l'hôte »), deux postes de la même version doivent donc parler le même
@@ -2811,6 +2825,8 @@ func _tester_transport_webrtc() -> void:
 					if prereglages.get_value(paire[0], cle, null) != prereglages.get_value(paire[1], cle, null):
 						ecarts.append(cle)
 		_check(ecarts.is_empty(), "les deux préréglages sont identiques option par option, hors name, custom_features, export_path, runnable (%s)" % [ecarts])
+		_check(prereglages.get_value(web + ".options", "html/experimental_virtual_keyboard", false) == true,
+			"phase 6 : le clavier virtuel du navigateur s'ouvre sur un mobile pour taper le pseudo (html/experimental_virtual_keyboard)")
 		var exclus := func(section: String) -> PackedStringArray:
 			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
 		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
@@ -3005,6 +3021,73 @@ func _tester_transport_webrtc() -> void:
 			instants.append(t)
 	_check(instants == [200000, 200050, 200100, 200150, 200200],
 		"deux envois sont espacés de 50 ms au moins, en plus du plafond par seconde (une rafale retardée par TCP arriverait d'un coup à la salle) (%s)" % [instants])
+	# Phase 6 (note de la revue de la phase 4) : sur un appareil lent, une image dure plus de 50 ms ; la file
+	# rattrape les créneaux passés depuis l'image précédente, pas plus (une réponse et ses 8 candidats, à 2
+	# images par seconde : en 2 images, au lieu de 9), et la salle, un seau de 20 jetons rempli de 20 par
+	# seconde, n'est jamais à sec, quelle que soit la cadence des images.
+	var lente := TransportWebRTCSimule.new()
+	lente.rejoindre("K7Q2XM")
+	for i in range(9):
+		lente._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	var par_image: Array[int] = []
+	for t in range(300000, 302500, 500):  # 2 images par seconde
+		var avant := lente.ecrits.size()
+		lente._vider_file(t)
+		par_image.append(lente.ecrits.size() - avant)
+	_check(par_image == [1, 8, 0, 0, 0] and lente.ecrits.size() == 9,
+		"à 2 images par seconde, la file rattrape les créneaux de l'image écoulée (des dates espacées de 50 ms, dont le lot part d'un coup, pas des envois espacés de 50 ms en temps réel) : 9 messages en 2 images, pas en 9 (%s)" % [par_image])
+	var seaux := {}
+	for duree: int in [16, 200, 500, 1000]:
+		var cadencee := TransportWebRTCSimule.new()
+		cadencee.rejoindre("K7Q2XM")
+		for i in range(80):
+			cadencee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+		var seau := 20.0
+		var plus_bas := seau
+		var precedent := 400000
+		for t in range(400000, 412000, duree):
+			seau = minf(20.0, seau + (t - precedent) * 20.0 / 1000.0)
+			precedent = t
+			var avant := cadencee.ecrits.size()
+			cadencee._vider_file(t)
+			seau -= cadencee.ecrits.size() - avant
+			plus_bas = minf(plus_bas, seau)
+		seaux[duree] = [snappedf(plus_bas, 0.1), cadencee.ecrits.size()]
+	_check(seaux.values().all(func(v: Array) -> bool: return v[0] >= 0.0 and v[1] == 80),
+		"une image de 16, 200, 500 ou 1000 ms : les 80 messages partent, et le seau de la salle (20 jetons, 20 par seconde) n'est jamais à sec ({durée: [jetons au plus bas, envoyés]} %s)" % [seaux])
+	# Revue finale de la phase 6 : les créneaux d'une image longue sont des dates espacées de 50 ms, pas des
+	# envois espacés en temps réel : leur lot part d'un coup. Un gel de TCP retarde un lot sur le suivant, que
+	# la salle reçoit avec lui. À 1 image par seconde, un lot sur deux retardé sur le suivant (les pairs, ou
+	# les impairs) : 10 envois par image au plus (ENVOIS_PAR_IMAGE), deux lots à la fois 20 au plus, et le
+	# seau de la salle (20 jetons, 20 par seconde) n'est jamais à sec
+	var geles := {}
+	for retardes: int in [0, 1]:
+		var gelee := TransportWebRTCSimule.new()
+		gelee.rejoindre("K7Q2XM")
+		for i in range(80):
+			gelee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+		var seau := 20.0
+		var plus_bas := seau
+		var precedent := 500000
+		var en_retard := 0
+		var lots: Array[int] = []
+		for k in range(14):
+			var t := 500000 + k * 1000
+			var avant := gelee.ecrits.size()
+			gelee._vider_file(t)
+			var lot := gelee.ecrits.size() - avant
+			lots.append(lot)
+			if k % 2 == retardes:
+				en_retard += lot  # gelé : il arrive à la salle avec le lot suivant
+				continue
+			seau = minf(20.0, seau + (t - precedent) * 20.0 / 1000.0)
+			precedent = t
+			seau -= en_retard + lot
+			en_retard = 0
+			plus_bas = minf(plus_bas, seau)
+		geles[retardes] = [snappedf(plus_bas, 0.1), lots.max(), gelee.ecrits.size()]
+	_check(TransportWebRTC.ENVOIS_PAR_IMAGE == 10 and geles.values().all(func(v: Array) -> bool: return v[0] >= 0.0 and v[1] <= 10 and v[2] == 80),
+		"à 1 image par seconde, un lot sur deux gelé par TCP et reçu avec le suivant : 10 envois par image au plus, les 80 messages partent, le seau de la salle jamais à sec ({lots retardés: [jetons au plus bas, plus gros lot, envoyés]} %s)" % [geles])
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière

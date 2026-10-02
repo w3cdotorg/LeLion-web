@@ -159,6 +159,7 @@ func _run() -> void:
 	await _tester_ecran_en_ligne(scores, params)
 	await _tester_titre_reseau(scores)
 	await _tester_salon(params)
+	await _tester_mobile(params)
 
 	# Scores
 	_check(scores.enregistrer("skyline/facile", 50.0) == 0 and scores.meilleur_temps("metropole/facile") < 0.0
@@ -2143,6 +2144,402 @@ func _tester_salon(params: Node) -> void:
 	GS.niveau_courant = 0
 
 
+## Phase 6 du jeu en ligne (spec §6) : ce que fait un mobile (`Parametres.mobile`, forcé ici : le desktop
+## n'en est pas un), et le plein écran sur ordinateur ; `mobile` revient à faux à la fin.
+func _tester_mobile(params: Node) -> void:
+	print("-- Mobiles (phase 6)")
+	var scores: Node = root.get_node("Scores")
+	# Le plein écran d'un mobile : demandé au relâchement d'un toucher (`touchend` est un geste pour le
+	# navigateur, `touchstart` non), redemandé au relâchement suivant tant qu'il n'est pas obtenu,
+	# TENTATIVES_PLEIN_ECRAN fois au plus (Safari sur iPhone n'en a pas pour un canevas) ; plus rien une fois
+	# obtenu, même sorti du plein écran ; jamais sur ordinateur ; jamais mémorisé
+	var demandes := {}
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	demandes["ordinateur"] = params.tentatives_plein_ecran
+	params.mobile = true
+	await _toucher(Vector2(1000, 500), true)
+	demandes["appui"] = params.tentatives_plein_ecran
+	await _toucher(Vector2(1000, 500), false)
+	demandes["relâchement"] = params.tentatives_plein_ecran
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	demandes["relâchement suivant"] = params.tentatives_plein_ecran
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_WINDOWED)
+	var refuse: bool = params.plein_ecran_obtenu
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_FULLSCREEN)  # ce que `_process` lit de la fenêtre
+	var obtenu: bool = params.plein_ecran_obtenu
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_WINDOWED)  # le joueur en sort
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	demandes["obtenu, puis quitté"] = params.tentatives_plein_ecran
+	params.plein_ecran_obtenu = false
+	for i in range(3):
+		await _toucher(Vector2(1000, 500), true)
+		await _toucher(Vector2(1000, 500), false)
+	demandes["3 refus"] = params.tentatives_plein_ecran
+	_check(demandes == {"ordinateur": 0, "appui": 0, "relâchement": 1, "relâchement suivant": 2, "obtenu, puis quitté": 2, "3 refus": params.TENTATIVES_PLEIN_ECRAN}
+		and params.TENTATIVES_PLEIN_ECRAN == 3 and not refuse and obtenu and params.plein_ecran_obtenu == false
+		and not bool(scores.preference("plein_ecran", false)),
+		"un mobile demande le plein écran au relâchement d'un toucher (pas à l'appui), réessaie au suivant, 3 fois au plus, plus rien une fois obtenu (même quitté) ; un ordinateur jamais ; rien de mémorisé (%s)" % [demandes])
+	# Le bouton Plein écran d'un ordinateur bascule d'après la fenêtre (fenêtrée ici) : il la met en plein écran
+	params.basculer_plein_ecran()
+	_check(params.plein_ecran and bool(scores.preference("plein_ecran", false)), "Plein écran, depuis une fenêtre : le plein écran, mémorisé")
+	params.definir_plein_ecran(false)
+	# Une cible au doigt : 150 px de haut au moins, sa police agrandie
+	var bouton := Button.new()
+	bouton.custom_minimum_size = Vector2(260, 72)
+	params.agrandir(bouton, 44)
+	_check(bouton.custom_minimum_size == Vector2(260, params.CIBLE_TACTILE) and bouton.get_theme_font_size("font_size") == 44,
+		"agrandir : %d px de haut au moins, la police à 44 px" % params.CIBLE_TACTILE)
+	bouton.free()
+	# Le voile du portrait : sur un mobile tenu en portrait seulement, au-dessus des écrans et des contrôles
+	# tactiles, sous le filtre CRT ; il n'intercepte rien et n'arrête rien
+	var voile: CanvasLayer = params.voile
+	var vus := {}
+	for taille: Vector2i in [Vector2i(360, 640), Vector2i(844, 390), Vector2i(0, 0)]:
+		params.actualiser_voile(taille)
+		vus[taille] = voile.visible
+	params.mobile = false
+	params.actualiser_voile(Vector2i(360, 640))
+	var portrait_ordinateur: bool = voile.visible
+	params.mobile = true
+	params.actualiser_voile(Vector2i(360, 640))
+	var fond: ColorRect = voile.get_child(0)
+	var texte: Label = fond.get_child(0)
+	_check(vus == {Vector2i(360, 640): true, Vector2i(844, 390): false, Vector2i(0, 0): false} and not portrait_ordinateur,
+		"le voile ne couvre qu'un mobile en portrait (360×640) : ni en paysage (844×390), ni sans fenêtre, ni sur un ordinateur (%s)" % [vus])
+	_check(voile.layer > 9 and voile.layer < params.couche_crt.layer and fond.mouse_filter == Control.MOUSE_FILTER_IGNORE
+		and texte.mouse_filter == Control.MOUSE_FILTER_IGNORE and tr(texte.text) == "Tourne ton téléphone",
+		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter" % voile.layer)
+	# Le voile suit la fenêtre à chaque image (`_process`) : une taille neuve le relit (ici, sans fenêtre, 0×0 :
+	# plus de voile)
+	params._taille_fenetre = Vector2i(-1, -1)
+	var avant_image: bool = voile.visible
+	await process_frame
+	_check(avant_image and not voile.visible and params._taille_fenetre == DisplayServer.window_get_size(),
+		"à l'image suivante, le voile suit la taille de la fenêtre (%s) : sans fenêtre, plus de voile" % [DisplayServer.window_get_size()])
+	# Les textes du tactile, en anglais
+	params.definir_langue("en")
+	var anglais := [tr("VOILE_PORTRAIT"), tr("TACTILE_PRET"), tr("SALON_PLEIN_ECRAN"), tr("SALON_AIDE_TACTILE")]
+	params.definir_langue("fr")
+	_check(anglais == ["Turn your phone sideways", "READY", "Full screen", "Arrows: your color   ·   READY: ready or not"],
+		"les textes du tactile en anglais (%s)" % [anglais])
+	params.actualiser_voile(Vector2i(844, 390))
+	await _tester_tactile_mobile(params)
+	await _tester_en_ligne_mobile(params)
+	await _tester_resultats_mobile(params)
+	await _tester_pause_mobile(params)
+	params.mobile = false
+	params.tentatives_plein_ecran = 0
+	params.plein_ecran_obtenu = false
+
+
+## Phase 6 : les contrôles tactiles d'un mobile, en jeu (sur l'écran du solo et sur celui de la bataille)
+## et au salon (la couleur et Prêt au doigt, une action par appui), Retour agrandi ; sur ordinateur, le
+## bouton Plein écran du salon, et la rangée d'invitation loin du bas de l'écran.
+func _tester_tactile_mobile(params: Node) -> void:
+	var reseau: Node = root.get_node("Reseau")
+	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
+	var cible: int = params.CIBLE_TACTILE
+	# En jeu : le stick, VOMIR en bas à droite et la pause, sur l'écran du mode, chaque bouton à MARGE px des
+	# bords, de CIBLE_TACTILE px au moins
+	var places := {}
+	var dedans := true
+	for taille: Vector2i in [Vector2i(2000, 648), Vector2i(2000, 1125)]:
+		root.content_scale_size = taille
+		var jeu: CanvasLayer = load("res://Scenes/ControlesTactiles.tscn").instantiate()
+		root.add_child(jeu)
+		places[taille] = [jeu.bouton_vomir.position, jeu.bouton_pause.position]
+		for bouton: TouchScreenButton in [jeu.bouton_vomir, jeu.bouton_pause]:
+			var rect := Rect2(bouton.position, bouton.texture_normal.get_size() * bouton.scale)
+			dedans = dedans and rect.size.x >= cible and Rect2(Vector2.ONE * jeu.MARGE, Vector2(taille) - Vector2.ONE * 2 * jeu.MARGE).encloses(rect)
+		dedans = dedans and jeu.visible and jeu.joystick.visible and not jeu.bouton_gauche.visible and not jeu.bouton_droite.visible
+		jeu.free()
+	_check(dedans and places[Vector2i(2000, 648)] == [Vector2(1780, 428), Vector2(1780, 140)] and places[Vector2i(2000, 1125)] == [Vector2(1780, 905), Vector2(1780, 140)],
+		"en jeu, un mobile a le stick, VOMIR en bas à droite et la pause sous le HUD, à %d px des bords, de %d px au moins, sur l'écran du solo comme sur celui de la bataille (%s)" % [60, cible, places])
+	# La fenêtre perd le focus (un appel, un autre onglet) un pouce sur le stick et l'autre sur VOMIR : leurs
+	# relâchements n'arriveront jamais. Le stick revient au repos, prêt pour un nouveau doigt ; VOMIR est
+	# relâché, et se touche de nouveau ; les boutons restent affichés
+	var tenus: CanvasLayer = load("res://Scenes/ControlesTactiles.tscn").instantiate()
+	root.add_child(tenus)
+	await process_frame
+	var centre_vomir: Vector2 = tenus.bouton_vomir.position + tenus.bouton_vomir.texture_normal.get_size() / 2.0
+	await _toucher(Vector2(300, 800), true)
+	var glisse := InputEventScreenDrag.new()
+	glisse.index = 0
+	glisse.position = Vector2(400, 800)
+	root.push_input(glisse, true)
+	await _toucher(centre_vomir, true, 1)
+	var avant := [tenus.joystick.actif, Input.is_action_pressed("deplacer_droite"), Input.is_action_pressed("vomir"), tenus.bouton_vomir.is_pressed()]
+	root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	await process_frame
+	var apres := [tenus.joystick.actif, Input.is_action_pressed("deplacer_droite"), Input.is_action_pressed("vomir"), tenus.bouton_vomir.is_pressed()]
+	var affiches := [tenus.joystick.visible, tenus.bouton_vomir.visible, tenus.bouton_pause.visible, tenus.bouton_gauche.visible, tenus.bouton_droite.visible]
+	await _toucher(Vector2(300, 800), true, 2)
+	await _toucher(centre_vomir, true, 3)
+	var de_nouveau := [tenus.joystick.actif and tenus.joystick._index_touche == 2, tenus.bouton_vomir.is_pressed() and Input.is_action_pressed("vomir")]
+	await _toucher(Vector2(300, 800), false, 2)
+	await _toucher(centre_vomir, false, 3)
+	de_nouveau.append_array([tenus.joystick.actif, Input.is_action_pressed("vomir")])
+	tenus.free()
+	_check(avant == [true, true, true, true] and apres == [false, false, false, false] and affiches == [true, true, true, false, false]
+		and de_nouveau == [true, true, false, false],
+		"le focus perdu, doigts posés : le stick revient au repos et VOMIR est relâché (%s puis %s), les boutons restent (%s), de nouveaux doigts reprennent le stick et VOMIR, et les relâchent (%s)"
+			% [avant, apres, affiches, de_nouveau])
+
+	# Au salon, sur un mobile : les flèches de la couleur et PRÊT, ni stick ni pause ; Retour agrandi, pas de
+	# Plein écran
+	reseau.pseudo = "Mo"
+	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
+	var salon: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(salon)
+	await process_frame
+	var tactile: CanvasLayer = salon.controles_tactiles
+	_check(tactile.visible and tactile.disposition == tactile.Disposition.SALON and tactile.bouton_gauche.visible and tactile.bouton_droite.visible
+		and tactile.bouton_vomir.visible and not tactile.joystick.visible and not tactile.bouton_pause.visible and tr(tactile.etiquette_vomir.text) == "PRÊT"
+		and tactile.bouton_gauche.action == "deplacer_gauche" and tactile.bouton_droite.action == "deplacer_droite" and tactile.bouton_vomir.action == "vomir",
+		"au salon, un mobile a les flèches de la couleur et PRÊT, sans stick ni pause")
+	_check(not salon.bouton_plein_ecran.visible and salon.bouton_retour.size.y >= cible and salon.etat.get_theme_font_size("font_size") == 48
+		and salon.aide.get_theme_font_size("font_size") == 40, "un mobile n'a pas Plein écran ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
+	var centre := func(bouton: TouchScreenButton) -> Vector2: return bouton.position + bouton.texture_normal.get_size() / 2.0
+	await _toucher(centre.call(tactile.bouton_droite), true)
+	await _toucher(centre.call(tactile.bouton_droite), true, 1)  # un deuxième doigt sur la flèche déjà tenue
+	var tenue: Color = reseau.inscrits[1].couleur
+	await _toucher(centre.call(tactile.bouton_droite), false, 1)
+	await _toucher(centre.call(tactile.bouton_droite), false)
+	await _toucher(centre.call(tactile.bouton_droite), true)
+	await _toucher(centre.call(tactile.bouton_droite), false)
+	var deux_fois: Color = reseau.inscrits[1].couleur
+	await _toucher(centre.call(tactile.bouton_gauche), true)
+	await _toucher(centre.call(tactile.bouton_gauche), false)
+	_check(tenue == palette[1] and deux_fois == palette[2] and reseau.inscrits[1].couleur == palette[1],
+		"la flèche droite touchée : la couleur suivante, une seule fois tant qu'elle est tenue (même d'un deuxième doigt), puis encore ; la gauche : la précédente")
+	await _toucher(centre.call(tactile.bouton_vomir), true)
+	await _toucher(centre.call(tactile.bouton_vomir), false)
+	var pret: bool = reseau.inscrits[1].pret
+	await _toucher(centre.call(tactile.bouton_vomir), true)
+	await _toucher(centre.call(tactile.bouton_vomir), false)
+	_check(pret and not reseau.inscrits[1].pret, "PRÊT touché : prêt, puis plus prêt")
+	await _appuyer(&"deplacer_droite", true)
+	await _appuyer(&"deplacer_droite", false)
+	_check(reseau.inscrits[1].couleur == palette[2], "le clavier (et la manette) changent toujours la couleur à côté du tactile")
+	salon.retour(false)
+	salon.free()
+	# Un client (le seul rôle d'un mobile) : l'aide du tactile ; les boutons tactiles ne couvrent ni les
+	# cartes, ni l'état, ni le texte de l'aide
+	_check(reseau.rejoindre("127.0.0.1", 17796) == OK, "(pré-condition) ce poste est un client")
+	var client: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(client)
+	await process_frame
+	_check(client.aide.text == tr("SALON_AIDE_TACTILE") and tr("SALON_AIDE_TACTILE").begins_with("Flèches : ta couleur"),
+		"un client sur mobile lit l'aide du tactile : « %s »" % client.aide.text)
+	var couverts: Array[String] = []
+	for langue in ["fr", "en"]:
+		params.definir_langue(langue)
+		for cle in ["SALON_ATTENTE_JOUEURS", "SALON_ATTENTE_ARRIVEE", "SALON_ATTENTE_PRETS", "SALON_ATTENTE_HOTE"]:
+			client.etat.text = tr(cle)
+			await process_frame
+			for bouton: TouchScreenButton in [client.controles_tactiles.bouton_gauche, client.controles_tactiles.bouton_droite, client.controles_tactiles.bouton_vomir]:
+				var rect := Rect2(bouton.position, bouton.texture_normal.get_size())
+				for zone: Array in [["cartes", client.rangee_cartes.get_global_rect()], [cle, _rect_du_texte(client.etat)], ["aide", _rect_du_texte(client.aide)]]:
+					if rect.intersects(zone[1]):
+						couverts.append("%s sur %s (%s)" % [bouton.name, zone[0], langue])
+	params.definir_langue("fr")
+	_check(couverts.is_empty(), "les boutons tactiles ne couvrent ni les cartes, ni l'état (chacun de ses textes), ni l'aide d'un client, en français comme en anglais (%s)" % [couverts])
+	client.retour(false)
+	client.free()
+
+	# Sur ordinateur : pas de tactile (pas d'écran tactile ici), le bouton Plein écran en haut à droite ; la
+	# rangée d'invitation de l'hôte reste à 60 px au moins du bas de l'écran
+	params.mobile = false
+	_check(reseau.heberger(17797) == OK, "(pré-condition) ce poste héberge")
+	reseau.code_partie = "K7Q2XM"
+	var bureau: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(bureau)
+	await process_frame
+	var plein: Rect2 = bureau.bouton_plein_ecran.get_global_rect()
+	_check(not bureau.controles_tactiles.visible and bureau.bouton_plein_ecran.visible and plein.end.x <= 2000 - 20 and plein.position.y <= 30
+		and bureau.bouton_plein_ecran.focus_mode == Control.FOCUS_NONE and tr(bureau.bouton_plein_ecran.text) == "Plein écran",
+		"sur ordinateur : pas de tactile, « Plein écran » en haut à droite, sans focus")
+	bureau.bouton_plein_ecran.pressed.emit()
+	_check(params.plein_ecran, "Plein écran, cliqué : le plein écran")
+	params.definir_plein_ecran(false)
+	var bas: float = bureau.rangee_invitation.get_global_rect().end.y
+	_check(bureau.rangee_invitation.visible and bas <= 1125 - 60, "la rangée d'invitation de l'hôte finit à %d px du bas de l'écran (60 au moins : la zone sûre)" % (1125 - bas))
+	bureau.retour(false)
+	bureau.free()
+	reseau.pseudo = ""
+	params.mobile = true
+
+
+## Phase 6 : l'écran En ligne d'un mobile : sans Créer une partie, le focus au premier contrôle visible,
+## les cibles au doigt, la rangée en édition au-dessus du clavier virtuel ; sur ordinateur, rien ne change.
+func _tester_en_ligne_mobile(params: Node) -> void:
+	var scores: Node = root.get_node("Scores")
+	var cible: int = params.CIBLE_TACTILE
+	scores.definir_preference("pseudo", "MMMMMMMMMMMM")
+	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran.codes_de_salle = true
+	root.add_child(ecran)
+	await process_frame
+	_check(not ecran.bouton_creer.visible and not ecran.etiquette_ou.visible and ecran.bouton_rejoindre.has_focus(),
+		"sur un mobile, ni Créer une partie ni « ou rejoins… » ; à l'accueil, le focus va à Rejoindre, le premier contrôle visible")
+	var petits: Array[String] = []
+	for controle: Control in [ecran.champ_pseudo, ecran.champ_code, ecran.bouton_rejoindre, ecran.bouton_retour]:
+		if controle.size.y < cible:
+			petits.append("%s %d px" % [controle.name, controle.size.y])
+	var champ: LineEdit = ecran.champ_pseudo
+	var largeur_m: float = champ.get_theme_font("font").get_string_size("MMMMMMMMMMMM", HORIZONTAL_ALIGNMENT_LEFT, -1, champ.get_theme_font_size("font_size")).x
+	var colonne: Rect2 = ecran.get_node("Centre/Colonne").get_global_rect()
+	_check(petits.is_empty() and ecran.message.get_theme_font_size("font_size") == 44 and largeur_m <= champ.size.x - 30
+		and Rect2(0, 0, 2000, 1125).encloses(colonne) and ecran.bouton_rejoindre.action_mode == BaseButton.ACTION_MODE_BUTTON_PRESS,
+		"les champs, Rejoindre et Retour font %d px de haut au moins (%s), le message 44 px, 12 caractères larges tiennent dans le pseudo (%d px), tout dans l'écran ; Rejoindre agit à l'appui" % [cible, petits, largeur_m])
+	ecran.champ_code.text = ""
+	ecran._sur_pseudo_valide(ecran.champ_pseudo.text)
+	_check(ecran.champ_code.has_focus(), "Entrée dans le pseudo, sans code : le focus va au code (Créer une partie n'existe pas)")
+	# Le clavier virtuel couvre le bas de l'écran : la rangée en édition remonte en haut, le message dessous.
+	# Un champ entre en édition quand il prend le focus (au doigt, ou rendu par un refus : Godot 4.7) et en
+	# sort quand il le perd.
+	ecran.bouton_rejoindre.grab_focus()
+	ecran.champ_code.text = "K7Q2X"
+	ecran.rejoindre()
+	await process_frame
+	var rangee_code: Rect2 = ecran.champ_code.get_parent().get_global_rect()
+	var message: Rect2 = ecran.message.get_global_rect()
+	var pendant: float = ecran.centre.position.y
+	var en_edition: bool = ecran.champ_code.is_editing()
+	ecran.bouton_rejoindre.grab_focus()
+	await process_frame
+	var apres: float = ecran.centre.position.y
+	ecran.champ_pseudo.grab_focus()
+	await process_frame
+	var rangee_pseudo: Rect2 = ecran.champ_pseudo.get_parent().get_global_rect()
+	ecran.bouton_rejoindre.grab_focus()
+	await process_frame
+	_check(en_edition and pendant < 0.0 and rangee_code.position.y == ecran.MARGE_CLAVIER and message.end.y <= 1125 * 0.4 and ecran.message.text == tr("ENLIGNE_CODE_FORMAT")
+		and apres == 0.0 and rangee_pseudo.position.y == ecran.MARGE_CLAVIER and ecran.centre.position.y == 0.0,
+		"un refus rend le code en édition : sa rangée remonte à %d px du haut, le message dessous dans les 40 %% du haut (fin à %d px) ; le pseudo aussi ; tout redescend à la fin de l'édition"
+			% [ecran.MARGE_CLAVIER, message.end.y])
+	ecran.free()
+
+	# Sur ordinateur : Créer une partie et son focus, rien ne bouge en édition
+	params.mobile = false
+	var bureau: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	bureau.codes_de_salle = true
+	root.add_child(bureau)
+	await process_frame
+	bureau.champ_code.grab_focus()
+	await process_frame
+	_check(bureau.bouton_creer.visible and bureau.etiquette_ou.visible and bureau.centre.position.y == 0.0
+		and bureau.bouton_rejoindre.action_mode == BaseButton.ACTION_MODE_BUTTON_RELEASE and bureau.bouton_rejoindre.size.y < cible,
+		"sur ordinateur, l'écran En ligne ne change pas : Créer une partie, rien ne remonte en édition")
+	bureau.free()
+	params.mobile = true
+	scores.definir_preference("pseudo", "")
+
+
+## Phase 6 (revue finale) : l'écran Résultats d'un téléphone : Revanche, Niveau suivant, Salon, Quitter, Oui et
+## Non à la taille d'un doigt, sans les aides du clavier ; à 6 joueurs, tout tient dans l'écran (2000×1125) ;
+## sur ordinateur, rien ne change.
+func _tester_resultats_mobile(params: Node) -> void:
+	var cible: int = params.CIBLE_TACTILE
+	root.content_scale_size = Vector2i(2000, 1125)
+	GS.configurer_bataille(6)
+	var stats := [[3, 120, 9], [5, 340, 4], [0, 60, 12], [1, 0, 2], [2, 280, 4], [0, 10, 1]]  # un lauréat par titre
+	for i in range(6):
+		GS.joueurs[i].pseudo = "WWWWWWWWWWWW"
+		GS.joueurs[i].etourdissements_infliges = stats[i][0]
+		GS.joueurs[i].cellules_volees = stats[i][1]
+		GS.joueurs[i].chocs = stats[i][2]
+	var bilan := BilanManche.relever(GS.joueurs, [260, 410, 180, 90, 380, 30] as Array[int], [5] as Array[int],
+		{} as Dictionary[int, PackedByteArray], 89.5)
+	var ecran := Rect2(0, 0, 2000, 1125)
+	var vues := {}
+	var colonnes := {}  # la hauteur de la colonne, Oui et Non affichés
+	for mobile: bool in [true, false]:
+		params.mobile = mobile
+		var r: CanvasLayer = load("res://Scenes/Resultats.tscn").instantiate()
+		root.add_child(r)
+		r.afficher(bilan, true, true)
+		r.terminer_animation()
+		await process_frame
+		var hauts: Array = [r.bouton_revanche, r.bouton_suivant, r.bouton_salon, r.bouton_quitter].map(func(b: Button) -> int: return int(b.size.y))
+		var dedans: bool = ecran.encloses(r.get_node("Centre/Colonne").get_global_rect())
+		var aide: bool = r.aide.visible
+		r.choisir(&"quitter")  # l'hôte : la confirmation, Oui et Non à la place des choix
+		await process_frame
+		hauts.append_array([r.bouton_oui, r.bouton_non].map(func(b: Button) -> int: return int(b.size.y)))
+		dedans = dedans and ecran.encloses(r.get_node("Centre/Colonne").get_global_rect())
+		colonnes[mobile] = int(r.get_node("Centre/Colonne").size.y)
+		vues[mobile] = {"hauts": hauts, "dans l'écran": dedans, "aide": aide and r.aide.visible, "police": r.bouton_quitter.get_theme_font_size("font_size")}
+		r.free()
+	params.mobile = true
+	_check(vues[true].hauts.all(func(h: int) -> bool: return h >= cible) and vues[true]["dans l'écran"] and not vues[true].aide,
+		"sur un téléphone, l'écran Résultats a Revanche, Niveau suivant, Salon, Quitter, Oui et Non de %d px de haut au moins, sans les aides du clavier ; à 6 joueurs, tout tient dans l'écran (%s, la colonne %d px de haut, %d sur ordinateur)" % [cible, vues[true], colonnes[true], colonnes[false]])
+	_check(vues[false] == {"hauts": [68, 68, 68, 68, 68, 68], "dans l'écran": true, "aide": true, "police": 30},
+		"sur ordinateur, l'écran Résultats ne change pas : des boutons de 68 px, la police à 30 px, les aides du clavier (%s)" % [vues[false]])
+	GS.configurer_solo()
+	GS.nouvelle_partie()
+	GS.partie_en_cours = false
+	GS.pret = false
+
+
+## Phase 6 (revue finale) : le menu pause d'un téléphone en ligne (l'écran 16:9) : Continuer, Réglages et
+## Quitter la partie à la taille d'un doigt, sans « Échap pour reprendre » ; en solo (2000×648, trois
+## boutons de 150 px déborderaient) et sur ordinateur, rien ne change.
+func _tester_pause_mobile(params: Node) -> void:
+	var reseau: Node = root.get_node("Reseau")
+	var cible: int = params.CIBLE_TACTILE
+	var vues := {}
+	for cas: Array in [["mobile en ligne", true, true], ["mobile en solo", true, false], ["ordinateur en ligne", false, true]]:
+		params.mobile = cas[1]
+		if cas[2]:
+			_check(reseau.heberger(17797) == OK, "(pré-condition, %s) ce poste héberge" % cas[0])
+		root.content_scale_size = Vector2i(2000, 1125) if cas[2] else Vector2i(2000, 648)
+		var menu: CanvasLayer = load("res://Scenes/PauseMenu.tscn").instantiate()
+		root.add_child(menu)
+		menu.ouvrir()
+		await process_frame
+		var colonne: Rect2 = menu.get_node("Centre/Colonne").get_global_rect()
+		vues[cas[0]] = {"hauts": ["Continuer", "Reglages", "Menu"].map(func(n: String) -> int: return int(menu.get_node("Centre/Colonne/" + n).size.y)),
+			"aide": menu.get_node("Centre/Colonne/Aide").visible, "dans l'écran": Rect2(Vector2.ZERO, Vector2(root.content_scale_size)).encloses(colonne)}
+		menu.reprendre()
+		menu.free()
+		if cas[2]:
+			reseau.quitter()
+	params.mobile = true
+	root.content_scale_size = Vector2i(2000, 1125)
+	_check(vues["mobile en ligne"].hauts.all(func(h: int) -> bool: return h >= cible) and not vues["mobile en ligne"].aide and vues["mobile en ligne"]["dans l'écran"],
+		"sur un téléphone en ligne, le menu pause a Continuer, Réglages et Quitter la partie de %d px de haut au moins, sans « Échap pour reprendre » (%s)" % [cible, vues["mobile en ligne"]])
+	var inchange := {"hauts": [64, 64, 64], "aide": true, "dans l'écran": true}
+	_check(vues["mobile en solo"] == inchange and vues["ordinateur en ligne"] == inchange and not paused,
+		"en solo (2000×648) et sur ordinateur, le menu pause ne change pas (%s, %s)" % [vues["mobile en solo"], vues["ordinateur en ligne"]])
+
+
+## Le rectangle (px de l'écran) du texte d'une étiquette centrée sur une ligne, plus étroit qu'elle.
+func _rect_du_texte(etiquette: Label) -> Rect2:
+	var largeur: float = etiquette.get_theme_font("font").get_string_size(etiquette.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+		etiquette.get_theme_font_size("font_size")).x
+	return Rect2(etiquette.global_position + Vector2((etiquette.size.x - largeur) / 2.0, 0), Vector2(largeur, etiquette.size.y))
+
+
+## Un toucher (ou son relâchement) du doigt `index` en `position` (px de l'écran du jeu), comme un écran
+## tactile l'envoie, puis une image.
+func _toucher(position: Vector2, appui: bool, index := 0) -> void:
+	_pousser_toucher(position, appui, index)
+	await process_frame
+
+
+## Le même toucher, reçu tout de suite, sans attendre d'image.
+func _pousser_toucher(position: Vector2, appui: bool, index := 0) -> void:
+	var toucher := InputEventScreenTouch.new()
+	toucher.index = index
+	toucher.position = position
+	toucher.pressed = appui
+	root.push_input(toucher, true)  # coordonnées du viewport, pas de la fenêtre
+
+
 ## Un appui (ou un relâchement) de `action`, comme le clavier ou la manette l'envoient au jeu.
 func _appuyer(action: StringName, appuye: bool) -> void:
 	var evenement := InputEventAction.new()
@@ -2282,12 +2679,29 @@ func _tester_manche_reseau() -> void:
 		GS.joueurs[1].cellules_volees = 17
 		var bilans_vus: Array = []
 		manche.bilan_recu.connect(func(b: RefCounted) -> void: bilans_vus.append(b))
+		# Les contrôles tactiles de la manche, affichés comme sur un mobile, un pouce sur le stick et l'autre sur
+		# VOMIR au gong (sans attendre d'image : rien d'autre ne doit partir avant la fin, I2 ci-dessous)
+		var tactile: CanvasLayer = main.get_node("ControlesTactiles")
+		tactile.show()
+		for controle: Node in tactile.get_children():
+			controle.set_process_input(true)
+		var centre_vomir: Vector2 = tactile.bouton_vomir.position + tactile.bouton_vomir.texture_normal.get_size() / 2.0
+		_pousser_toucher(Vector2(300, 800), true)
+		_pousser_toucher(centre_vomir, true, 1)
+		var tenus_au_gong := [tactile.joystick.actif, tactile.bouton_vomir.is_pressed(), Input.is_action_pressed("vomir")]
 		# La fin de la manche chez l'hôte : la manche la note (elle part vers chaque client prêt, après les
 		# derniers tampons et le territoire), tout se fige, l'écran Résultats remplace le HUD
 		GS.terminer_partie(true)
 		var resultats: CanvasLayer = main.resultats
 		_check(manche.finie and paused and resultats != null and resultats.visible and not hud.visible and not menu.visible,
 			"la fin de manche chez l'hôte : la manche la diffuse, tout se fige, l'écran Résultats remplace le HUD")
+		_pousser_toucher(Vector2(300, 800), false)
+		_pousser_toucher(Vector2(300, 800), true, 2)  # un nouveau pouce, là où était le stick
+		var sourds := [tactile.joystick.actif, tactile.joystick.is_processing_input(), tactile.bouton_vomir.is_pressed(), Input.is_action_pressed("vomir")]
+		_pousser_toucher(Vector2(300, 800), false, 2)
+		_check(tenus_au_gong == [true, true, true] and not tactile.visible and sourds == [false, false, false, false],
+			"à l'écran Résultats, les contrôles tactiles de la manche se cachent : VOMIR et le stick tenus au gong (%s) sont relâchés, le stick n'entend plus les touchers (%s)"
+				% [tenus_au_gong, sourds])
 		_check(manche.envois_ordre == ([&"_recevoir_tampons", &"_recevoir_territoire", &"_recevoir_fin_manche"] as Array[StringName]),
 			"I2 : les derniers tampons et le territoire partent avant la fin, sur le même canal (%s)" % [manche.envois_ordre])
 		# Phase 18 : la fin porte le bilan de l'hôte : cellules, crans, statistiques, départs, l'état final

@@ -23,9 +23,12 @@ extends Transport
 ## sans `ouvert`, ou un canal fermé DELAI_CANAL après `bienvenue`.
 ##
 ## Envois : en texte seulement (`send_text` : la salle ignore une trame binaire, et ne répond pas à un
-## `ping` binaire), par une file cadencée à ENVOIS_PAR_SECONDE, espacés d'ECART_ENVOIS au moins (la
+## `ping` binaire), par une file cadencée à ENVOIS_PAR_SECONDE, sur des créneaux espacés d'ECART_ENVOIS (la
 ## salle chasse au-delà de 20 par seconde ; six arrivées font environ 70 messages), dans l'ordre (une offre
-## avant ses candidats), et seulement tant que la salle peut les relayer (`_signaler_vers`).
+## avant ses candidats), et seulement tant que la salle peut les relayer (`_signaler_vers`). Une image plus
+## longue qu'ECART_ENVOIS (un appareil lent, phase 6) rattrape les créneaux passés depuis l'image
+## précédente, pas davantage, et ENVOIS_PAR_IMAGE au plus : ces créneaux sont des dates, leur lot part d'un
+## coup.
 ## Réception : tous les messages en attente sont lus, même la socket fermée, jusqu'à la fin de la
 ## signalisation (une `erreur`, une fermeture, le délai du canal d'un client) ; leurs identifiants (des
 ## flottants dans le JSON de Godot) deviennent des entiers (`decoder`). La raison d'une `erreur` est
@@ -53,10 +56,15 @@ const DELAI_SIGNALISATION := 5.0
 ## §4.3 : 15 s, la moitié du délai d'arrivée de la salle).
 const DELAI_CANAL := 15.0
 ## Envois au plus dans toute seconde vers la salle (elle en admet 20 : un seau de 20 jetons, rempli de
-## 20 par seconde), et l'écart minimal entre deux envois, en ms : sans lui, une rafale de 15 retardée par
-## TCP arriverait d'un coup, avec les suivantes, et viderait le seau de la salle, qui fermerait la socket.
+## 20 par seconde), et l'écart minimal entre deux créneaux d'envoi, en ms (des dates : à 60 images par
+## seconde, des envois espacés d'autant ; sur une image plus longue, un lot qui part d'un coup) : sans lui,
+## une rafale de 15 retardée par TCP arriverait d'un coup, avec les suivantes, et viderait le seau de la
+## salle, qui fermerait la socket.
 const ENVOIS_PAR_SECONDE := 15
 const ECART_ENVOIS := 50
+## Envois au plus dans une image (un lot, qui part d'un coup) : un gel de TCP qui retarde un lot sur le
+## suivant fait arriver les deux ensemble, 20 au plus, ce que le seau plein de la salle admet.
+const ENVOIS_PAR_IMAGE := 10
 ## Période du `ping` de l'hôte, en secondes (la salle y répond sans se réveiller, spec §4.2), et son
 ## texte exact.
 const PERIODE_PING := 30.0
@@ -113,10 +121,13 @@ var _fin_signalisation := -1
 var _fin_canal := -1
 ## Chez l'hôte : les arrivants au canal encore fermé, et l'instant (ms) où l'hôte les retire.
 var _arrivees: Dictionary[int, int] = {}
-## Les messages en attente d'envoi, dans l'ordre, et les instants (ms) des ENVOIS_PAR_SECONDE derniers
+## Les messages en attente d'envoi, dans l'ordre, et les créneaux (ms) des ENVOIS_PAR_SECONDE derniers
 ## envois, du plus ancien au plus récent (la fenêtre glissante d'une seconde).
 var _file: PackedStringArray = []
 var _derniers_envois: Array[int] = []
+## L'instant (ms) du passage précédent de `_vider_file` (-1 avant le premier) : le plus ancien créneau
+## qu'une image longue peut rattraper.
+var _image_precedente := -1
 ## Chez l'hôte : l'instant (ms) du prochain `ping` (-1 sans salle).
 var _prochain_ping := -1
 ## La raison de la dernière `erreur` de la salle.
@@ -360,19 +371,29 @@ func _surveiller(maintenant: int) -> void:
 
 
 ## Envoie les messages de la file à `maintenant` (ms), dans l'ordre, tant qu'il le peut : la socket
-## ouverte, ECART_ENVOIS ms au moins après l'envoi précédent, et pas plus de ENVOIS_PAR_SECONDE dans la
-## seconde qui précède.
+## ouverte, un créneau par envoi (une date), ECART_ENVOIS ms après celui de l'envoi précédent, jamais avant
+## l'image précédente (une longue attente ne s'accumule pas) ni après `maintenant`, pas plus de
+## ENVOIS_PAR_SECONDE créneaux dans une seconde, ni plus de ENVOIS_PAR_IMAGE envois dans ce passage. Les
+## créneaux d'un passage partent ensemble, en temps réel : à 60 images par seconde, un envoi toutes les
+## 50 ms ; à 2 images par seconde (un appareil lent), un lot d'une dizaine par image au lieu d'un seul envoi,
+## et deux lots reçus ensemble (un gel de TCP) n'en font que 20 au plus : la salle (un seau de 20 jetons,
+## rempli de 20 par seconde) jamais à sec.
 func _vider_file(maintenant: int) -> void:
+	var depuis := maintenant if _image_precedente < 0 else _image_precedente
+	_image_precedente = maintenant
 	if not _socket_prete():
 		return
-	while not _file.is_empty():
-		if not _derniers_envois.is_empty() and maintenant - _derniers_envois[-1] < ECART_ENVOIS:
+	var envoyes := 0
+	while not _file.is_empty() and envoyes < ENVOIS_PAR_IMAGE:
+		var creneau := depuis if _derniers_envois.is_empty() else maxi(_derniers_envois[-1] + ECART_ENVOIS, depuis)
+		if creneau > maintenant:
 			return
-		if _derniers_envois.size() == ENVOIS_PAR_SECONDE and maintenant - _derniers_envois[0] < 1000:
+		if _derniers_envois.size() == ENVOIS_PAR_SECONDE and creneau - _derniers_envois[0] < 1000:
 			return
 		_ecrire(_file[0])
 		_file.remove_at(0)
-		_derniers_envois.append(maintenant)
+		envoyes += 1
+		_derniers_envois.append(creneau)
 		if _derniers_envois.size() > ENVOIS_PAR_SECONDE:
 			_derniers_envois.pop_front()
 

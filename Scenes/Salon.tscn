@@ -1,6 +1,7 @@
-[gd_scene load_steps=4 format=3 uid="uid://dlelionsalon"]
+[gd_scene load_steps=5 format=3 uid="uid://dlelionsalon"]
 
 [ext_resource type="Script" path="res://Scripts/Salon.gd" id="1_salon"]
+[ext_resource type="PackedScene" uid="uid://dleliontactil" path="res://Scenes/ControlesTactiles.tscn" id="2_tactile"]
 
 [sub_resource type="Gradient" id="Gradient_ciel"]
 offsets = PackedFloat32Array(0, 0.55, 1)
@@ -38,7 +39,7 @@ grow_vertical = 2
 
 [node name="Colonne" type="VBoxContainer" parent="Centre"]
 layout_mode = 2
-theme_override_constants/separation = 28
+theme_override_constants/separation = 16
 alignment = 1
 
 [node name="Titre" type="Label" parent="Centre/Colonne"]
@@ -118,6 +119,24 @@ focus_mode = 0
 theme_override_font_sizes/font_size = 26
 text = "RETOUR"
 
+[node name="BoutonPleinEcran" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -344.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = 100.0
+grow_horizontal = 0
+focus_mode = 0
+theme_override_font_sizes/font_size = 26
+text = "SALON_PLEIN_ECRAN"
+
+[node name="ControlesTactiles" parent="." instance=ExtResource("2_tactile")]
+disposition = 1
+
 [connection signal="pressed" from="BoutonRetour" to="." method="retour"]
+[connection signal="pressed" from="BoutonPleinEcran" to="." method="basculer_plein_ecran"]
 [connection signal="pressed" from="Centre/Colonne/Demarrer" to="." method="demarrer"]
 [connection signal="pressed" from="Centre/Colonne/Invitation/CopierLien" to="." method="copier_lien"]

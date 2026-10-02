@@ -50,7 +50,7 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 | 3 bis | **Retrait de la découverte** : `Decouverte.gd`, son autoload, l'écran Réseau, les scénarios de découverte et `DIFFUSION=1` ; tests adaptés à l'écran En ligne. | ➖ `Scripts/Decouverte.gd` ➖ `Scripts/EcranReseau.gd` ➖ `Scenes/EcranReseau.tscn` ✏️ `project.godot` ✏️ `Assets/Traductions/traductions.csv` ✏️ `Scripts/Salon.gd` ✏️ `Scripts/Titre.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Regles.gd` ✏️ tests (`smoke_test`, `screenshots`, `deux_fenetres`, `unitaires`, `reseau/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Plus aucune référence à `Decouverte` ; captures à jour (compte de la CI ajusté en phase 3 : 38). Faite (PR #5). |
 | 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ➕ `Scripts/PiloteWeb.gd` ✏️ `Scripts/Transport.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scripts/CodeSalle.gd` ✏️ `project.godot` ✏️ `export_presets.cfg` ✏️ `Assets/Traductions/traductions.csv` ➕ `tests/web/` ✏️ tests (`unitaires`, `smoke_test`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. Faite (PR #6). |
 | 5 | **Déploiement** (compte Cloudflare, application TURN et secrets prêts, avec l'utilisateur) : tag `vX.Y` → `wrangler deploy` puis GitHub Pages ; URL du Worker dans le réglage `lelion/signalisation/url`. Vérifier ici : TURN sans carte bancaire. | ✏️ `.github/workflows/ci.yml` ✏️ `project.godot` ✏️ `signalisation/wrangler.jsonc` ✏️ `README.md` | Première partie en ligne sur `https://w3cdotorg.github.io/LeLion-web/`. |
-| 6 | **Mobiles** (§6) : contrôles tactiles au salon et en manche, voile portrait, plein écran au premier toucher, son en `Stream`, *Créer une partie* absent sur mobile ; profil mobile (150/60/8) du banc de la prédiction. ◉ | ✏️ `Scripts/ControlesTactiles.gd` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `project.godot` ✏️ `tests/prediction_test.gd` | Captures 360×640 et 844×390 ; banc vert sous le profil mobile. |
+| 6 | **Mobiles** (§6) : contrôles tactiles au salon et en manche, voile portrait, plein écran au premier toucher, son en `Stream`, *Créer une partie* absent sur mobile ; profil mobile (150/60/8) du banc de la prédiction. ◉ | ✏️ `Scripts/Parametres.gd` ✏️ `Scripts/ControlesTactiles.gd` ✏️ `Scenes/ControlesTactiles.tscn` ✏️ `Scripts/Salon.gd` ✏️ `Scenes/Salon.tscn` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Main.gd` ✏️ `Scripts/Resultats.gd` ✏️ `Scripts/PauseMenu.gd` ✏️ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/PiloteWeb.gd` ✏️ `project.godot` ✏️ `export_presets.cfg` ✏️ `Assets/Traductions/traductions.csv` ✏️ tests (`unitaires`, `smoke_test`, `prediction_test`, `screenshots`, `web/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Captures 360×640 et 844×390 ; banc vert sous le profil mobile. Faite (PR #7). |
 | 7 | **Sécurité du jeu et documentation** (§8.2) : débit des RPC des clients, pseudos nettoyés, exclusion par l'hôte (croix sur la carte, message à l'exclu) ; README « Jouer en ligne » ; fiche `docs/essai-en-ligne.md`. ◉ | ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Salon.gd` ✏️ `tests/unitaires.gd` ✏️ `README.md` ➕ `docs/essai-en-ligne.md` | Unitaires des limites et de l'exclusion ; fiche prête pour l'essai. |
 | 7 bis | **Réglages de l'essai réel** : les réponses de `docs/essai-en-ligne.md` (latence, `InterpolationLion.RETARD`, TURN, mobiles, Safari iOS). | selon l'essai | |
 
@@ -178,3 +178,17 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 
 - Sur un appareil lent, `_vider_file` n'envoie qu'un message par image quand une image dure plus de 50 ms (≈ 2 messages/s à 2 i/s) : plusieurs arrivées simultanées sur un hôte très lent peuvent dépasser `DELAI_CANAL` (15 s).
 - Délai du test `@manche` : 180 s (Chromium bridé à 1,5 CPU : 150 s ; CI : 66 s) ; le relever à 300 s si un passage CI dépasse 120 s.
+
+### Notes de la revue de la phase 6 (pour les phases 5 et 7)
+
+**Phase 5** :
+
+- Ne déployer que le préréglage « Web » (`PiloteWeb` est fermé par la fonctionnalité `pilote`, vérifié).
+- Garder le modèle HTML par défaut, sans `viewport-fit=cover` (sinon revoir les marges : Retour est à 24 px du coin).
+- Premier essai sur un vrai iPhone : WebRTC, son en `Stream`, pas de plein écran, défilement du clavier virtuel (spec §13).
+
+**Phase 7** :
+
+- La phase 6 ne change ni le protocole ni la surface d'attaque.
+- Fiche de l'essai réel : plein écran Android au relâchement ; premier toucher sur le champ pseudo (clavier et plein écran en même temps) ; lisibilité des textes des Résultats (~10 px CSS) ; zone morte effective du joystick (0,5) ; appareil lent ; Retour à 24 px du coin ; contraste du libellé PRÊT/VOMIR (rose sur anneau rose) ; une tranche de la rangée du pseudo au bord haut quand le clavier est ouvert ; un hôte desktop tactile voit les flèches du salon ; le réglage Plein écran ne reflète pas le mode du téléphone ; position du joystick codée en dur dans le pilote.
+- « Tu as été déconnecté » et « Garde cet onglet au premier plan ».

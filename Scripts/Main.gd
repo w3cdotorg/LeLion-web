@@ -34,6 +34,7 @@ const DELAI_HOTE_PERDU := 2.5
 @onready var apparitions: MultiplayerSpawner = $Apparitions
 @onready var manche: Node = $Manche
 @onready var menu_pause: CanvasLayer = $PauseMenu
+@onready var controles_tactiles: CanvasLayer = $ControlesTactiles
 
 ## Le lion du joueur local : celui de la scène hors réseau ; en réseau, celui qui apparaît pour le
 ## joueur de ce poste (null avant son apparition).
@@ -435,13 +436,15 @@ func _bilan_local() -> BilanManche:
 
 
 ## Une bataille finie : l'écran Résultats sur le bilan `bilan` (celui de l'hôte), à la place du HUD de la
-## bataille, les pseudos des lions remis à leur place finale. Une fois.
+## bataille et des contrôles tactiles de la manche (relâchés, sourds), les pseudos des lions remis à leur
+## place finale. Une fois.
 func _afficher_resultats(bilan: BilanManche) -> void:
 	if resultats != null:
 		return
 	if not lions.is_empty():
 		_placer_pseudos()
 	hud_bataille.hide()
+	controles_tactiles.cacher()
 	resultats = SCENE_RESULTATS.instantiate()
 	resultats.choix_fait.connect(_sur_choix_resultats)
 	add_child(resultats)

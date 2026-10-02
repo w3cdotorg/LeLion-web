@@ -2,7 +2,8 @@
 // http://localhost:8060 (l'origine que la signalisation admet, http://localhost:* ; pas 127.0.0.1), en IPv4
 // seulement (une page chargée par ::1, Firefox ne trouve aucun candidat ICE dans un conteneur sans IPv6),
 // la signalisation en local (`wrangler dev` sur ws://localhost:8787, l'adresse par défaut du réglage
-// lelion/signalisation/url), puis Chromium et Firefox (la manche à trois pages) et WebKit (Copier le lien).
+// lelion/signalisation/url), puis Chromium et Firefox (la manche à trois pages), WebKit (Copier le lien) et un
+// mobile émulé par Chromium (un Android en paysage, au doigt, face à un hôte de bureau).
 // L'export se fait avant : godot --headless --export-release "Web pilote" export/web-pilote/index.html.
 import { defineConfig } from "@playwright/test";
 
@@ -12,7 +13,9 @@ export default defineConfig({
 	workers: 1,
 	fullyParallel: false,
 	retries: 0,
-	timeout: 180_000,
+	// Un test : 1 min 30 à 1 min 50 mesurés pour le mobile bridé à 1,5 CPU (2 à 4 images par seconde) ; de la marge
+	// pour une CI plus lente encore.
+	timeout: 300_000,
 	expect: { timeout: 30_000 },
 	reporter: [["list"], ["html", { open: "never" }]],
 	use: {
@@ -27,6 +30,8 @@ export default defineConfig({
 		// Firefox sans affichage n'a pas de WebGL 2 (aucun pilote GL) : avec une fenêtre, sous Xvfb (xvfb-run).
 		{ name: "firefox", grep: /@manche/, use: { browserName: "firefox", headless: false } },
 		{ name: "webkit", grep: /@lien/, use: { browserName: "webkit" } },
+		// Le mobile a son propre contexte (Pixel 7 en paysage) : le projet ne fixe que le navigateur.
+		{ name: "mobile", grep: /@mobile/, use: { browserName: "chromium" } },
 	],
 	webServer: [
 		{

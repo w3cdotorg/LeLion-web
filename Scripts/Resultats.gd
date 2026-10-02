@@ -28,6 +28,8 @@ extends CanvasLayer
 ## sont ignorés avant (ni confirmation ni annulation) ; toute autre touche ou bouton de manette, mappé
 ## ou non (M3 de la revue finale), ou Non, annulent. Un client, dont le départ ne retire que lui, n'a
 ## pas cette confirmation.
+## Sur un mobile (`Parametres.mobile`, phase 6 du jeu en ligne) : les choix, Quitter, Oui et Non à la taille
+## d'un doigt (`Parametres.agrandir`), sans les aides du clavier ; à 6 joueurs, tout tient dans l'écran.
 
 signal choix_fait(choix: StringName)
 
@@ -47,6 +49,8 @@ const LARGEUR_PSEUDO := 360
 const DELAI_LIGNE := 0.3
 const DUREE_COMPTEUR := 0.45
 const DELAI_TITRE := 0.2
+## La police des boutons sur un mobile (30 px sur ordinateur).
+const POLICE_TACTILE := 40
 ## Après l'animation, délai avant qu'un choix au clavier soit pris (secondes).
 const DELAI_CHOIX := 1.0
 ## Les choix de l'hôte, dans l'ordre des boutons, puis Quitter (de chacun).
@@ -116,6 +120,10 @@ func _ready() -> void:
 	_style_selection.set_border_width_all(4)
 	_style_selection.set_corner_radius_all(6)
 	_style_selection.set_content_margin_all(8)
+	if Parametres.mobile:
+		for b: Button in _boutons() + [bouton_oui, bouton_non]:
+			Parametres.agrandir(b, POLICE_TACTILE)
+		aide.hide()
 
 
 ## M9 de la revue finale : la fenêtre perd le focus (alt-tab...) avec une touche tenue, dont le

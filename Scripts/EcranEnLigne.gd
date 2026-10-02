@@ -16,6 +16,13 @@ extends Control
 ## (ou Échap, B à la manette) annule l'état en cours, puis ramène au titre. Le salon revient ici avec un
 ## message (`message_a_l_arrivee`) si l'hôte est perdu ; le titre y vient avec le code du lien de la page
 ## (`code_a_l_arrivee`).
+##
+## Mobiles (spec §6, `Parametres.mobile`) : pas de Créer une partie (un mobile ne fait que rejoindre, le
+## plus souvent par le lien : coller dans un champ y est peu fiable) ; champs et boutons agrandis pour le
+## doigt, textes lisibles à l'échelle d'un téléphone ; le focus va au premier contrôle visible
+## (`_donner_focus`). Un champ en édition remonte à MARGE_CLAVIER px du haut de l'écran, au-dessus du
+## clavier virtuel du navigateur, le message sous le code, et redescend ensuite ; Rejoindre agit à l'appui
+## (au relâchement, il aurait déjà redescendu sous le doigt).
 
 enum Etat { ACCUEIL, CREATION, CONNEXION, SALON }
 
@@ -44,6 +51,8 @@ const ECHEC_PAR_DEFAUT := "ENLIGNE_ECHEC_CANAL"
 ## adresse `ip:port` (le desktop).
 const LONGUEUR_LIEN := 256
 const LONGUEUR_ADRESSE := 21
+## Sur un mobile, le haut d'une rangée en édition, en px de l'écran (le clavier virtuel couvre le bas).
+const MARGE_CLAVIER := 40
 
 ## Port de jeu de Créer une partie hors du Web (ENet ; modifiable par les tests).
 var port_jeu: int = Reseau.PORT
@@ -65,6 +74,8 @@ static var code_a_l_arrivee := ""
 @onready var bouton_rejoindre: Button = $Centre/Colonne/RangeeCode/Rejoindre
 @onready var message: Label = $Centre/Colonne/Message
 @onready var bouton_retour: Button = $BoutonRetour
+@onready var centre: CenterContainer = $Centre
+@onready var etiquette_ou: Label = $Centre/Colonne/Ou
 
 ## Le message affiché, gardé en clé et arguments pour être retraduit au changement de langue.
 var _message := {"cle": "", "arguments": [], "erreur": false}
@@ -86,6 +97,10 @@ func _ready() -> void:
 	Reseau.hote_perdu.connect(_sur_hote_perdu)
 	Reseau.salon_change.connect(_sur_salon_change)
 	Parametres.langue_changee.connect(_sur_langue_changee)
+	champ_pseudo.editing_toggled.connect(_sur_edition.bind(champ_pseudo))
+	champ_code.editing_toggled.connect(_sur_edition.bind(champ_code))
+	if Parametres.mobile:
+		_mettre_en_page_mobile()
 	_changer_etat(Etat.ACCUEIL)
 	if not code_a_l_arrivee.is_empty():
 		champ_code.text = CodeSalle.formater(code_a_l_arrivee)
@@ -214,7 +229,7 @@ func _lire_code() -> String:
 ## prend le focus.
 func _sur_pseudo_valide(_texte: String) -> void:
 	if champ_code.text.strip_edges().is_empty():
-		bouton_creer.grab_focus()
+		_donner_focus([bouton_creer, champ_code])
 	else:
 		rejoindre()
 
@@ -235,9 +250,44 @@ func _changer_etat(nouvel_etat: Etat) -> void:
 	bouton_creer.disabled = not accueil
 	bouton_rejoindre.disabled = not accueil
 	if accueil:
-		bouton_creer.grab_focus()
+		_donner_focus([bouton_creer, bouton_rejoindre])
 	else:
 		bouton_retour.grab_focus()
+
+
+## Le focus au premier contrôle visible de `candidats` (sur un mobile, Créer une partie n'existe pas).
+func _donner_focus(candidats: Array[Control]) -> void:
+	for controle in candidats:
+		if controle.is_visible_in_tree():
+			controle.grab_focus()
+			return
+
+
+## Sur un mobile : ni Créer une partie ni « ou rejoins… » ; les champs, Rejoindre et Retour à la hauteur
+## d'une cible au doigt, les textes agrandis (le champ du pseudo tient toujours 12 caractères larges).
+func _mettre_en_page_mobile() -> void:
+	bouton_creer.visible = false
+	etiquette_ou.visible = false
+	Parametres.agrandir(champ_pseudo, 56)
+	Parametres.agrandir(champ_code, 56)
+	Parametres.agrandir(bouton_rejoindre, 52)
+	Parametres.agrandir(bouton_retour, 40)
+	champ_pseudo.custom_minimum_size.x = 760
+	bouton_rejoindre.custom_minimum_size.x = 340
+	bouton_rejoindre.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
+	for etiquette: Label in [$Centre/Colonne/RangeePseudo/Etiquette, $Centre/Colonne/RangeeCode/Etiquette, message]:
+		etiquette.add_theme_font_size_override("font_size", 44)
+
+
+## Le champ `champ` entre en édition (`actif`) ou en sort : sur un mobile, sa rangée remonte à
+## MARGE_CLAVIER px du haut de l'écran (le titre et ce qui la précède sortent par le haut), puis tout
+## redescend.
+func _sur_edition(actif: bool, champ: LineEdit) -> void:
+	if not Parametres.mobile:
+		return
+	centre.position.y = 0.0
+	if actif:
+		centre.position.y = minf(0.0, MARGE_CLAVIER - champ.get_parent().get_global_rect().position.y)
 
 
 func _afficher_message(cle: String, arguments: Array, erreur: bool) -> void:
