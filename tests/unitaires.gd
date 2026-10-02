@@ -4,7 +4,7 @@ extends SceneTree
 
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
-const PROTOCOLE_VERSION := "0.21"
+const PROTOCOLE_VERSION := "0.22"
 const PROTOCOLE_EMPREINTE := 1188810746
 ## L'adresse du Worker déployé (phase 5), sans chemin : le réglage lelion/signalisation/url de l'export publié.
 const URL_WORKER := "wss://lelion-web.w3cdotorg.workers.dev"
@@ -58,6 +58,7 @@ func _run() -> void:
 	await _tester_transport_tardif()
 	_tester_transport_webrtc()
 	_tester_mobile()
+	_tester_saisie_web()
 	_tester_limites()
 	_tester_pseudos_affiches()
 	await _tester_demandes_salon()
@@ -2239,6 +2240,54 @@ func _tester_mobile() -> void:
 		"le son du Web se lit en Stream (audio/general/default_playback_type.web = 0), pas en Sample")
 
 
+## La saisie au doigt d'un mobile (spec §6, `SaisieWeb`) : hors du Web, rien (les LineEdit gardent leur
+## saisie) ; la table publiée à la page (un champ visible et permis, sa place en édition décalée de son
+## `deplacement`) ; les événements de la page rendus au LineEdit (le texte à chaque frappe, Entrée son
+## `text_submitted`, l'entrée et la sortie d'édition).
+func _tester_saisie_web() -> void:
+	print("-- Saisie au doigt d'un mobile (SaisieWeb)")
+	_check(not SaisieWeb.disponible(true) and not SaisieWeb.disponible(false), "hors de l'export Web, pas de saisie de la page, même sur un mobile")
+	var champ := LineEdit.new()
+	champ.name = "Code"
+	champ.size = Vector2(400, 150)
+	champ.position = Vector2(100, 600)
+	champ.add_theme_font_size_override("font_size", 56)
+	champ.max_length = 256
+	root.add_child(champ)
+	var saisie := SaisieWeb.new()  # hors de l'arbre : pas de page à qui parler
+	saisie.brancher(champ, func(_c: LineEdit) -> float: return -500.0, true, "go")
+	_check(not champ.virtual_keyboard_enabled and champ.get_theme_stylebox("read_only") == champ.get_theme_stylebox("normal"),
+		"un champ branché n'appelle pas le clavier de Godot, et garde l'apparence d'un champ éditable")
+	champ.text = "K7Q"
+	var table: Array = saisie._table()
+	var fiche: Dictionary = table[0] if table.size() == 1 else {}
+	var echelle := (champ.get_viewport().get_screen_transform() * champ.get_global_transform_with_canvas()).get_scale().y
+	_check(table.size() == 1 and fiche.id == "Code" and fiche.texte == "K7Q" and fiche.max == 256 and fiche.majuscules
+		and fiche.touche_entree == "go" and is_equal_approx(fiche.police, 56 * echelle),
+		"la table publiée donne le champ, son texte, sa longueur permise, son clavier (%s)" % [table])
+	_check(not fiche.is_empty() and absf(fiche.edition[1] - (fiche.zone[1] - 500.0 * echelle)) < 0.2 and fiche.edition[0] == fiche.zone[0]
+		and fiche.edition[3] == fiche.zone[3], "sa place en édition : celle du toucher, remontée de son déplacement (%s)" % [fiche])
+	saisie.actif = false
+	_check(saisie._table().is_empty(), "un écran qui ne permet pas la saisie (une connexion en cours) ne publie aucun champ")
+	saisie.actif = true
+	champ.visible = false
+	_check(saisie._table().is_empty(), "un champ caché n'est pas publié")
+	champ.visible = true
+	var vus := []
+	saisie.edition.connect(func(c: LineEdit, actif: bool) -> void: vus.append([str(c.name), actif]))
+	champ.text_submitted.connect(func(texte: String) -> void: vus.append(["entree", texte]))
+	saisie._traiter("ouvert", "Code", "K7Q")
+	saisie._traiter("texte", "Code", "K7Q2XM")
+	_check(champ.text == "K7Q2XM" and vus == [["Code", true]], "chaque frappe de la page arrive au LineEdit (%s)" % [vus])
+	saisie._traiter("valide", "Code", "K7Q-2XM")
+	_check(champ.text == "K7Q-2XM" and vus == [["Code", true], ["Code", false], ["entree", "K7Q-2XM"]],
+		"Entrée : la sortie d'édition, puis le text_submitted du LineEdit, comme au clavier (%s)" % [vus])
+	saisie._traiter("ferme", "Inconnu", "x")
+	_check(vus.size() == 3, "un champ inconnu de la page est ignoré")
+	saisie.free()
+	champ.free()
+
+
 ## Phase 7 du jeu en ligne (spec §8.2) : le débit des demandes d'un client chez l'hôte, un seau de jetons
 ## par client (`LimiteDebit`) : les paquets de commandes de la manche (2 par tick, 120 par seconde à 60 ticks
 ## par seconde, 120 d'un coup), les demandes du salon (couleur, Prêt : 10 par seconde).
@@ -3162,8 +3211,8 @@ func _tester_transport_webrtc() -> void:
 					if prereglages.get_value(paire[0], cle, null) != prereglages.get_value(paire[1], cle, null):
 						ecarts.append(cle)
 		_check(ecarts.is_empty(), "les deux préréglages sont identiques option par option, hors name, custom_features, export_path, runnable (%s)" % [ecarts])
-		_check(prereglages.get_value(web + ".options", "html/experimental_virtual_keyboard", false) == true,
-			"phase 6 : le clavier virtuel du navigateur s'ouvre sur un mobile pour taper le pseudo (html/experimental_virtual_keyboard)")
+		_check(prereglages.get_value(web + ".options", "html/experimental_virtual_keyboard", true) == false,
+			"le clavier virtuel de Godot (html/experimental_virtual_keyboard) est coupé : un mobile saisit dans le champ de la page (SaisieWeb)")
 		var exclus := func(section: String) -> PackedStringArray:
 			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
 		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
