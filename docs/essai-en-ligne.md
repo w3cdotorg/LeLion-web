@@ -67,8 +67,9 @@ Manche 1 : au moins 3 joueurs (le téléphone en 4G et le joueur de l'autre foye
 - [ ] Les autres lions bougent de façon fluide : oui / saccadés / par à-coups
 - [ ] Les chocs entre lions et les étourdissements (une gerbe reçue) paraissent justes : oui / non
 
-Manche 2 : tous les joueurs rouvrent le lien avec `&relais=1` à la fin (le relais TURN imposé), et
-l'hôte crée une nouvelle partie avec `?relais=1` dans l'adresse de la page.
+Manche 2, par le relais TURN imposé : l'hôte recharge la page avec `?relais=1` au bout de son adresse,
+crée une nouvelle partie et envoie le **nouveau** lien (l'ancien code est fermé) ; chaque joueur ajoute
+`&relais=1` à la fin de ce nouveau lien avant de l'ouvrir.
 
 - [ ] Tout le monde arrive au salon : oui / non (appareils qui échouent : ______)
 - [ ] La manche paraît : pareille / plus lente / saccadée, qu'en manche 1
@@ -156,6 +157,7 @@ Sur chaque téléphone, noter Android ou iPhone, et le navigateur.
 | Tout comme attendu | Rien. |
 | L'exclu lit « L'hôte a quitté la partie » | L'annonce n'est pas arrivée avant la fermeture : `Reseau.DELAI_EXCLUSION_SALON` (2 s). |
 | « L'hôte a quitté la partie » au retour d'un téléphone verrouillé | `Reseau.RETOUR_DE_GEL` (2 s), ou un téléphone qui garde des images en veille : noter le modèle. |
+| La page s'est rechargée au retour (iPhone surtout) | Rien : iOS recharge parfois une page passée en arrière-plan au lieu de la rendre ; c'est une issue normale, pas un bug (le joueur rejoint de nouveau, au salon suivant). |
 | Déclaré parti après 5 s de veille | `Reseau.SILENCE_SESSION` (10 s). |
 
 ## 6. Ce qu'il faut renvoyer
