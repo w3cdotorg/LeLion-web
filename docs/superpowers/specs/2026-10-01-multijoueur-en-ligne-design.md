@@ -37,7 +37,7 @@ Contraintes posées par l'utilisateur :
 |---|---|
 | Transport du jeu livré | `WebRTCMultiplayerPeer`, en étoile autour de l'hôte (l'hôte en `create_server`, chaque client en `create_client`). Natif dans l'export Web de Godot, sans extension. |
 | Signalisation | Un Worker Cloudflare et un Durable Object `Salle` par partie, parlés en WebSocket (JSON) par Godot (`WebSocketPeer`). |
-| STUN / TURN | STUN Google et Cloudflare, TURN Cloudflare (UDP, TCP, TLS 443). Identifiants TURN fabriqués par le Worker, valables 2 h, donnés seulement aux membres d'une salle. |
+| STUN / TURN | STUN Google et Cloudflare, TURN Cloudflare (UDP, TCP, TLS 443). Identifiants TURN fabriqués par le Worker, valables 2 h, donnés seulement aux membres d'une salle. **Mis en ligne (phase 5) en STUN seul** : le Worker ne donne de TURN qu'avec ses secrets TURN, absents ; le TURN vient plus tard s'il le faut (§13). |
 | Rejoindre | Code de salle de 6 caractères (alphabet sans 0/O, 1/I/L), affiché `K7Q-2XM`, et lien `https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM`. Privé : pas de liste. |
 | Hôte | Ordinateur seulement. Il doit garder l'onglet au premier plan (le navigateur fige un onglet caché). |
 | Silence | **10 s pour tout le monde** (hôte comme client) avant de déclarer un poste parti ; 30 s pendant le chargement de la manche (inchangé). Battement applicatif, indépendant du transport. |
@@ -201,8 +201,9 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 
 ### 8.1 Worker
 
-- **Origine** : WebSocket acceptée seulement depuis `https://w3cdotorg.github.io` et
-  `http://localhost:*` (variable du Worker `ORIGINES` ; `:*` = tout port ou aucun). Ça freine le
+- **Origine** : WebSocket acceptée seulement depuis `https://w3cdotorg.github.io` en production
+  (variable du Worker `ORIGINES`, `signalisation/wrangler.jsonc`), et aussi depuis `http://localhost:*`
+  sous `wrangler dev` (`npm run dev` l'ajoute par `--var` ; `:*` = tout port ou aucun). Ça freine le
   pillage, ça ne protège pas seul. Sans en-tête `Origin` : refusée (le jeu livré est l'export Web,
   dont le navigateur l'envoie toujours ; le desktop de développement joue en ENet).
 - **Plafonds par salle** : 7 sockets (l'hôte et 6 arrivants en cours) ; messages de 16 Ko au plus
@@ -224,8 +225,9 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   injoignable laisse passer (ouvert par défaut, journalisé) : sa panne ne ferme pas le service.
   Vérifié en phase 2 (documentation du 01/10/2026) : ni la page *Rate Limiting* ni les tarifs et
   limites des Workers ne la réservent à une offre, sans dire en toutes lettres qu'elle existe sur
-  l'offre gratuite ; le premier `wrangler deploy` (phase 5) le tranche, et sinon un Durable Object
-  compteur la remplace.
+  l'offre gratuite ; le premier `wrangler deploy` (phase 5) le tranche. Repli s'il refusait le binding :
+  retirer le bloc `ratelimits` (sans binding, le Worker admet tout sans journaliser, les plafonds de
+  chaque salle restent), puis, si les abus l'exigent, un Durable Object compteur (une migration `v2`).
 - **Validation** : type de message connu, `vers` membre de la salle, champs attendus seulement ; un
   message invalide est ignoré, sans fermer la socket (un relais vers un client parti à l'instant est
   une course normale) ; le contenu SDP n'est ni lu ni journalisé.
@@ -235,7 +237,11 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   (`Authorization: Bearer <TURN_KEY_API_TOKEN>`, corps `{"ttl": 7200}`, réponse 201 `iceServers` ;
   vérifié dans la documentation TURN de Cloudflare le 01/10/2026), URL du port 53 retirées (bloqué
   par les navigateurs) ; un seul jeu par arrivée, donné à l'arrivant et à l'hôte. Sans secrets
-  (développement local), API en erreur ou muette 3 s : STUN seul (Cloudflare et Google).
+  (développement local, et le déploiement de la phase 5), API en erreur ou muette 3 s : STUN seul
+  (Cloudflare et Google).
+- **Journaux** (Workers Logs) : seulement les lignes de `journal` (jamais de SDP, de candidat ni d'IP) ;
+  les journaux d'invocation (`invocation_logs: false`) et les traces sont coupés : la documentation ne dit
+  pas s'ils gardent l'IP du client, et chaque événement compte sur les 200 000 par jour de l'offre gratuite.
 - **Coût** : Durable Object en hibernation de WebSocket (pas de durée facturée pour une socket
   inactive) ; quota gratuit dépassé : `erreur quota`, le jeu dit « Trop de parties en ce moment,
   réessaie plus tard. ». Sur l'offre gratuite, une opération au-delà du quota quotidien des Durable
@@ -322,6 +328,14 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   canal non fiable a sa durée de vie de 100 ms ; une exception JavaScript d'une page (`pageerror`), ou un
   client limité par l'hôte, fait échouer le test. Le TURN ne se teste pas en
   local.
+- **L'export publié** (phase 5) : `tests/export_publie.gd` lit les réglages écrits dans son paquet (sans
+  la fonctionnalité `pilote`, l'adresse du Worker de `project.godot` en `wss://`, aucune adresse locale
+  hors des variantes `.pilote`) ; `tests/web/playwright.publie.config.js` l'ouvre dans Chromium, la
+  signalisation simulée (aucun `window.lelionPilote`, ni « PILOTE PRET » ; la page appelle le Worker de
+  `project.godot` ; chaque canal non fiable garde un paquet 100 ms au plus), puis, au déploiement, face au
+  Worker déployé (qui refuse son origine) ; `tests/web/playwright.en_direct.config.js` joue, sur la page
+  publiée, une partie de deux pages menées au clavier (une salle, une arrivée, le canal ouvert, STUN
+  seul).
 - **Essai réel** : `docs/essai-en-ligne.md` (hôte sur ordinateur, au moins un mobile en 4G, un joueur
   dans un autre foyer ; une manche avec le relais TURN forcé par `?relais=1`, paramètre de
   diagnostic qui pose `iceTransportPolicy: "relay"`). Ses réponses font la phase 7 bis (feuille de
@@ -329,16 +343,23 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 
 ## 11. Build, déploiement et prérequis
 
-- **CI sur `main`** : tests Godot, tests du Worker, export Web, test Playwright ; l'export en
-  artefact. Rien n'est mis en ligne.
-- **Tag `vX.Y`** (= `application/config/version`) : déploiement du Worker (`wrangler deploy`), puis
-  de la page sur GitHub Pages (`actions/deploy-pages`). L'URL du Worker est écrite dans l'export
-  (réglage de projet `lelion/signalisation/url`).
-- **Prérequis côté utilisateur** (phase 4) : un compte Cloudflare (offre gratuite), une application
-  TURN créée dans le tableau de bord (clé TURN et jeton), un jeton d'API pour `wrangler`, et les
-  secrets correspondants dans le dépôt GitHub (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) et
-  dans le Worker (`TURN_KEY_ID`, `TURN_KEY_API_TOKEN`). Pages activé sur le dépôt (source : GitHub
-  Actions). Rien n'est créé sans l'utilisateur.
+- **CI sur `main` et les PR** : tests Godot, tests du Worker, export Web gardé (`tests/export_publie.gd`,
+  le contrôle Chromium de l'export publié), test Playwright ; l'export en artefact. Rien n'est mis en
+  ligne.
+- **Tag `vX.Y`** (= `application/config/version`, vérifié) : les mêmes jobs, puis, tous verts, le
+  Worker (`wrangler deploy`, nom `lelion-web`, puis la sonde `signalisation/outils/sonder.mjs`), puis la
+  page : l'artefact `LeLion-web` de ce passage (construit depuis l'extraction du tag, jamais
+  `web-pilote`), contrôlé face au Worker déployé, publié par `actions/deploy-pages`, puis une partie de
+  deux pages sur la page publiée. L'URL du Worker est écrite dans `project.godot` (réglage
+  `lelion/signalisation/url` = `wss://lelion-web.w3cdotorg.workers.dev`, sans chemin : les routes ont
+  `/v1`), donc dans l'export ; `lelion/signalisation/url.pilote` = `ws://localhost:8787` pour l'export
+  « Web pilote » (lu par `get_setting_with_override`). Retour en arrière : relancer le passage du tag
+  précédent ; le Worker seul : son tableau de bord ou `wrangler rollback`.
+- **Prérequis côté utilisateur** (faits le 02/10/2026) : un compte Cloudflare (offre gratuite, sous-domaine
+  `w3cdotorg.workers.dev`), un jeton d'API pour `wrangler` (modèle « Edit Cloudflare Workers »), les
+  secrets du dépôt `CLOUDFLARE_API_TOKEN` et `CLOUDFLARE_ACCOUNT_ID`, Pages activé (source : GitHub
+  Actions) et l'environnement `github-pages` ouvert aux tags `v*`. Pas d'application TURN (STUN seul) :
+  `TURN_KEY_ID` et `TURN_KEY_API_TOKEN` n'existent pas. Rien n'est créé sans l'utilisateur.
 - **Dépôt public** : GitHub Pages gratuit l'exige pour une organisation sur l'offre gratuite.
 - README : en anglais comme aujourd'hui, avec une section « Jouer en ligne » en français (créer,
   inviter, rejoindre, onglet au premier plan, mobiles, vie privée, dépannage message par message).
@@ -364,16 +385,21 @@ Chaque phase touche 5 fichiers au plus, se termine par les tests verts et attend
 
 - **Onglet de l'hôte caché** : le jeu se fige pour tous (contrainte du navigateur). Parades :
   hôte sur ordinateur, consigne dans le salon, 10 s de tolérance.
-- **NAT stricts en 4G/5G** (25 à 35 % des connexions mobiles sans TURN) : TURN Cloudflare en UDP,
-  TCP et TLS 443 ; mesuré à l'essai avec `?relais=1`.
+- **NAT stricts en 4G/5G** (25 à 35 % des connexions mobiles sans TURN) : mis en ligne sans TURN
+  (phase 5, décision de l'utilisateur), l'essai réel compte les joueurs qui ne se relient pas. S'il en
+  faut un : le Worker fabrique déjà les identifiants (`fabriquerIce`) ; soit le TURN de Cloudflare (UDP,
+  TCP et TLS 443 ; ses secrets `TURN_KEY_ID`, `TURN_KEY_API_TOKEN` par `wrangler secret put` ; une carte
+  bancaire au compte), soit l'offre gratuite d'un autre fournisseur (Metered, par exemple), dont le Worker
+  fabriquerait les identifiants de la même façon (une variante de `fabriquerIce`) ; puis mesuré avec
+  `?relais=1`.
 - **Latence Internet** (30 à 120 ms, plus en 4G) : prédiction déjà éprouvée sous 80/40/5 ; profil
   mobile ajouté au banc, réglages sur mesures seulement.
 - **Offre gratuite de Cloudflare** : Durable Objects gratuits avec le stockage SQLite seulement
   (`new_sqlite_classes`, phase 2) ; limitation de débit : aucune restriction d'offre dans la
-  documentation (phase 2, §8.1), le premier déploiement le confirme (phase 5) ; TURN : 1 000 Go
-  gratuits, reste à vérifier en phase 5 s'il exige une carte bancaire pour être activé.
+  documentation (phase 2, §8.1), le premier déploiement le confirme (phase 5, repli au §8.1) ; TURN :
+  absent de la mise en ligne (ci-dessus).
 - **Safari iOS** : WebGL 2 et son ; un ancien ticket Godot (WebRTC bloqué en « connecting », 4.2) n'a
-  pas été revérifié : à tester en phase 5 sur un vrai iPhone.
+  pas été revérifié : à tester à l'essai réel sur un vrai iPhone (`docs/essai-en-ligne.md`, section 4).
 - **Exclu qui revient** : sans compte, rien n'identifie durablement un joueur. L'exclusion est
   rejouable par l'hôte à chaque retour ; le code n'est connu que de ceux qui ont le lien.
 - **Deux transports à tenir** : `TransportENet` ne sert qu'aux tests ; tout ce qui n'est pas du

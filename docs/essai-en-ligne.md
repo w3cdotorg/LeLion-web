@@ -3,9 +3,10 @@
 Cette fiche sert une soirée de jeu en ligne, chacun chez soi : ce qu'il faut essayer, ce qu'il faut
 regarder et, pour chaque réponse, ce que la phase 7 bis changera. Rien n'y est décidé d'avance : la
 prédiction a été réglée au banc (profil mobile : 150 ms, 60 ms de gigue, 8 % de pertes), les mobiles en
-émulation, le TURN jamais (il ne se teste pas en local). Le critère de réussite (spec §1) : **une manche
-complète à au moins 3 joueurs, dont un mobile en 4G et un joueur dans un autre foyer, sans installation
-ni réglage réseau.**
+émulation. Cette version n'a **pas de relais TURN** (STUN seul, phase 5) : deux réseaux trop fermés ne se
+relient pas, et c'est l'une des questions de la soirée (section 2). Le critère de réussite (spec §1) :
+**une manche complète à au moins 3 joueurs, dont un mobile en 4G et un joueur dans un autre foyer, sans
+installation ni réglage réseau.**
 
 Comment la remplir : cocher ce qui a été essayé, entourer ou écrire la réponse, noter sur quel appareil.
 Une réponse « ça va » est une vraie réponse : elle clôt la question. Renvoyer ensuite la fiche remplie,
@@ -18,6 +19,17 @@ Pour créer, inviter et rejoindre, suivre la section « Jouer en ligne » du `RE
 - [ ] La page est publiée (phase 5) : <https://w3cdotorg.github.io/LeLion-web/> s'ouvre, déployée depuis
   le tag de la version 0.21 ou d'une suivante (deux versions différentes ne jouent pas ensemble : chacun
   recharge la page avant de commencer) : oui / non
+- [ ] Sur l'ordinateur de l'hôte, la durée de vie des canaux de la page publiée (le correctif des canaux de
+  la phase 7, qui n'est pas derrière le pilote ; une fois suffit) : Chrome ou Firefox, ouvrir la page,
+  F12, onglet Console, y coller la ligne ci-dessous, Entrée, **puis seulement** *Multijoueur*, *Créer une
+  partie*, et faire rejoindre un joueur. La console écrit une ligne `canal …` par canal (quatre par
+  joueur) : deux disent `durée=100`, les deux autres `durée=null` : oui / non (si non, recopier les
+  lignes : _______________)
+
+  ```js
+  { const creer = RTCPeerConnection.prototype.createDataChannel; RTCPeerConnection.prototype.createDataChannel = function (nom, options) { const canal = creer.call(this, nom, options); console.log(`canal ${nom} ordonné=${canal.ordered} durée=${canal.maxPacketLifeTime} renvois=${canal.maxRetransmits}`); return canal; }; }
+  ```
+
 - [ ] Les captures de la phase 7 (le salon de l'hôte avec les croix d'exclusion et la consigne de
   l'onglet ; celles de la phase 6 pour un téléphone) ne sont pas dans le dépôt : la personne qui pilote
   cette phase te les montrera avant de commencer. Elles correspondent à cette fiche et au README :
@@ -51,11 +63,11 @@ Les appareils de la soirée :
 | Réponse | Ce que fera la phase 7 bis |
 |---|---|
 | Tout arrive vite | Rien. |
-| « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Noter les deux réseaux ; refaire avec `&relais=1` ajouté au lien (section 2) : si le relais passe, le TURN fait son travail ; sinon, le journal de la console des deux navigateurs (`TransportWebRTC`, `DELAI_CANAL` 15 s). |
+| « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Noter les deux réseaux (section 2) : sans TURN, c'est attendu sur certains réseaux ; s'ils sont nombreux, un TURN (spec §13) ; sinon, le journal de la console des deux navigateurs (`TransportWebRTC`, `DELAI_CANAL` 15 s). |
 | « Service de connexion indisponible » | La console du navigateur : la raison exacte (`origine`, `debit`, Worker injoignable) ; les limites de 5 créations et 30 arrivées par minute et par IP (`signalisation/`) touchent un réseau partagé (école, entreprise). |
 | L'arrivée prend plus de 10 s | Noter le réseau : les candidats ICE et le délai de 15 s (`TransportWebRTC.DELAI_CANAL`). |
 
-## 2. Une manche normale, puis une manche par le relais
+## 2. Une manche, et les réseaux qui ne se relient pas
 
 Manche 1 : au moins 3 joueurs (le téléphone en 4G et le joueur de l'autre foyer compris), niveau au choix.
 
@@ -67,12 +79,13 @@ Manche 1 : au moins 3 joueurs (le téléphone en 4G et le joueur de l'autre foye
 - [ ] Les autres lions bougent de façon fluide : oui / saccadés / par à-coups
 - [ ] Les chocs entre lions et les étourdissements (une gerbe reçue) paraissent justes : oui / non
 
-Manche 2, par le relais TURN imposé : l'hôte recharge la page avec `?relais=1` au bout de son adresse,
-crée une nouvelle partie et envoie le **nouveau** lien (l'ancien code est fermé) ; chaque joueur ajoute
-`&relais=1` à la fin de ce nouveau lien avant de l'ouvrir.
+Pas de manche par le relais : cette version n'a pas de TURN, et `?relais=1` (qui impose le relais)
+empêche alors toute connexion. À la place, pour chaque joueur qui lit « Connexion impossible avec
+l'hôte » :
 
-- [ ] Tout le monde arrive au salon : oui / non (appareils qui échouent : ______)
-- [ ] La manche paraît : pareille / plus lente / saccadée, qu'en manche 1
+- [ ] Son réseau et celui de l'hôte (Wi-Fi d'une box, Wi-Fi d'entreprise ou d'école, 4G, 5G,
+  opérateur) : _______________
+- [ ] Il réessaie depuis un autre réseau (la 4G au lieu du Wi-Fi, ou l'inverse) : ça passe : oui / non
 
 | Réponse | Ce que fera la phase 7 bis |
 |---|---|
@@ -80,8 +93,8 @@ crée une nouvelle partie et envoie le **nouveau** lien (l'ancien code est ferm�
 | Élastique | `PredictionLocale.DUREE_CORRECTION` (0,04 s). |
 | Des sauts | `PredictionLocale.SEUIL_RECALAGE` (200 px), et la console de l'appareil (un recalage est une désynchronisation). |
 | Autres lions saccadés (en 4G surtout) | `InterpolationLion.RETARD` (6 ticks, 100 ms : 8 à 10 absorbent un réseau plus mauvais, au prix d'un peu de retard) ; par à-coups pendant une coupure : `InterpolationLion.EXTRAPOLATION_MAX` (3 ticks). |
-| Le relais échoue | Le TURN de Cloudflare (identifiants, ports bloqués) : la console (`iceServers`, l'état ICE). |
-| Le relais est bien plus lent | Noter la ville des joueurs : le point de présence du TURN ; aucun réglage du jeu n'y peut rien. |
+| Des joueurs ne se relient pas (« Connexion impossible avec l'hôte ») | Un TURN (spec §13) : des identifiants fabriqués par le Worker (`fabriquerIce`), chez Cloudflare (TURN Cloudflare, une carte bancaire) ou un fournisseur à offre gratuite ; puis rejouer cette section avec `?relais=1`. |
+| Tout le monde se relie, même en 4G | Rien : le TURN reste à faire le jour où un réseau l'exige. |
 
 ## 3. L'hôte et ses onglets
 

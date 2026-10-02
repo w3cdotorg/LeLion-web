@@ -6,13 +6,16 @@ A lion has to paint the town by puking a rainbow, while dodging enemies.
 An absurd, deliciously colorful game made with [Godot 4](https://godotengine.org).
 
 This copy of [LeLion-multi](https://github.com/w3cdotorg/LeLion-multi) (itself a fork of
-[LeLion](https://github.com/w3cdotorg/LeLion)) is turning the **paint battle for 2 to 6 players**
-into an **online game that runs in the browser**: friends at home open a link and play, no install
-(WebRTC between browsers, see the
-[design spec](docs/superpowers/specs/2026-10-01-multijoueur-en-ligne-design.md), in French). Work in
-progress: for now the battle still runs on a local network, from the Godot editor (see
-[Multiplayer](#multiplayer-a-paint-battle)). The solo game below is unchanged; the original plays in
-a browser at <https://w3cdotorg.github.io/LeLion/>.
+[LeLion](https://github.com/w3cdotorg/LeLion)) turns the **paint battle for 2 to 6 players** into an
+**online game that runs in the browser**: friends at home open a link and play, no install (WebRTC
+between browsers, see the [design spec](docs/superpowers/specs/2026-10-01-multijoueur-en-ligne-design.md),
+in French).
+
+**Play at <https://w3cdotorg.github.io/LeLion-web/>.** One player, on a computer, opens
+**Multiplayer**, picks a name and **Create a game**, then sends the link (**Copy link**); the others
+(computers or phones) open it, pick a name and **Join**. How to host, invite and join, and what each
+message means: [Jouer en ligne](#jouer-en-ligne), in French. The same page plays the solo game below,
+unchanged; the original plays at <https://w3cdotorg.github.io/LeLion/>.
 
 A Game Boy Advance port, rewritten in C, lives at [w3cdotorg/lelion-gba](https://github.com/w3cdotorg/lelion-gba).
 
@@ -84,11 +87,13 @@ quitting ends the game for everyone (it asks first). Each player uses their own 
 gamepad, with the solo controls; Esc opens a local menu that does not pause the round.
 
 Online play runs in the browser (WebRTC, the host's browser being authoritative): **Create a game**
-gives a room code (`K7Q-2XM`) and **Copy link**; the others open the link, pick a name and join. It
-needs the signalling Worker (`signalisation/`, deployed with the page in a later phase); locally, after
-`npm ci` in `signalisation/` (and in `tests/web/` for the end-to-end test below),
-`npm --prefix signalisation run dev` serves it on `ws://localhost:8787` (the `lelion/signalisation/url`
-project setting), and the Web export must be served from `http://localhost:<port>` (not `127.0.0.1`).
+gives a room code (`K7Q-2XM`) and **Copy link**; the others open the link, pick a name and join. The
+published page talks to the signalling Worker (`signalisation/`) deployed at
+`wss://lelion-web.w3cdotorg.workers.dev` (the `lelion/signalisation/url` project setting), which only
+admits that page. Locally, after `npm ci` in `signalisation/` (and in `tests/web/` for the end-to-end
+test below), `npm --prefix signalisation run dev` serves it on `ws://localhost:8787`, admitting
+`http://localhost:*`; only the "Web pilote" export talks to it (the setting's `.pilote` variant), served
+from `http://localhost:<port>` (not `127.0.0.1`).
 Phones (Android, iOS) join only, by the link: no **Create a game**; lifting a finger asks for full
 screen, until it is granted (three tries at most; a computer has a **Full screen** button in the lobby).
 In the lobby, the arrows pick a color and **READY** gets ready; in the round, the stick and **PUKE**; the
@@ -106,9 +111,9 @@ Ready-made Windows, macOS and Linux builds of the LAN version are on
 
 ## Jouer en ligne
 
-Le jeu en ligne se joue dans le navigateur, sans rien installer, de 2 à 6 joueurs, chacun chez soi. Il
-sera publié sur <https://w3cdotorg.github.io/LeLion-web/> avec sa signalisation (le déploiement est la
-prochaine étape) ; d'ici là, il se joue en local, comme le décrit la section précédente.
+Le jeu en ligne se joue dans le navigateur, sans rien installer, de 2 à 6 joueurs, chacun chez soi, sur
+<https://w3cdotorg.github.io/LeLion-web/>. Tout le monde doit avoir la même version : recharge la page
+avant de jouer (sinon : « Version différente de l'hôte », ci-dessous).
 
 **Créer une partie** (sur un ordinateur : un téléphone ne fait que rejoindre) : *Multijoueur* sur l'écran
 titre, choisis ton pseudo (12 caractères au plus), puis *Créer une partie*. Le salon s'ouvre avec le code
@@ -144,13 +149,14 @@ temps (en solo) sont gardés, dans ton navigateur. GitHub Pages, qui sert la pag
 elle se charge. Le service de connexion (un Worker, chez Cloudflare) voit l'adresse IP de chaque joueur le
 temps d'entrer dans la partie, et celle de l'hôte toute la vie de la salle (sa connexion au service reste
 ouverte pour les arrivées, 4 h au plus) : il s'en sert pour limiter les créations et les arrivées par
-minute, et le Worker ne l'écrit pas dans ses journaux. Les serveurs STUN (de Cloudflare et de Google), qui
-disent à chaque navigateur son adresse publique, la voient aussi. Ensuite les navigateurs se parlent
-directement (WebRTC) : l'hôte et chaque joueur voient l'adresse IP l'un de l'autre, sauf quand la
-connexion passe par le relais de Cloudflare (TURN : les réseaux trop fermés, ou `?relais=1` ajouté au
-lien, un réglage de diagnostic qui l'impose) ; Cloudflare relaie alors tout le trafic de la partie,
-chiffré. Le pseudo des autres ne s'affiche que comme du texte : ni mise en forme, ni caractères
-invisibles.
+minute, sans l'écrire dans ses journaux : ils ne gardent que les lignes du Worker (jamais d'IP), les
+journaux d'invocation de Cloudflare (qui décrivent chaque requête) et les traces sont coupés
+(`signalisation/wrangler.jsonc`). Les serveurs STUN (de Cloudflare et de Google), qui disent à chaque
+navigateur son adresse publique, la voient aussi. Ensuite les navigateurs se parlent directement
+(WebRTC) : l'hôte et chaque joueur voient l'adresse IP l'un de l'autre. Il n'y a pas de relais (TURN)
+pour l'instant : aucun serveur ne voit passer la partie, mais deux réseaux trop fermés ne se relient pas
+(voir « Connexion impossible avec l'hôte » ci-dessous). Le pseudo des autres ne s'affiche que comme du
+texte : ni mise en forme, ni caractères invisibles.
 
 **Dépannage**, message par message :
 
@@ -161,7 +167,7 @@ invisibles.
 | « Aucune partie avec ce code. » | La partie n'existe pas, ou plus (l'hôte est parti, la salle a fermé). | Demande un nouveau lien à l'hôte. |
 | « Service de connexion indisponible, réessaie dans un instant. » | Le service de connexion ne répond pas, ou refuse pour un moment (trop de tentatives depuis la même adresse IP). | Réessaie dans une minute. |
 | « Trop de parties en ce moment, réessaie plus tard. » | Le quota gratuit du service de connexion est atteint pour aujourd'hui. | Réessaie plus tard (le lendemain au pire). |
-| « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Les deux navigateurs n'ont pas pu se relier en 15 s. | Réessaie ; sinon change de réseau (la 4G plutôt qu'un Wi-Fi d'entreprise ou d'école), ou ajoute `&relais=1` au lien. |
+| « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Les deux navigateurs n'ont pas pu se relier en 15 s : sans relais (TURN, pas encore en service), deux réseaux trop fermés ne se relient pas. | Réessaie ; sinon change de réseau (la 4G plutôt qu'un Wi-Fi d'entreprise ou d'école, ou l'inverse). Le paramètre `?relais=1` n'a pas encore de relais à imposer : il empêche toute connexion. |
 | « Version différente de l'hôte (…) » | L'hôte et toi n'avez pas la même version du jeu. | Recharge la page (l'un des deux a une ancienne version en cache). |
 | « Réponse incomprise : est-ce bien une partie de LeLion ? » | La réponse reçue n'est pas celle d'une partie de LeLion (un autre programme, ou une version trop différente pour se comprendre). | Vérifie le code ou le lien ; sinon, l'hôte et toi, rechargez la page. |
 | « La partie est complète. » | Six joueurs au plus. | Attends qu'une place se libère. |
@@ -258,6 +264,18 @@ docker run --rm --init -v "$PWD":/depot -v lelion-modules-signalisation:/depot/s
   bash -c '(cd ../../signalisation && npm ci) && npm ci && xvfb-run -a npx playwright test'
 ```
 
+The published export has its own checks: its settings (no `pilote` feature, the deployed Worker's
+address), then the page in Chromium with a simulated signalling server (no driver, the Worker of
+`project.godot`, the unreliable channels' lifetime); and, once deployed, a game between two pages driven
+by the keyboard on the published page:
+
+```sh
+godot --headless --export-release Web export/web/index.html
+godot --headless --script tests/export_publie.gd -- --pck=export/web/index.pck
+cd tests/web && npx playwright test -c playwright.publie.config.js
+npx playwright test -c playwright.en_direct.config.js   # LELION_PAGE=<url> for another page than GitHub Pages
+```
+
 Screenshots, with a real renderer (windows open while the scripts run):
 
 ```sh
@@ -289,4 +307,23 @@ installs Godot 4.7.2 and its export templates, runs the unit tests, the smoke te
 battle test, the prediction bench, the network test and the two capture scripts without a
 renderer, then exports the Web build and publishes it as the `LeLion-web` artifact (kept 30 days).
 A second job tests the signalling Worker; a third exports "Web pilote" and runs the end-to-end test.
-Deployment to GitHub Pages comes with the Worker's (a later phase).
+The first job also guards the Web export (`tests/export_publie.gd`: no `pilote` feature, the deployed
+Worker's address, nothing but the page's files), and the third checks it in Chromium
+(`tests/web/playwright.publie.config.js`: no driver, the deployed Worker's address, the unreliable
+channels' 100 ms lifetime).
+
+Nothing goes online from a pull request or a push to `main`. A tag `vX.Y`, equal to
+`application/config/version`, runs the same jobs and then, if they all pass, deploys the Worker
+(`wrangler deploy`, then `signalisation/outils/sonder.mjs`: a room from the published page's origin,
+STUN only, `localhost` refused) and the page (the `LeLion-web` artifact of that run, checked against the
+deployed Worker, then GitHub Pages, then a game between two Chromium pages on the published page,
+`tests/web/playwright.en_direct.config.js`). It needs the repository secrets `CLOUDFLARE_API_TOKEN`
+(template "Edit Cloudflare Workers") and `CLOUDFLARE_ACCOUNT_ID`, and the `github-pages` environment
+allowing `v*` tags. No TURN secret: the Worker hands out STUN servers only.
+
+```sh
+git tag v0.21 && git push origin v0.21   # deploy version 0.21 (after merging the version bump on main)
+```
+
+To go back to an earlier version, re-run that tag's workflow (`gh run rerun <run id>`); the Worker
+alone can also be rolled back from Cloudflare's dashboard (Deployments) or with `npx wrangler rollback`.
