@@ -2756,6 +2756,25 @@ func _tester_manche_reseau() -> void:
 	GS.partie_en_cours = false
 	GS.pret = false
 	GS.niveau_courant = 0
+	# Phase 7 du jeu en ligne (spec §9) : un poste revenu d'un onglet caché, déclaré parti entre-temps (la
+	# perte de l'hôte au retour d'un gel) : « Tu as été déconnecté », puis l'écran En ligne, pas le titre
+	var main_gel: Node = load("res://Scenes/Main.tscn").instantiate()
+	root.add_child(main_gel)
+	current_scene = main_gel
+	await _frames(2)
+	reseau.raison_perte = reseau.PERTE_DECONNECTE
+	main_gel._sur_hote_perdu()
+	var message_gel: String = main_gel.get_node("HotePerdu/Message").text
+	var ecran_gel: Node = await _attendre_scene("res://Scenes/EcranEnLigne.tscn", 6000)
+	_check(message_gel == "RESEAU_DECONNECTE" and tr(message_gel) == "Tu as été déconnecté" and ecran_gel != null
+		and ecran_gel.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran_gel.message.text == "Tu as été déconnecté" and not paused,
+		"revenu d'un onglet caché : « Tu as été déconnecté » sur la manche figée, puis l'écran En ligne qui le redit (%s)"
+			% ("" if ecran_gel == null else ecran_gel.message.text))
+	reseau.raison_perte = reseau.PERTE_HOTE
+	if ecran_gel != null:
+		ecran_gel.free()
+	GS.partie_en_cours = false
+	GS.pret = false
 
 
 ## Attend la scène `chemin` qui remplace celle d'identifiant `avant` (la même scène rechargée compte),

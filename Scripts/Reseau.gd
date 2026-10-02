@@ -29,7 +29,10 @@ extends Node
 ## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs. L'hôte
 ## exclut un joueur du salon (phase 7 du jeu en ligne, spec §8.2 : `exclure_du_salon`, la croix de sa
 ## carte) comme la barrière de chargement exclut un absent (`exclure`) : l'exclu l'apprend, part de
-## lui-même, et l'hôte le libère au plus tard peu après.
+## lui-même, et l'hôte le libère au plus tard peu après. Un poste qui gèle plus longtemps que le silence
+## toléré (un onglet caché, un téléphone verrouillé : le navigateur arrête ses images) a été déclaré parti
+## pendant ce temps : la perte de l'hôte qu'il constate à son retour est la sienne (`au_retour_d_un_gel`,
+## « Tu as été déconnecté », spec §5 et §9).
 ## `quitter()` part proprement (spec §5) : un adieu fiable (`_recevoir_adieu`), que l'autre côté traite
 ## aussitôt (l'hôte libère ce client, un client perd l'hôte), puis le transport ferme sa session une fois
 ## l'adieu envoyé (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est
@@ -126,6 +129,14 @@ const REFUS_DEMANDE := "RESEAU_REFUS_DEMANDE"
 const PERTE_HOTE := "RESEAU_HOTE_PERDU"
 const PERTE_EXCLU := "RESEAU_EXCLU"
 const PERTE_EXCLU_HOTE := "RESEAU_EXCLU_HOTE"
+## Pourquoi l'hôte est perdu, encore : ce poste revient d'un gel plus long que le silence toléré (un onglet
+## caché, un téléphone verrouillé), pendant lequel l'hôte l'a déclaré parti : « Tu as été déconnecté » (phase
+## 7 du jeu en ligne, spec §9).
+const PERTE_DECONNECTE := "RESEAU_DECONNECTE"
+## Après la fin d'un gel de ce poste, en secondes : une perte de l'hôte constatée pendant ce temps est due au
+## gel (la fermeture du pair par l'hôte, ou le silence de l'hôte, se voient dès la première ou la deuxième
+## image qui suit).
+const RETOUR_DE_GEL := 2.0
 ## Entre l'annonce de son exclusion à un joueur et sa libération par l'hôte, en secondes : le temps que
 ## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même. À la barrière de
 ## chargement, la manche attend ce départ ; au salon, rien ne l'attend : le délai y est plus long, pour
@@ -201,8 +212,8 @@ var numero_table := 0
 ## devancé (M6). Ce que charge chaque poste (`Salon.entrer_en_manche`). Valide d'un lancement au
 ## suivant ; remis à 0 par `quitter()`.
 var niveau_manche := 0
-## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE, PERTE_EXCLU ou
-## PERTE_EXCLU_HOTE), posé juste avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
+## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE, PERTE_EXCLU, PERTE_EXCLU_HOTE
+## ou PERTE_DECONNECTE), posé juste avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
 var raison_perte := PERTE_HOTE
 ## Chez un client, ou chez l'hôte dont la partie n'a pas pu être créée : pourquoi la dernière connexion a
 ## échoué, posé juste avant `connexion_echouee` : la raison du transport (Transport.ECHEC_*), ou vide (la
@@ -269,6 +280,12 @@ var _prochain_battement := 0
 var _derniere_ecoute := 0
 ## Chez l'hôte : le débit des demandes de salon de chaque client (DEMANDES_SALON_PAR_SECONDE), en secondes.
 var _limite_salon := LimiteDebit.new(DEMANDES_SALON_PAR_SECONDE, DEMANDES_SALON_PAR_SECONDE)
+## L'instant (ms) de la dernière image de ce poste (`_process`), en session ou non, et celui de la fin de son
+## dernier gel plus long que le silence toléré (0 : jamais) : voir `au_retour_d_un_gel`.
+var _derniere_image := 0
+var _fin_du_gel := 0
+## Vrai si la perte de l'hôte décidée (`_decider`) suit un gel de ce poste : PERTE_DECONNECTE.
+var _perte_apres_gel := false
 
 
 func _ready() -> void:
@@ -393,6 +410,7 @@ func quitter() -> void:
 	numero_table = 0
 	niveau_manche = 0
 	_exclusion = ""
+	_perte_apres_gel = false
 	index_local = -1
 	couleur_locale = Color.TRANSPARENT
 	manche_en_cours = false
@@ -419,14 +437,18 @@ func _brancher(transport: Transport) -> void:
 	transport.salle_fermee.connect(_sur_transport_salle_fermee.bind(_generation))
 
 
-## En session, le transport, le battement et l'écoute des silences ; puis les départs en cours, oubliés
-## une fois leur transport fermé. Un transport de session qui se ferme de lui-même (`servir()` faux sans
-## `quitter()` ni `clore()`) : la session est perdue (`_sur_hote_perdu`), sans battement ni écoute.
+## La fin d'un gel de ce poste (`au_retour_d_un_gel`), puis, en session, le transport, le battement et
+## l'écoute des silences ; puis les départs en cours, oubliés une fois leur transport fermé. Un transport de
+## session qui se ferme de lui-même (`servir()` faux sans `quitter()` ni `clore()`) : la session est perdue
+## (`_sur_hote_perdu`), sans battement ni écoute.
 func _process(_delta: float) -> void:
+	var maintenant := Time.get_ticks_msec()
+	if _derniere_image > 0 and maintenant - _derniere_image > int(silence * 1000.0):
+		_fin_du_gel = maintenant
+	_derniere_image = maintenant
 	if _transport != null and not _transport.servir():
 		_sur_hote_perdu()
 	elif en_ligne():
-		var maintenant := Time.get_ticks_msec()
 		_battre(maintenant)
 		_ecouter(maintenant)
 	for partant: Transport in _partants.duplicate():
@@ -483,6 +505,16 @@ func _ecouter(maintenant: int) -> void:
 			_liberer(id, _generation)
 		else:
 			_decider("hote_perdu")
+
+
+## Vrai si ce poste revient, à `maintenant` (ms), d'un gel plus long que le silence toléré : sans image
+## depuis plus que `silence` (la première image après un onglet caché ou un téléphone verrouillé n'est pas
+## encore passée : la fermeture de son pair par l'hôte arrive au relevé des paquets, avant elle), ou une
+## image qui a suivi un tel gel il y a RETOUR_DE_GEL secondes au plus. L'hôte l'a alors déclaré parti : son
+## silence a dépassé le même délai chez lui (spec §2 : 10 s pour tout le monde).
+func au_retour_d_un_gel(maintenant: int) -> bool:
+	return (_derniere_image > 0 and maintenant - _derniere_image > int(silence * 1000.0)) \
+		or (_fin_du_gel > 0 and maintenant - _fin_du_gel <= int(RETOUR_DE_GEL * 1000.0))
 
 
 ## Les identifiants de `entendus` (identifiant → instant, en ms, du dernier paquet reçu) dont le silence
@@ -1232,6 +1264,7 @@ func _decider(nom: StringName, arguments: Array = []) -> void:
 	if _issue_decidee:
 		return
 	_issue_decidee = true
+	_perte_apres_gel = nom == &"hote_perdu" and au_retour_d_un_gel(Time.get_ticks_msec())
 	_fermer_puis_emettre.call_deferred(nom, arguments, _generation)
 
 
@@ -1243,10 +1276,11 @@ func _fermer_puis_emettre(nom: StringName, arguments: Array, generation: int) ->
 	if generation != _generation:
 		return
 	var exclusion := _exclusion
+	var apres_gel := _perte_apres_gel
 	var raison_transport := _raison_transport
 	quitter()
 	if nom == &"hote_perdu":
-		raison_perte = exclusion if not exclusion.is_empty() else PERTE_HOTE
+		raison_perte = exclusion if not exclusion.is_empty() else (PERTE_DECONNECTE if apres_gel else PERTE_HOTE)
 	elif nom == &"connexion_echouee":
 		raison_echec = raison_transport
 	callv("emit_signal", [nom] + arguments)

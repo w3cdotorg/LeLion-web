@@ -67,6 +67,7 @@ RESEAU_REFUS_DEMANDE,"Réponse incomprise : est-ce bien une partie de LeLion ?",
 RESEAU_HOTE_PERDU,L'hôte a quitté la partie,The host left the game
 RESEAU_EXCLU,"Exclu : ta partie a mis trop de temps à charger.","Removed: your game took too long to load."
 RESEAU_EXCLU_HOTE,"L'hôte t'a exclu de la partie.","The host removed you from the game."
+RESEAU_DECONNECTE,Tu as été déconnecté,You were disconnected
 RESEAU_PORT_OCCUPE,Impossible d'héberger : port %d occupé,Can't host: port %d in use
 RESEAU_HEBERGER_IMPOSSIBLE,Impossible d'héberger (erreur %d),Can't host (error %d)
 EN_LIGNE,En ligne,Online

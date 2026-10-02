@@ -59,6 +59,7 @@ func _run() -> void:
 	_tester_limites()
 	await _tester_demandes_salon()
 	await _tester_exclusion()
+	await _tester_retour_de_gel()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2365,6 +2366,86 @@ func _tester_exclusion() -> void:
 	hote.joueur_arrive.disconnect(sur_arrivee)
 	hote.joueur_parti.disconnect(sur_depart)
 	client.hote_perdu.disconnect(sur_perte)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
+## Phase 7 du jeu en ligne (spec §5 et §9) : un poste qui gèle plus longtemps que le silence toléré (un
+## onglet caché, un téléphone verrouillé : plus aucune image) a été déclaré parti par l'hôte ; la perte de
+## l'hôte qu'il constate à son retour dit « Tu as été déconnecté », pas « L'hôte a quitté la partie ». D'abord
+## la règle, puis entre l'autoload, hôte, et un second poste client dans ce même processus : le client se tait
+## (`set_process(false)` : plus d'image ni de battement ; sa `SceneMultiplayer` relève encore ses paquets,
+## comme le navigateur à la première image du retour), l'hôte le libère, le client l'apprend.
+func _tester_retour_de_gel() -> void:
+	print("-- Retour d'un gel : « Tu as été déconnecté » (phase 7)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var silence_ms := int(reseau.SILENCE_SESSION * 1000.0)
+	var maintenant := Time.get_ticks_msec()
+	var image_avant: int = reseau._derniere_image
+	var gel_avant: int = reseau._fin_du_gel
+	reseau._fin_du_gel = 0
+	reseau._derniere_image = maintenant - 500
+	var sans_gel: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._derniere_image = maintenant - silence_ms - 1000
+	var pendant: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._derniere_image = maintenant
+	reseau._fin_du_gel = maintenant - 1500
+	var peu_apres: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._fin_du_gel = maintenant - int(reseau.RETOUR_DE_GEL * 1000.0) - 500
+	var longtemps_apres: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau.definir_silence(reseau.SILENCE_CHARGEMENT)
+	reseau._derniere_image = maintenant - 15000
+	var au_chargement: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau.definir_silence(reseau.SILENCE_SESSION)
+	_check(not sans_gel and pendant and peu_apres and not longtemps_apres and not au_chargement,
+		"un gel de ce poste : plus de 10 s sans image (encore aucune image depuis), ou une image qui l'a suivi il y a %.0f s au plus ; pas une image d'il y a 0,5 s, ni 15 s pendant le chargement (30 s tolérées)"
+			% reseau.RETOUR_DE_GEL)
+	var raisons: Array[String] = []
+	var sur_perte := func() -> void: raisons.append(reseau.raison_perte)
+	reseau.hote_perdu.connect(sur_perte)
+	reseau._derniere_image = Time.get_ticks_msec() - silence_ms - 1000
+	reseau._decider(&"hote_perdu")
+	await process_frame
+	reseau._fin_du_gel = 0
+	reseau._derniere_image = Time.get_ticks_msec()
+	reseau._decider(&"hote_perdu")
+	await process_frame
+	reseau.hote_perdu.disconnect(sur_perte)
+	_check(raisons == [reseau.PERTE_DECONNECTE, reseau.PERTE_HOTE] and not reseau._perte_apres_gel,
+		"l'hôte perdu au retour d'un gel : « Tu as été déconnecté » ; sans gel, « L'hôte a quitté la partie » (%s)" % [raisons])
+	reseau._derniere_image = maxi(image_avant, Time.get_ticks_msec())
+	reseau._fin_du_gel = gel_avant
+
+	var hote := reseau
+	var client := _poste_client("PosteCache")
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte_client := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte_client)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Caché"
+	_check(hote.heberger(17782) == OK and client.rejoindre("127.0.0.1", 17782) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	# Des silences raccourcis : 1,5 s chez l'hôte, 1 s chez le client (son gel le dépasse quand l'hôte le libère)
+	hote.definir_silence(1.5)
+	client.definir_silence(1.0)
+	client._prochain_battement = 0
+	client._battre(Time.get_ticks_msec())  # un dernier battement, puis plus rien
+	client.set_process(false)
+	_check(await _attendre(func() -> bool: return partis.size() == 1 and pertes.size() == 1, 5.0),
+		"l'hôte libère le client muet ; le client l'apprend au relevé de ses paquets, avant sa prochaine image")
+	client.set_process(true)
+	_check(pertes == [client.PERTE_DECONNECTE] and not client.en_ligne(),
+		"au retour de son gel : « Tu as été déconnecté » (%s), ce poste hors réseau" % [pertes])
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	client.hote_perdu.disconnect(sur_perte_client)
 	hote.quitter()
 	await _retirer_poste(client)
 	hote.pseudo = ""
