@@ -8,6 +8,20 @@ const ALPHABET = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
 const HOTE_PARTI = "L'hôte a quitté la partie";
 
 /**
+ * Le bruit connu des consoles des pages : des lignes d'erreur qui ne disent rien du jeu (aucune pour
+ * l'instant). Toute autre ligne qui contient « SCRIPT ERROR » ou « ERROR: » (une erreur de script, un
+ * push_error, une erreur du moteur) fait échouer le test.
+ */
+const BRUIT_CONNU = [];
+
+/** Les erreurs des consoles `consoles` (une liste de lignes par page) hors du bruit connu, par page. */
+function erreurs(consoles) {
+	return consoles.map((lignes) =>
+		lignes.filter((ligne) => /SCRIPT ERROR|ERROR:/.test(ligne) && !BRUIT_CONNU.some((bruit) => bruit.test(ligne))),
+	);
+}
+
+/**
  * Une page neuve, la `rang`-ième (son propre contexte : rien de partagé entre joueurs), le pilote prêt.
  * Chaque fenêtre est plus petite que la précédente : sous Xvfb (sans gestionnaire de fenêtres, toutes en
  * haut à gauche), Firefox ne dessine plus une fenêtre entièrement couverte, et son jeu s'y fige.
@@ -93,8 +107,12 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	const depart = Date.now();
 	await commander(hote, "quitter");
 	for (const page of invites) await attendre(page, (e) => e.pertes.includes(HOTE_PARTI), "les autres voient l'hôte partir", 9_000);
-	// Avant les 10 s de silence : c'est l'adieu de l'hôte, ou la fermeture de son pair, qui l'a dit.
-	expect(Date.now() - depart).toBeLessThan(9_000);
+	// Avant les 10 s de silence : c'est l'adieu de l'hôte, ou la fermeture de son pair, qui l'a dit. La borne
+	// laisse de la marge à une CI lente ; la valeur mesurée est journalisée.
+	const vu = Date.now() - depart;
+	console.log(`Départ de l'hôte vu par les deux autres en ${vu} ms`);
+	expect(vu).toBeLessThan(9_000);
+	expect(erreurs(consoles), "aucune erreur dans les consoles des trois pages").toEqual([[], [], []]);
 });
 
 test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse-papiers @lien", async ({ browser }) => {
@@ -113,6 +131,8 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 		};
 	});
 	const page = await contexte.newPage();
+	const lignes = [];
+	page.on("console", (message) => lignes.push(message.text()));
 	await page.goto("/");
 	await page.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	await commander(page, "creer", "Hote");
@@ -121,4 +141,5 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 	await page.mouse.click(x, y);
 	await attendre(page, (e) => e.salon.copier === "SALON_LIEN_COPIE", "le bouton dit « Lien copié ! »");
 	await expect.poll(() => page.evaluate(() => window.presse)).toEqual({ texte: `http://localhost:8060/?salle=${salle.code}`, issue: "acceptee" });
+	expect(erreurs([lignes]), "aucune erreur dans la console").toEqual([[]]);
 });
