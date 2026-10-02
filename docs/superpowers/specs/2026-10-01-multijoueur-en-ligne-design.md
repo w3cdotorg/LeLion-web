@@ -176,12 +176,16 @@ retour au titre ne rouvre pas l'écran En ligne).
   l'appui ; le lien reste le chemin principal (coller y est peu fiable). Au salon, les flèches de la
   couleur et PRÊT poussent leurs actions comme des touches : une action par appui (phase 18). Le voile
   suit la taille de la fenêtre à chaque image ; il couvre l'écran du jeu, pas les bandes noires autour.
-  Le plein écran se demande une fois par page (Safari sur iPhone n'en a pas pour un canevas : rien ne
-  se passe).
+  Le plein écran se demande au relâchement d'un toucher (`touchend` est un geste pour le navigateur,
+  `touchstart` non), de nouveau au relâchement suivant tant qu'il n'est pas obtenu, 3 fois au plus
+  (Safari sur iPhone n'en a pas pour un canevas : sans plafond, une erreur à chaque toucher) ; plus
+  jamais une fois obtenu, même si le joueur en sort ; jamais mémorisé.
 
 ## 7. Viewport, HUD, Résultats
 
-Inchangés. Le HUD et l'écran Résultats sont vérifiés en captures à 360×640 (portrait refusé, voile
+Inchangés, sauf sur un mobile : l'écran Résultats et le menu pause (en ligne) agrandis, leurs boutons à
+la taille d'un doigt et sans les aides du clavier ; les contrôles de manche cachés aux Résultats. Le HUD et
+l'écran Résultats sont vérifiés en captures à 360×640 (portrait refusé, voile
 compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 
 ## 8. Sécurité

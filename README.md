@@ -89,10 +89,11 @@ needs the signalling Worker (`signalisation/`, deployed with the page in a later
 `npm ci` in `signalisation/` (and in `tests/web/` for the end-to-end test below),
 `npm --prefix signalisation run dev` serves it on `ws://localhost:8787` (the `lelion/signalisation/url`
 project setting), and the Web export must be served from `http://localhost:<port>` (not `127.0.0.1`).
-Phones (Android, iOS) join only, by the link: no **Create a game**; their first touch goes full screen
-(a computer has a **Full screen** button in the lobby). In the lobby, the arrows pick a color and
-**READY** gets ready; in the round, the stick and **PUKE**. Held upright, a phone shows « Tourne ton
-téléphone » over the game, which keeps running.
+Phones (Android, iOS) join only, by the link: no **Create a game**; lifting a finger asks for full
+screen, until it is granted (three tries at most; a computer has a **Full screen** button in the lobby).
+In the lobby, the arrows pick a color and **READY** gets ready; in the round, the stick and **PUKE**; the
+Results screen and the online pause menu have finger-sized buttons. Held upright, a phone shows « Turn
+your phone sideways » over the game, which keeps running.
 From the editor (`godot .`), desktop builds play over ENet instead: **Multiplayer** opens the Online
 screen, where one player creates a game and the others join it with the host's address as the code: the host's local IP
 address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
