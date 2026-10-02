@@ -58,23 +58,12 @@ DEMO,DÉMO · appuie sur une touche,DEMO · press any key
 MULTIJOUEUR,Multijoueur,Multiplayer
 RETOUR,Retour,Back
 RESEAU_PSEUDO,Pseudo,Name
-RESEAU_HEBERGER,Héberger une partie,Host a game
-RESEAU_PARTIES,Parties sur le réseau,Games on the network
-RESEAU_AUCUNE_PARTIE,"Aucune partie trouvée. Pare-feu ? Réseau Privé ? Essaie par IP.","No game found. Firewall? Private network? Try by IP."
-RESEAU_ECOUTE_IMPOSSIBLE,"Recherche impossible : port %d déjà utilisé (un autre LeLion ouvert ?). Rejoins par IP.","Can't search: port %d already in use (another LeLion open?). Join by IP."
-RESEAU_PARTIE,%s · %d/%d joueurs · %s,%s · %d/%d players · %s
-RESEAU_PARTIE_PLEINE,complète,full
-RESEAU_PARTIE_MANCHE,manche en cours,round in progress
-RESEAU_PARTIE_VERSION,version %s,version %s
-RESEAU_ADRESSE_IP,Adresse IP,IP address
 RESEAU_REJOINDRE,Rejoindre,Join
-RESEAU_IP_INVALIDE,"Adresse IP invalide (exemple : 192.168.1.20)","Invalid IP address (example: 192.168.1.20)"
 RESEAU_CONNEXION,Connexion à %s…,Connecting to %s…
 RESEAU_REFUS_VERSION,Version différente de l'hôte (%s),Different version from the host (%s)
 RESEAU_REFUS_PLEIN,La partie est complète.,The game is full.
 RESEAU_REFUS_MANCHE,"Une manche est en cours : réessaie à la fin.","A round is in progress: try again when it ends."
 RESEAU_REFUS_DEMANDE,"Réponse incomprise : est-ce bien une partie de LeLion ?","Unreadable answer: is this really a LeLion game?"
-RESEAU_ECHEC_CONNEXION,"Pas de réponse de l'hôte. Pare-feu de l'hôte ? Réseau Privé ?","No answer from the host. Host firewall? Private network?"
 RESEAU_HOTE_PERDU,L'hôte a quitté la partie,The host left the game
 RESEAU_EXCLU,"Exclu : ta partie a mis trop de temps à charger.","Removed: your game took too long to load."
 RESEAU_PORT_OCCUPE,Impossible d'héberger : port %d occupé,Can't host: port %d in use

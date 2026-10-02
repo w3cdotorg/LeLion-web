@@ -5,7 +5,7 @@ extends SceneTree
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
 const PROTOCOLE_VERSION := "0.20"
-const PROTOCOLE_EMPREINTE := 815376087
+const PROTOCOLE_EMPREINTE := 2553814265
 
 
 func _init() -> void:
@@ -34,7 +34,6 @@ func _run() -> void:
 	_tester_reseau()
 	_tester_joueur_local()
 	_tester_palette()
-	_tester_decouverte()
 	_tester_bataille_reseau()
 	_tester_salon()
 	_tester_peinture()
@@ -1116,216 +1115,6 @@ func _oklab(l: Vector3) -> Vector3:
 		0.0259040371 * r.x + 0.7827717662 * r.y - 0.8086757660 * r.z)
 
 
-func _tester_decouverte() -> void:
-	print("-- Découverte (balise, liste des parties, adresse saisie)")
-	var decouverte: Node = root.get_node("Decouverte")  # autoload : jamais nommé (compilé avant lui)
-	var reseau: Node = root.get_node("Reseau")
-	var version: String = reseau.version
-
-	# Balise : un texte, le pseudo (seul texte libre) en dernier, relu tel quel
-	var balise: PackedByteArray = decouverte.encoder_balise(version, 7777, 2, 6, false, 1, "Zoé|la|reine")
-	_check(balise.get_string_from_utf8() == "LELION|%s|7777|2|6|0|1|Zoé|la|reine" % version,
-		"la balise est « LELION|version|port|joueurs|places|manche|niveau|pseudo » (%s)" % balise.get_string_from_utf8())
-	var fiche: Dictionary = decouverte.decoder_balise(balise)
-	_check(fiche == {"version": version, "port": 7777, "nb_joueurs": 2, "places": 6, "manche_en_cours": false, "niveau": 1, "pseudo": "Zoé|la|reine"},
-		"une balise se relit telle quelle, même avec des « | » dans le pseudo (%s)" % [fiche])
-	var pleine: Dictionary = decouverte.decoder_balise(decouverte.encoder_balise(version, 17778, 6, 6, true, 2, "   "))
-	_check(pleine.get("manche_en_cours") == true and pleine.get("nb_joueurs") == 6 and pleine.get("pseudo") == "Joueur 1",
-		"manche en cours et partie pleine se relisent ; un pseudo vide devient « Joueur 1 » (l'hôte)")
-	var hostile := "\u202eAbc\u0007defghijklmnopq"
-	_check(decouverte.decoder_balise(decouverte.encoder_balise(version, 7777, 1, 6, false, 0, hostile)).get("pseudo") == reseau.pseudo_valide(hostile),
-		"le pseudo d'une balise est nettoyé comme celui d'un joueur (forçages de sens, contrôles, %d caractères)" % reseau.PSEUDO_MAX)
-
-	# Tout ce qui n'est pas une balise valide est ignoré (autre programme, balise tronquée ou forgée)
-	var trop_longue := PackedByteArray()
-	trop_longue.resize(decouverte.TAILLE_BALISE_MAX + 1)
-	trop_longue.fill(65)
-	# Préfixe corrompu (premier octet), mais assez long pour comparer les 7 premiers : rejeté sur les
-	# octets, jamais passé à get_string_from_utf8() (Minor 2 : pas de ligne ERROR pour ce genre de
-	# datagramme, mesuré au scénario 6 du test réseau).
-	var prefixe_corrompu := PackedByteArray([0xFF, 69, 76, 73, 79, 78, 124, 65, 66])
-	var invalides: Array[PackedByteArray] = [PackedByteArray(), trop_longue, prefixe_corrompu]
-	for texte: String in ["LELION", "AUTRE|0.11|7777|1|6|0|0|x", "LELION|0.11|7777|1|6|0|0",
-			"LELION|0.11|0|1|6|0|0|x", "LELION|0.11|65536|1|6|0|0|x", "LELION|0.11|port|1|6|0|0|x",
-			"LELION|0.11|7777|0|6|0|0|x", "LELION|0.11|7777|7|6|0|0|x", "LELION|0.11|7777|1|1|0|0|x",
-			"LELION|0.11|7777|3|2|0|0|x", "LELION|0.11|7777|1|7|0|0|x", "LELION|0.11|7777|1|6|2|0|x",
-			"LELION|0.11|7777|1|6|0|-1|x", "LELION|0.11|7777|1|6|0|%d|x" % EtatPartie.NIVEAUX.size(),
-			"LELION||7777|1|6|0|0|x", "LELION|0.11 beta|7777|1|6|0|0|x", "LELION|0123456789abcdefg|7777|1|6|0|0|x",
-			# Champ numérique hors de l'int64 (Minor 2) : rejeté sur sa longueur, jamais passé à to_int().
-			"LELION|0.11|999999999999999999999|1|6|0|0|x"]:
-		invalides.append(texte.to_utf8_buffer())
-	var acceptees := invalides.filter(func(d: PackedByteArray) -> bool: return not decouverte.decoder_balise(d).is_empty())
-	_check(acceptees.is_empty(), "%d datagrammes invalides, aucun pris pour une balise, dont un préfixe étranger invalide en UTF-8 et un entier hors int64 (%s)"
-		% [invalides.size(), acceptees.map(func(d: PackedByteArray) -> String: return d.get_string_from_utf8())])
-
-	# La liste : une partie par adresse et port de jeu, rafraîchie, changée, expirée, plafonnée
-	var liste: Dictionary[String, Dictionary] = {}
-	_check(decouverte.enregistrer_partie(liste, "192.168.1.20", fiche, 1000) and liste.size() == 1
-		and liste["192.168.1.20:7777"].ip == "192.168.1.20" and liste["192.168.1.20:7777"].vue_a == 1000,
-		"une partie nouvelle entre dans la liste, avec son adresse et l'heure de sa balise")
-	_check(not decouverte.enregistrer_partie(liste, "192.168.1.20", fiche, 1900) and liste["192.168.1.20:7777"].vue_a == 1900,
-		"la même balise répétée rafraîchit l'heure sans changer la liste affichée")
-	var arrivee := fiche.duplicate()
-	arrivee["nb_joueurs"] = 3
-	_check(decouverte.enregistrer_partie(liste, "192.168.1.20", arrivee, 2500) and liste["192.168.1.20:7777"].nb_joueurs == 3,
-		"une balise différente (un joueur de plus) change la liste")
-	_check(decouverte.enregistrer_partie(liste, "192.168.1.21", fiche, 2500) and liste.size() == 2,
-		"même port de jeu, autre adresse : une autre partie")
-	_check(not decouverte.purger_parties(liste, 5500, 3000) and liste.size() == 2, "une partie vue il y a 3 s pile reste")
-	_check(decouverte.purger_parties(liste, 5501, 3000) and liste.is_empty(), "sans balise depuis plus de 3 s, les parties disparaissent")
-	for i in range(decouverte.PARTIES_MAX):
-		decouverte.enregistrer_partie(liste, "10.0.0.%d" % (i + 1), fiche, 0)
-	_check(not decouverte.enregistrer_partie(liste, "10.0.1.1", fiche, 0) and liste.size() == decouverte.PARTIES_MAX
-		and not decouverte.enregistrer_partie(liste, "10.0.0.1", fiche, 10) and liste["10.0.0.1:7777"].vue_a == 10,
-		"liste pleine (%d parties) : une nouvelle est ignorée, les connues se rafraîchissent encore" % decouverte.PARTIES_MAX)
-
-	# Destinations de la balise : tous les réseaux privés, dans l'ordre reçu (jamais triés, jamais
-	# privés de 169.254 : Minor 6, destinations_balise n'en dépend pas)
-	var adresses := PackedStringArray(["fe80:0:0:0:0:0:0:1", "127.0.0.1", "192.168.1.17", "10.0.3.4", "172.20.1.2",
-		"172.32.0.1", "8.8.8.8", "169.254.10.20", "192.168.1.30"])
-	_check(decouverte.destinations_balise(adresses) == PackedStringArray(["255.255.255.255", "192.168.1.255", "10.0.3.255", "172.20.1.255", "169.254.255.255"]),
-		"la balise part en diffusion limitée et dirigée, une fois par réseau privé (%s)" % decouverte.destinations_balise(adresses))
-	_check(decouverte.destinations_balise(PackedStringArray()) == PackedStringArray(["255.255.255.255"]),
-		"sans adresse privée connue, la diffusion limitée seule")
-
-	# Adresses de l'hôte à afficher (Minor 6) : IPv4 privées seulement, mais triées pour la lecture à
-	# voix haute — 192.168/16 réel d'abord (hors 192.168.56/24, VirtualBox Host-Only), puis 10/8, puis
-	# 172.16/12 (souvent une carte virtuelle sous Windows, 192.168.56/24 avec elle), 169.254 en tout
-	# dernier recours (jamais si une autre adresse existe)
-	var adresses_tri := PackedStringArray(["fe80:0:0:0:0:0:0:1", "127.0.0.1", "172.20.1.2", "10.0.3.4",
-		"172.32.0.1", "8.8.8.8", "192.168.56.1", "192.168.1.17", "169.254.10.20", "192.168.1.30"])
-	_check(decouverte.adresses_privees(adresses_tri) == PackedStringArray(["192.168.1.17", "192.168.1.30", "10.0.3.4", "172.20.1.2", "192.168.56.1"]),
-		"les adresses de l'hôte à afficher, filtrées (IPv4 privées, IPv6/loopback/publique/hors-plage exclues) puis triées : cartes réelles d'abord, virtuelles ensuite, 169.254 tue si une autre existe (%s)"
-			% decouverte.adresses_privees(adresses_tri))
-	_check(decouverte.adresses_privees(PackedStringArray(["169.254.10.20", "169.254.1.2", "8.8.8.8"])) == PackedStringArray(["169.254.10.20", "169.254.1.2"]),
-		"169.254 s'affiche s'il n'y a vraiment rien d'autre à lire")
-
-	# I1 (revue finale 12 bis) : adresses de l'hôte triées par interface (physique d'abord, virtuelle
-	# en dernier recours), à rang IPv4 égal — IP.get_local_interfaces() donne {name, friendly, index,
-	# addresses}, friendly == name sur ce Mac et sur Linux
-	var mac := [
-		{"name": "en0", "friendly": "en0", "index": 4, "addresses": PackedStringArray(["192.168.1.17"])},
-		{"name": "bridge100", "friendly": "bridge100", "index": 12, "addresses": PackedStringArray(["192.168.139.3"])},
-		{"name": "bridge101", "friendly": "bridge101", "index": 13, "addresses": PackedStringArray(["192.168.215.0"])},
-	]
-	_check(decouverte.adresses_hote(mac) == PackedStringArray(["192.168.1.17"]),
-		"sur ce Mac, en0 (physique) passe devant les bridges virtuels, même si les trois sont en 192.168/16 (%s)"
-			% decouverte.adresses_hote(mac))
-	var windows := [
-		{"name": "{GUID-WIFI}", "friendly": "Wi-Fi", "index": 12, "addresses": PackedStringArray(["192.168.1.23"])},
-		{"name": "{GUID-WSL}", "friendly": "vEthernet (WSL)", "index": 45, "addresses": PackedStringArray(["172.29.144.1"])},
-		{"name": "{GUID-VMWARE}", "friendly": "VMware Network Adapter VMnet8", "index": 22, "addresses": PackedStringArray(["192.168.47.1"])},
-		{"name": "{GUID-VBOX}", "friendly": "VirtualBox Host-Only Network", "index": 30, "addresses": PackedStringArray(["192.168.56.1"])},
-	]
-	_check(decouverte.adresses_hote(windows) == PackedStringArray(["192.168.1.23"]),
-		"sous Windows, le Wi-Fi passe devant vEthernet (WSL), VMware et VirtualBox, même rang IPv4 privé (%s)"
-			% decouverte.adresses_hote(windows))
-	var inconnue := [
-		{"name": "{GUID-LAN}", "friendly": "Connexion au réseau local", "index": 8, "addresses": PackedStringArray(["10.0.0.5"])},
-		{"name": "{GUID-WSL2}", "friendly": "vEthernet (WSL)", "index": 50, "addresses": PackedStringArray(["172.20.0.1"])},
-	]
-	_check(decouverte.adresses_hote(inconnue) == PackedStringArray(["10.0.0.5"]),
-		"un nom d'interface non reconnu (ancien Windows localisé) passe quand même devant une carte virtuelle identifiée (%s)"
-			% decouverte.adresses_hote(inconnue))
-	var tout_virtuel := [
-		{"name": "vEthernet (WSL)", "friendly": "vEthernet (WSL)", "index": 50, "addresses": PackedStringArray(["172.20.0.1"])},
-		{"name": "VirtualBox Host-Only Network", "friendly": "VirtualBox Host-Only Network", "index": 30, "addresses": PackedStringArray(["192.168.56.1"])},
-	]
-	_check(decouverte.adresses_hote(tout_virtuel) == PackedStringArray(["172.20.0.1", "192.168.56.1"]),
-		"si tout est virtuel, la liste sort quand même (dernier recours), dans l'ordre de rang IPv4 existant (%s)"
-			% decouverte.adresses_hote(tout_virtuel))
-	_check(decouverte.adresses_hote([]).is_empty(), "aucune interface : aucune adresse à lire")
-
-	# Adresse saisie : IPv4 seulement, normalisée ; jamais un nom (résolution bloquante)
-	var valides := {"192.168.1.20": "192.168.1.20", " 192.168.001.010 ": "192.168.1.10", "127.0.0.1": "127.0.0.1", "10.0.0.255": "10.0.0.255"}
-	_check(valides.keys().all(func(t: String) -> bool: return decouverte.adresse_ipv4(t) == valides[t]),
-		"une adresse IPv4 saisie est acceptée, sans zéros ni espaces superflus")
-	var refusees := ["", "192.168.1", "192.168.1.256", "192.168.1.2.3", "localhost", "lelion.local", "::1", "0.1.2.3",
-		"224.0.0.1", "255.255.255.255", "1.2.3.-4", "1.2.3.+4", "1.2.3.4a", "1..3.4", "1234.1.1.1", "１.２.３.４"]
-	var passees := refusees.filter(func(t: String) -> bool: return not decouverte.adresse_ipv4(t).is_empty())
-	_check(passees.is_empty(), "noms d'hôte, IPv6, adresses incomplètes, hors plage ou de diffusion refusés (%s)" % [passees])
-
-	# Écoute : un port libre, puis déjà pris (deux LeLion sur un même PC) : une erreur, jamais un plantage
-	var port_balise := 17891
-	decouverte.port_balise = port_balise
-	_check(decouverte.ecouter() == OK and decouverte.ecoute_active() and decouverte.erreur_ecoute == OK, "l'écoute s'ouvre sur un port libre")
-	var intrus := PacketPeerUDP.new()
-	_check(intrus.bind(port_balise, "0.0.0.0") != OK, "(pré-condition) l'écoute tient son port : un autre ne peut pas l'ouvrir")
-	var signaux := [0]
-	var compter := func() -> void: signaux[0] += 1
-	decouverte.parties_changees.connect(compter)
-	decouverte.parties["10.0.0.9:7777"] = fiche.merged({"ip": "10.0.0.9", "vue_a": 0})
-	decouverte.arreter_ecoute()
-	_check(not decouverte.ecoute_active() and decouverte.parties.is_empty() and signaux[0] == 1,
-		"arrêter l'écoute ferme le port et vide la liste, signalé une fois")
-	decouverte.arreter_ecoute()
-	_check(signaux[0] == 1, "arrêter une écoute déjà arrêtée ne signale rien")
-	_check(intrus.bind(port_balise, "0.0.0.0") == OK, "le port d'écoute est rendu à la fermeture")
-	var erreur: int = decouverte.ecouter()
-	_check(erreur != OK and not decouverte.ecoute_active() and decouverte.erreur_ecoute == erreur,
-		"port déjà pris : ecouter() renvoie l'erreur (%d) sans planter ni écouter" % erreur)
-
-	# Nouvel essai périodique (Minor 5, appelé en vrai jeu par la minuterie) : le port libéré profite
-	# à l'écoute qui le voulait encore, sans repasser par ecouter() ni revenir à l'accueil
-	intrus.close()
-	signaux[0] = 0
-	decouverte._reessayer_ecoute()
-	_check(decouverte.ecoute_active() and decouverte.erreur_ecoute == OK and signaux[0] == 1,
-		"le port libéré par un autre poste profite au prochain essai (deux fenêtres sur un même PC), signalé")
-	decouverte._reessayer_ecoute()
-	_check(signaux[0] == 1, "un nouvel essai alors que l'écoute est déjà ouverte ne fait rien de plus")
-	decouverte.arreter_ecoute()
-	signaux[0] = 0
-	decouverte._reessayer_ecoute()
-	_check(not decouverte.ecoute_active() and signaux[0] == 0, "un nouvel essai ne fait rien si l'écoute n'est plus voulue (arreter_ecoute() l'a annulée)")
-	decouverte.parties_changees.disconnect(compter)
-
-	# Balise de l'hôte : ce qu'émet `Reseau` en ligne et hôte, rien hors réseau ni chez un client
-	var recepteur := PacketPeerUDP.new()
-	_check(recepteur.bind(port_balise, "0.0.0.0") == OK, "(pré-condition) un récepteur écoute les balises de test")
-	decouverte.destinations_forcees = PackedStringArray(["127.0.0.1"])
-	var gs: Node = root.get_node("GameState")
-	gs.niveau_courant = 2
-	decouverte._emettre_balise()
-	_check(_datagrammes_recus(recepteur).is_empty() and decouverte._emetteur == null, "hors réseau (le solo), aucune balise")
-	reseau.pseudo = "Zoé"
-	reseau.places = 4
-	var port_jeu := 17792
-	_check(reseau.heberger(port_jeu) == OK, "(pré-condition) ce poste héberge sur le port %d" % port_jeu)
-	reseau.manche_en_cours = true
-	decouverte._emettre_balise()
-	var recus := _datagrammes_recus(recepteur)
-	var recue: Dictionary = decouverte.decoder_balise(recus[0]) if recus.size() == 1 else {}
-	_check(recue == {"version": version, "port": port_jeu, "nb_joueurs": 1, "places": 4, "manche_en_cours": true, "niveau": 2, "pseudo": "Zoé"},
-		"l'hôte émet une balise : version, port de jeu, joueurs inscrits, places, manche, niveau, pseudo (%s)" % [recue])
-	reseau.quitter()
-	decouverte._emettre_balise()
-	_check(_datagrammes_recus(recepteur).is_empty() and decouverte._emetteur == null, "après quitter(), la balise s'arrête et sa socket se ferme")
-	_check(reseau.rejoindre("127.0.0.1", port_jeu + 1) == OK and not root.multiplayer.is_server(), "(pré-condition) ce poste est un client qui attend son hôte")
-	decouverte._emettre_balise()
-	_check(_datagrammes_recus(recepteur).is_empty(), "un client n'émet aucune balise")
-	reseau.quitter()
-	recepteur.close()
-	reseau.pseudo = ""
-	reseau.places = EtatPartie.NB_JOUEURS_MAX
-	gs.niveau_courant = 0
-	decouverte.destinations_forcees = PackedStringArray()
-	decouverte.port_balise = decouverte.PORT_BALISE
-
-
-## Les datagrammes arrivés sur `recepteur` dans les 0,3 s, quels qu'ils soient (valides ou non :
-## « aucune balise » veut dire aucun datagramme). Attente active et bornée : sur localhost, un
-## datagramme émis est déjà là ou presque ; 0,3 s de silence suffit à conclure qu'il n'y en a pas.
-func _datagrammes_recus(recepteur: PacketPeerUDP) -> Array[PackedByteArray]:
-	var recus: Array[PackedByteArray] = []
-	var fin := Time.get_ticks_msec() + 300
-	while Time.get_ticks_msec() < fin:
-		while recepteur.get_available_packet_count() > 0:
-			recus.append(recepteur.get_packet())
-		OS.delay_msec(5)
-	return recus
-
-
 ## Phase 13 : la bataille configurée par les fiches du salon (`configurer_bataille_reseau`), les
 ## couleurs corrigées (M4) et le nombre de joueurs ramené dans ses bornes.
 func _tester_bataille_reseau() -> void:
@@ -2399,7 +2188,7 @@ func _tester_manches_enchainees() -> void:
 
 
 ## Phase 19 (M7 de la revue de la phase 11) : `application/config/version` est aussi la version du
-## protocole, présentée à la poignée de main et dans la balise ; deux postes de versions différentes se
+## protocole, présentée à la poignée de main ; deux postes de versions différentes se
 ## refusent (« Version différente de l'hôte »), deux postes de la même version doivent donc parler le même
 ## protocole. Son empreinte (`_signature_protocole`) change avec lui : une empreinte neuve sous la même
 ## version fait échouer ce test, jusqu'à ce que la version augmente et que PROTOCOLE_VERSION et
@@ -2414,15 +2203,15 @@ func _tester_protocole() -> void:
 		_check(false, "la version (%s) n'est plus celle que note ce test (%s) : noter ici la version et l'empreinte de la ligne PROTOCOLE" % [version, PROTOCOLE_VERSION])
 	else:
 		_check(empreinte == PROTOCOLE_EMPREINTE,
-			"le protocole (RPC, réplication, formats réseau, balise) est celui de la version %s ; s'il a changé, augmenter application/config/version, puis noter ici la version et l'empreinte de la ligne PROTOCOLE" % version)
+			"le protocole (RPC, réplication, formats réseau) est celui de la version %s ; s'il a changé, augmenter application/config/version, puis noter ici la version et l'empreinte de la ligne PROTOCOLE" % version)
 
 
 ## Ce qui fait le protocole réseau, une ligne par élément, dans un ordre fixe : chaque RPC des scripts qui
 ## en déclarent (nom, nombre d'arguments, mode, transfert, appel local, canal), les propriétés répliquées
 ## des scènes (`MultiplayerSynchronizer`) et les scènes que fait apparaître la scène de jeu (`root_path`,
 ## `spawn_path`, les en-têtes `[node …]` des `MultiplayerSynchronizer` et `MultiplayerSpawner`, M9 de la
-## revue finale : renommer un tel nœud ou changer son `spawn_path` doit faire échouer ce test), les
-## tailles des formats réseau, et une balise de découverte.
+## revue finale : renommer un tel nœud ou changer son `spawn_path` doit faire échouer ce test), et les
+## tailles des formats réseau.
 func _signature_protocole() -> PackedStringArray:
 	var lignes := PackedStringArray()
 	for fichier in _fichiers_du_dossier("res://Scripts", ".gd"):
@@ -2451,7 +2240,6 @@ func _signature_protocole() -> PackedStringArray:
 	lignes.append("formats %d %d %d %d %d %d %d %d" % [EtatLion.TAILLE, BilanManche.CHAMPS, BilanManche.TAILLE_LION,
 		Commandes.TAILLE_ENTETE, Commandes.TAILLE_COMMANDE, Commandes.REDONDANCE, Peinture.OCTETS_PAR_TAMPON,
 		Territoire.OCTETS_PAR_CHANGEMENT])
-	lignes.append("balise " + load("res://Scripts/Decouverte.gd").encoder_balise("V", 1, 2, 3, true, 0, "P").get_string_from_utf8())
 	return lignes
 
 
