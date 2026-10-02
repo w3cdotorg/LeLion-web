@@ -21,8 +21,10 @@ signal pret(code: String)
 signal connecte()
 ## Chez un client : son pair existe désormais (`pair()` le rend), après le retour de `rejoindre()` : en
 ## WebRTC, son identifiant vient de la signalisation, et `SceneMultiplayer` refuse un pair qui n'a pas
-## encore le sien. `Reseau` le pose alors. Jamais chez un transport dont le pair existe dès le retour de
-## `rejoindre()` (ENet), jamais pendant l'appel.
+## encore le sien. `Reseau` le pose alors. Il doit précéder le premier `poll()` du pair qui y ajoute le
+## pair 1 (l'hôte) : `SceneMultiplayer` ne rejoue pas les pairs déjà connectés quand on lui donne le pair,
+## et la poignée de main ne partirait jamais. Jamais chez un transport dont le pair existe dès le retour
+## de `rejoindre()` (ENet), jamais pendant l'appel.
 signal pair_pret()
 ## Chez un client : le canal ne s'ouvrira pas ; chez l'hôte, avant `pret` : la session ne sera pas
 ## créée (la signalisation refuse, ou ne répond pas). `raison` est une des constantes ECHEC_*. Le

@@ -1125,12 +1125,16 @@ func _sur_delai_depasse() -> void:
 		_decider("connexion_echouee")
 
 
-## Chez l'hôte : la session du transport existe ; son code est celui de la partie (le salon le relit).
+## Chez l'hôte : la session du transport existe ; son code est celui de la partie. Le salon le relit
+## (`salon_change`) seulement quand la création l'attendait (WebRTC) : un `pret` pendant `heberger()`
+## (ENet) arrive avant que le pair soit posé, et le `salon_change` de l'inscription de l'hôte suit.
 func _sur_transport_pret(code: String, generation: int) -> void:
 	if generation == _generation:
 		code_partie = code
+		var attendu := _creation_en_cours
 		_creation_en_cours = false
-		salon_change.emit()
+		if attendu:
+			salon_change.emit()
 
 
 ## Chez un client : le canal vers l'hôte est ouvert ; la poignée de main (que `SceneMultiplayer` lance
@@ -1141,9 +1145,10 @@ func _sur_transport_connecte(generation: int) -> void:
 
 
 ## Chez un client : le pair du transport existe désormais (WebRTC : son identifiant est arrivé) ;
-## `SceneMultiplayer` le prend, la connexion continue.
+## `SceneMultiplayer` le prend, la connexion continue. Sans effet une fois l'issue décidée (un échec dont
+## la fermeture différée n'est pas encore faite).
 func _sur_transport_pair_pret(generation: int) -> void:
-	if generation == _generation and _connexion_en_cours and _transport != null:
+	if generation == _generation and _connexion_en_cours and not _issue_decidee and _transport != null:
 		multiplayer.multiplayer_peer = _transport.pair()
 
 
@@ -1157,9 +1162,16 @@ func _sur_transport_echec(raison: String, generation: int) -> void:
 
 
 ## Chez l'hôte : plus personne ne peut rejoindre la partie (la salle a expiré, ou la signalisation s'est
-## fermée) ; la partie continue, le salon le dit (`raison_salle_fermee`).
+## fermée) ; la partie continue, le salon le dit (`raison_salle_fermee`). Avant le `pret` du transport,
+## la partie n'existera pas : un échec de connexion, de raison `raison` (comme `_sur_transport_echec`).
 func _sur_transport_salle_fermee(raison: String, generation: int) -> void:
-	if generation == _generation and multiplayer.is_server() and en_ligne():
+	if generation != _generation:
+		return
+	if _creation_en_cours:
+		if not _issue_decidee:
+			_raison_transport = raison
+			_decider("connexion_echouee")
+	elif multiplayer.is_server() and en_ligne():
 		raison_salle_fermee = raison
 		salon_change.emit()
 

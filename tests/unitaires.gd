@@ -2703,6 +2703,41 @@ func _tester_transport_tardif() -> void:
 	_check(await _attendre(func() -> bool: return echecs.size() == 4, 1.0) and echecs[3].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
 		"un client dont le transport se ferme avant son pair : connexion échouée, pas un hôte perdu (%s)" % [echecs])
 
+	# Vague finale (T1) : un pair_pret périmé, arrivé pendant une session neuve en cours, n'y touche pas.
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) une connexion")
+	var perime := transports[-1]
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK and transports[-1] != perime, "(pré-condition) une connexion neuve, l'autre quittée")
+	perime.donner_identifiant(42)
+	_check(not reseau.en_ligne() and root.multiplayer.multiplayer_peer != perime.pair() and reseau._connexion_en_cours,
+		"un pair_pret périmé arrivé pendant une session neuve en cours est ignoré : elle attend toujours le sien")
+	# Un pair_pret après l'échec décidé (la fermeture différée pas encore faite) n'est pas posé.
+	transports[-1].echec.emit(Transport.ECHEC_DELAI)
+	transports[-1].donner_identifiant(43)
+	_check(not reseau.en_ligne(), "un pair_pret après l'échec décidé n'est pas posé")
+	_check(await _attendre(func() -> bool: return echecs.size() == 5, 1.0) and echecs[4] == Transport.ECHEC_DELAI,
+		"(post-condition) l'échec décidé part une fois (%s)" % [echecs])
+	# La salle fermée pendant la création (avant pret) : la partie n'existera pas, un échec de connexion.
+	_check(reseau.creer_partie() == OK and reseau._creation_en_cours, "(pré-condition) une partie en création")
+	changes[0] = 0
+	transports[-1].salle_fermee.emit(Transport.ECHEC_DEBIT)
+	_check(await _attendre(func() -> bool: return echecs.size() == 6, 1.0) and echecs[5] == Transport.ECHEC_DEBIT
+		and not reseau.en_ligne() and reseau.raison_salle_fermee.is_empty() and pertes[0] == 0,
+		"la salle fermée avant le pret : connexion échouée chez l'hôte, sa raison dans raison_echec, pas une salle fermée (%s)" % [echecs])
+	# Un transport dont le pret part pendant heberger() (ENet) : le salon_change de ce pret ne part pas
+	# avant que le pair soit posé ; le salon relit la partie au salon_change de son inscription.
+	var en_ligne_vus: Array[bool] = []
+	var sur_change_en_ligne := func() -> void: en_ligne_vus.append(reseau.en_ligne())
+	reseau.salon_change.connect(sur_change_en_ligne)
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		transports[-1].code_immediat = "192.168.1.20:7777"
+		return transports[-1]
+	_check(reseau.creer_partie() == OK and reseau.code_partie == "192.168.1.20:7777" and not reseau._creation_en_cours
+		and not en_ligne_vus.is_empty() and not en_ligne_vus.has(false),
+		"un pret pendant heberger() : la partie a son code, aucun salon_change avant que le pair soit posé (%s)" % [en_ligne_vus])
+	reseau.salon_change.disconnect(sur_change_en_ligne)
+	reseau.quitter()
+
 	reseau.salon_change.disconnect(sur_change)
 	reseau.connexion_echouee.disconnect(sur_echec)
 	reseau.hote_perdu.disconnect(sur_perte)
@@ -2955,17 +2990,23 @@ class TransportPerdu extends Transport:
 
 ## Un transport simulé (`_tester_transport_tardif`) : `heberger()` et `rejoindre()` réussissent sans
 ## rien ouvrir ni rien dire ; le test émet lui-même `pret`, `echec` et `salle_fermee`, comme le ferait
-## `TransportWebRTC`. Son pair est un `WebRTCMultiplayerPeer` (il existe sur le desktop, sans connexion) :
+## `TransportWebRTC` (ou `pret` pendant `heberger()`, comme `TransportENet`, si `code_immediat` est donné).
+## Son pair est un `WebRTCMultiplayerPeer` (il existe sur le desktop, sans connexion) :
 ## celui de l'hôte dès `heberger()`, celui d'un client à `donner_identifiant` (puis `pair_pret`).
 ## `servir()` faux dès que `perdu` est vrai (fermé de lui-même), ou une fois quitté.
 class TransportTardif extends Transport:
 	var perdu := false
 	var quitte := false
+	## Non vide : `pret` part avec ce code pendant `heberger()`, comme en ENet.
+	var code_immediat := ""
 	var _pair: WebRTCMultiplayerPeer
 
 	func heberger() -> Error:
 		_pair = WebRTCMultiplayerPeer.new()
-		return _pair.create_server()
+		var erreur := _pair.create_server()
+		if erreur == OK and not code_immediat.is_empty():
+			pret.emit(code_immediat)
+		return erreur
 
 	func rejoindre(_code: String) -> Error:
 		return OK
