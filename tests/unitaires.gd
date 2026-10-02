@@ -56,6 +56,8 @@ func _run() -> void:
 	await _tester_transport_tardif()
 	_tester_transport_webrtc()
 	_tester_mobile()
+	_tester_limites()
+	await _tester_demandes_salon()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2203,6 +2205,99 @@ func _tester_mobile() -> void:
 		"le son du Web se lit en Stream (audio/general/default_playback_type.web = 0), pas en Sample")
 
 
+## Phase 7 du jeu en ligne (spec §8.2) : le débit des demandes d'un client chez l'hôte, un seau de jetons
+## par client (`LimiteDebit`) : les paquets de commandes de la manche (2 par tick, 120 par seconde à 60 ticks
+## par seconde, 120 d'un coup), les demandes du salon (couleur, Prêt : 10 par seconde).
+func _tester_limites() -> void:
+	print("-- Limites de débit des clients (phase 7)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var script_manche: Script = load("res://Scripts/Manche.gd")
+	var constantes: Dictionary = script_manche.get_script_constant_map()
+	_check(constantes.COMMANDES_PAR_TICK == 2 and constantes.RAFALE_COMMANDES == 2 * Engine.physics_ticks_per_second
+		and reseau.DEMANDES_SALON_PAR_SECONDE == 10,
+		"spec §8.2 : 2 paquets de commandes par tick (%d par seconde à l'horloge de l'hôte, autant d'un coup : deux secondes d'un client), 10 demandes de salon par seconde"
+			% (2 * Engine.physics_ticks_per_second))
+	var tick := 1.0 / 60.0
+	var commandes := LimiteDebit.new(120.0, 120.0)
+	var admis := 0
+	for i in range(130):
+		admis += int(commandes.admettre(5, 100.0))
+	_check(admis == 120 and commandes.rejets.get(5, 0) == 10 and commandes.admettre(6, 100.0) and not commandes.rejets.has(6),
+		"130 paquets d'un coup : 120 passent (le seau plein), 10 sont jetés et comptés ; un autre client a son propre seau (%d)" % admis)
+	var un_tick_apres := [commandes.admettre(5, 100.0 + tick), commandes.admettre(5, 100.0 + tick), commandes.admettre(5, 100.0 + tick)]
+	_check(un_tick_apres == [true, true, false] and commandes.rejets[5] == 11, "un tick plus tard : deux paquets de plus, pas trois (%s)" % [un_tick_apres])
+	var apres_attente := 0
+	for i in range(150):
+		apres_attente += int(commandes.admettre(5, 5000.0))
+	_check(apres_attente == 120, "après une longue attente, le seau n'a jamais plus que son plein (%d)" % apres_attente)
+	var recul := [commandes.admettre(6, 50.0), commandes.admettre(5, 4000.0)]
+	_check(recul == [true, false], "une horloge qui recule ne remplit rien (%s)" % [recul])
+	commandes.oublier(5)
+	_check(not commandes.rejets.has(5) and commandes.admettre(5, 5000.0), "un client oublié (parti) repart seau plein, sans rejets")
+	var joueur := LimiteDebit.new(120.0, 120.0)
+	var inondeur := LimiteDebit.new(120.0, 120.0)
+	var jetes := 0
+	var passes := 0
+	for t in range(600):
+		jetes += int(not joueur.admettre(1, t * tick))
+		for k in range(10):
+			passes += int(inondeur.admettre(1, t * tick))
+	for k in range(120):  # l'hôte figé 2 s : les paquets du joueur arrivent d'un coup
+		jetes += int(not joueur.admettre(1, 12.0))
+	_check(jetes == 0 and passes == 120 + 2 * 599,
+		"10 s d'un client qui joue (un paquet par tick), puis l'hôte figé 2 s : aucun paquet jeté ; à dix par tick, deux passent par tick (le plein du début en plus : %d)" % passes)
+	var salon := LimiteDebit.new(10.0, 10.0)
+	var en_rafale := 0
+	for i in range(15):
+		en_rafale += int(salon.admettre(9, 3.0))
+	var ensuite := [salon.admettre(9, 3.1), salon.admettre(9, 3.1), salon.admettre(9, 3.35), salon.admettre(9, 3.35), salon.admettre(9, 4.4)]
+	_check(en_rafale == 10 and ensuite == [true, false, true, true, true] and salon.rejets[9] == 6,
+		"salon : 10 demandes d'un coup, puis une par dixième de seconde (%d, %s)" % [en_rafale, ensuite])
+	salon.vider()
+	_check(salon.rejets.is_empty() and salon.admettre(9, 0.0), "vidé (une session neuve) : plus aucun seau ni rejet")
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : entre l'autoload, hôte, et un second poste client dans ce même
+## processus (comme `_tester_battement`), les demandes de salon d'un client qui inonde l'hôte : au-delà de 10
+## par seconde, jetées sans réponse, couleur et Prêt confondus ; une seconde plus tard, ses demandes passent.
+func _tester_demandes_salon() -> void:
+	print("-- Demandes de salon d'un client (phase 7)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var client := _poste_client("PosteInondeur")
+	var arrives: Array[int] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Inondeur"
+	_check(hote.heberger(17784) == OK and client.rejoindre("127.0.0.1", 17784) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id_client: int = arrives[0] if arrives.size() == 1 else -1
+	var changements := [0]
+	var compter := func() -> void: changements[0] += 1
+	hote.salon_change.connect(compter)
+	for i in range(30):
+		client._demande_couleur.rpc_id(1, 1)
+	client._demande_pret.rpc_id(1, true)
+	_check(await _attendre(func() -> bool: return hote._limite_salon.rejets.get(id_client, 0) >= 21, 2.0),
+		"(pré-condition) les 31 demandes sont arrivées chez l'hôte")
+	await _attendre(func() -> bool: return false, 0.1)
+	_check(changements[0] == 10 and hote._limite_salon.rejets.get(id_client, 0) == 21 and not hote.inscrits[id_client].pret,
+		"30 demandes de couleur et une de Prêt d'un coup : 10 changements de couleur, 21 demandes jetées, Prêt compris (%d, %d)"
+			% [changements[0], hote._limite_salon.rejets.get(id_client, 0)])
+	await _attendre(func() -> bool: return false, 0.3)
+	client.demander_pret(true)
+	_check(await _attendre(func() -> bool: return hote.inscrits.get(id_client, {}).get("pret", false), 1.0),
+		"trois dixièmes de seconde plus tard, sa demande passe : il est prêt")
+	hote.salon_change.disconnect(compter)
+	client.quitter()
+	_check(await _attendre(func() -> bool: return not hote.inscrits.has(id_client), 1.0) and not hote._limite_salon.rejets.has(id_client),
+		"le client parti, l'hôte oublie son seau et ses rejets")
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
 ## Phase 19 (M7 de la revue de la phase 11) : `application/config/version` est aussi la version du
 ## protocole, présentée à la poignée de main ; deux postes de versions différentes se
 ## refusent (« Version différente de l'hôte »), deux postes de la même version doivent donc parler le même
@@ -3111,6 +3206,31 @@ func _servir_transports(transports: Array, condition: Callable, delai: float) ->
 			t.servir()
 		OS.delay_msec(5)
 	return condition.call()
+
+
+## Un second poste dans ce processus (phase 7, comme `_tester_battement`) : un second `Reseau` (le script
+## chargé : l'autoload n'est pas nommé) sous sa propre `SceneMultiplayer`, posée par `set_multiplayer` sur un
+## nœud à lui, nommé `nom` (le `SceneTree` la relève aussi) ; `_retirer_poste` le défait.
+func _poste_client(nom: String) -> Node:
+	var noeud := Node.new()
+	noeud.name = nom
+	root.add_child(noeud)
+	set_multiplayer(SceneMultiplayer.new(), noeud.get_path())
+	var client: Node = load("res://Scripts/Reseau.gd").new()
+	client.name = "Reseau"  # vu de sa propre API, au même chemin que l'autoload : les RPC s'y retrouvent
+	noeud.add_child(client)
+	return client
+
+
+## Défait le poste `client` de `_poste_client` : il quitte le réseau, son départ fini, puis son nœud et son
+## API partent.
+func _retirer_poste(client: Node) -> void:
+	client.quitter()
+	await _attendre(func() -> bool: return client._partants.is_empty(), 2.0)
+	var noeud: Node = client.get_parent()
+	var chemin := noeud.get_path()
+	noeud.queue_free()
+	set_multiplayer(null, chemin)
 
 
 ## Les fichiers du dossier `dossier` qui finissent par `suffixe`, triés.

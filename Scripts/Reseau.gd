@@ -43,7 +43,8 @@ extends Node
 ##
 ## Salon : l'hôte tient la table dans `inscrits` et la diffuse, arrivés seulement, à chaque
 ## changement (`_recevoir_salon`, fiable) ; chaque poste la lit dans `table_salon`. Les clients
-## demandent (couleur, Prêt) et l'hôte arbitre. Tous ces RPC passent par cet autoload, présent au
+## demandent (couleur, Prêt) et l'hôte arbitre, DEMANDES_SALON_PAR_SECONDE demandes par seconde et par
+## client au plus (spec §8.2 : au-delà, il les jette). Tous ces RPC passent par cet autoload, présent au
 ## même chemin sur chaque poste dès la connexion : une table envoyée avant que la scène du salon
 ## soit chargée chez un client l'y attend. Les RPC de l'hôte sont en mode "authority" (le moteur
 ## rejette tout autre émetteur) ; ceux des clients vérifient l'émetteur et leurs arguments. Phase 18 : le
@@ -138,6 +139,10 @@ const SILENCE_CHARGEMENT := 30.0
 ## Canal du lancement et du retour au salon, table comprise : le canal fiable ordonné de la manche
 ## (`Manche.CANAL_PEINTURE`, spec §4), phase 18.
 const CANAL_ORDONNE := 1
+## Demandes de salon (couleur, Prêt) admises par seconde et par client, chez l'hôte (spec §8.2) : au-delà,
+## il les jette (`LimiteDebit`, un seau de 10 jetons rempli de 10 par seconde). Un joueur n'en fait jamais
+## autant : le salon n'agit qu'à l'appui d'une touche, d'un bouton ou du stick.
+const DEMANDES_SALON_PAR_SECONDE := 10
 
 ## Ce que `_poser_salon` fait d'une table reçue de l'hôte (M6) : posée, plus ancienne que la dernière
 ## posée (ignorée), ou illisible (ignorée, signalée).
@@ -253,6 +258,8 @@ var _entendus: Dictionary[int, int] = {}
 var _prochain_battement := 0
 ## L'instant (ms) de la dernière écoute des silences (`_ecouter`) : celui du verdict de la suivante.
 var _derniere_ecoute := 0
+## Chez l'hôte : le débit des demandes de salon de chaque client (DEMANDES_SALON_PAR_SECONDE), en secondes.
+var _limite_salon := LimiteDebit.new(DEMANDES_SALON_PAR_SECONDE, DEMANDES_SALON_PAR_SECONDE)
 
 
 func _ready() -> void:
@@ -365,6 +372,7 @@ func quitter() -> void:
 	scenes_chargees.clear()
 	silence = SILENCE_SESSION
 	_entendus.clear()
+	_limite_salon.vider()
 	code_partie = ""
 	raison_salle_fermee = ""
 	_raison_transport = ""
@@ -911,17 +919,30 @@ func _diffuser_salon() -> void:
 ## Chez l'hôte : un client demande une autre couleur.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_couleur(sens: Variant) -> void:
-	_entendre(multiplayer.get_remote_sender_id())
-	if sens is int:
-		changer_couleur(multiplayer.get_remote_sender_id(), sens)
+	var id := multiplayer.get_remote_sender_id()
+	_entendre(id)
+	if admettre_demande_salon(id) and sens is int:
+		changer_couleur(id, sens)
 
 
 ## Chez l'hôte : un client demande à être prêt, ou plus.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_pret(pret: Variant) -> void:
-	_entendre(multiplayer.get_remote_sender_id())
-	if pret is bool:
-		definir_pret(multiplayer.get_remote_sender_id(), pret)
+	var id := multiplayer.get_remote_sender_id()
+	_entendre(id)
+	if admettre_demande_salon(id) and pret is bool:
+		definir_pret(id, pret)
+
+
+## Chez l'hôte : vrai si la demande de salon du client `id` passe (DEMANDES_SALON_PAR_SECONDE par seconde
+## au plus, spec §8.2), mal formée ou non ; au-delà, elle est jetée sans réponse (un avertissement au
+## premier rejet de ce client, pas à chacun : un client qui inonde l'hôte n'inonde pas son journal).
+func admettre_demande_salon(id: int) -> bool:
+	if _limite_salon.admettre(id, Time.get_ticks_msec() / 1000.0):
+		return true
+	if _limite_salon.rejets[id] == 1:
+		push_warning("Reseau : le client %d fait plus de %d demandes de salon par seconde, l'excédent est jeté" % [id, DEMANDES_SALON_PAR_SECONDE])
+	return false
 
 
 ## Chez un client : la table du salon diffusée par l'hôte (ignorée si elle est illisible ou plus ancienne
@@ -1095,6 +1116,7 @@ func _sur_pair_connecte(id: int) -> void:
 ## Chez l'hôte : un arrivé est parti ; sa carte se libère chez tous (spec §4).
 func _sur_pair_deconnecte(id: int) -> void:
 	_entendus.erase(id)
+	_limite_salon.oublier(id)
 	if multiplayer.is_server() and inscrits.erase(id):
 		_diffuser_salon()
 		joueur_parti.emit(id)

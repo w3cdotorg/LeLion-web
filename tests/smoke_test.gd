@@ -2627,6 +2627,22 @@ func _tester_manche_reseau() -> void:
 			and manche.recevoir_paquet_de(0, Commandes.encoder_paquet(6, [[Vector2(1, 0), false]]), maintenant) == -1
 			and main.lion.commandes.direction() == Vector2.ZERO,
 			"un paquet mal formé, non fini ou pour le lion de l'hôte est refusé")
+		# Phase 7 du jeu en ligne (spec §8.2) : l'hôte admet 120 paquets de commandes d'un coup par client, puis
+		# deux par tick (120 par seconde, à son horloge) ; il jette le reste
+		var d_un_coup := 0
+		for i in range(150):
+			d_un_coup += int(manche.admettre_commandes(7))
+		var apres_rafale := Time.get_ticks_msec()
+		while Time.get_ticks_msec() - apres_rafale < 100:  # à l'horloge (un minuteur créé pendant une longue image expire à sa fin)
+			await process_frame
+		var attendu := int((Time.get_ticks_msec() - apres_rafale) * 0.12)
+		var ensuite := 0
+		for i in range(40):
+			ensuite += int(manche.admettre_commandes(7))
+		_check(d_un_coup == manche.RAFALE_COMMANDES and absi(ensuite - attendu) <= 1
+			and manche._limite_commandes.rejets[7] == 190 - d_un_coup - ensuite and manche.admettre_commandes(8),
+			"150 paquets de commandes de Bob d'un coup : %d passent ; un dixième de seconde plus tard, %d de plus (deux par tick, %d attendus) ; le reste est jeté ; un autre client a son propre compte"
+				% [d_un_coup, ensuite, attendu])
 		await _frames(3)
 		_check(lion_bob.commandes.numero_applique == 5 and lion_bob.commandes.appliquees == 2 and lion_bob.commandes.direction_voulue == Vector2(0.5, 0.0)
 			and lion_bob.commandes.vomir_voulu and EtatLion.decoder(lion_bob.etat_reseau).commande == 5,
@@ -2664,6 +2680,7 @@ func _tester_manche_reseau() -> void:
 			"un joueur parti en pleine manche perd son lion, ses cellules restent au territoire (%d)" % cellules_bob)
 		_check(manche._partis == [1] and hud.partis == [false, true] and hud.vignettes[1].part.text != "0 %",
 			"le HUD grise Bob, parti, avec sa part des cellules peintes (%s) ; la manche annonce son départ" % hud.vignettes[1].part.text)
+		_check(not manche._limite_commandes.rejets.has(7), "phase 7 : Bob parti, la manche oublie le compte de ses paquets")
 		# I2 (revue finale phase 17) : un tampon et une case de territoire tout juste peints, encore en
 		# attente (aucune image écoulée depuis pour les diffuser normalement), doivent partir avec la fin,
 		# avant elle, sur le même canal : sinon la mutation « fin sans vidage » ne serait jamais mise à
