@@ -19,7 +19,8 @@ export default defineConfig({
 		baseURL: "http://localhost:8060",
 		// Les textes du jeu en français (sa langue suit celle du navigateur).
 		locale: "fr-FR",
-		trace: "retain-on-failure",
+		// Sans le film des captures : sous un rendu logiciel lent (la CI), il coûte cher aux pages.
+		trace: { mode: "retain-on-failure", screenshots: false },
 	},
 	projects: [
 		{ name: "chromium", grep: /@manche/, use: { browserName: "chromium" } },

@@ -15,7 +15,8 @@ extends Node
 ## - `["pret"]` : au salon, ce poste se dit prêt ;
 ## - `["demarrer"]` : au salon, l'hôte démarre dès que le salon est prêt ;
 ## - `["peindre", sens]` : en manche, le lion de ce poste descend vers la ville, puis la peint en allant
-##   dans le sens `sens` (1 : à droite, -1 : à gauche) DUREE_PASSE secondes (la passe du test réseau) ;
+##   dans le sens `sens` (1 : à droite, -1 : à gauche) TICKS_PASSE ticks physiques (la passe du test
+##   réseau, comptée en temps de jeu) ;
 ## - `["quitter"]` : retour au titre (qui quitte le réseau : l'adieu, spec §5).
 ## État : `window.lelionPilote.etat`, un texte JSON réécrit à chaque image (`etat()`), que la page relit.
 ##
@@ -23,10 +24,11 @@ extends Node
 
 const SCENE_TITRE := "res://Scenes/Titre.tscn"
 ## La hauteur de peinture, au-dessus des toits (celle du pilote de la démo), en px ; la durée d'une passe,
-## en secondes ; le délai de la descente, en ms.
+## en ticks physiques (2,5 s de jeu). Comptée en temps de jeu, jamais à l'horloge murale : une page lente
+## (la CI sous Chromium, en rendu logiciel, tourne à 0,4× le temps réel ou moins) joue au ralenti, et
+## une passe minutée en millisecondes s'y arrêtait avant que le lion n'atteigne la ville.
 const HAUTEUR_PEINTURE := 233.0
-const DUREE_PASSE := 2.5
-const DELAI_DESCENTE := 5000
+const TICKS_PASSE := 150
 
 ## Vrai dans l'export « Web pilote » seulement.
 var actif := OS.has_feature("web") and OS.has_feature("pilote")
@@ -41,6 +43,9 @@ var _vers_en_ligne := false
 ## L'empreinte de la dernière manche finie sur ce poste (`empreinte_manche`) et ses scores, vides avant.
 var _empreinte := ""
 var _scores: Array = []
+## La passe de ce poste (`_peindre`), pour la page et ses messages d'échec : ticks physiques de la
+## descente, puis de la peinture, comptés pendant qu'elle se fait ; vide avant.
+var _passe := {}
 
 
 func _ready() -> void:
@@ -73,7 +78,8 @@ func etat() -> Dictionary:
 	var scene := get_tree().current_scene
 	var nom := "" if scene == null else str(scene.name)
 	var e := {"scene": nom, "en_ligne": Reseau.en_ligne(), "hote": Reseau.en_ligne() and multiplayer.is_server(),
-		"code": Reseau.code_partie, "pertes": _pertes, "echecs": _echecs, "empreinte": _empreinte, "scores": _scores}
+		"code": Reseau.code_partie, "pertes": _pertes, "echecs": _echecs, "empreinte": _empreinte, "scores": _scores,
+		"fps": Engine.get_frames_per_second(), "passe": _passe}
 	if nom == "EcranEnLigne":
 		e["ecran"] = {"etat": scene.etat, "code": scene.champ_code.text, "message": scene.message.text}
 	elif nom == "Salon":
@@ -161,20 +167,32 @@ func _executer(commande: Variant) -> bool:
 	return true
 
 
-## La passe du lion de ce poste dans la scène de jeu `main` (comme celle du test réseau) : il descend à
-## HAUTEUR_PEINTURE au-dessus des toits (DELAI_DESCENTE au plus), puis peint la ville en allant dans le
-## sens `sens`, DUREE_PASSE secondes, touches pressées comme un joueur.
+## La passe du lion de ce poste dans la scène de jeu `main` (comme celle du test réseau), en ticks
+## physiques : il descend à HAUTEUR_PEINTURE au-dessus des toits (la position du lion d'un client est
+## celle que l'hôte lui renvoie), aussi longtemps qu'il le faut, puis peint la ville en allant dans le
+## sens `sens` TICKS_PASSE ticks, touches pressées comme un joueur ; la fin de la manche arrête l'une
+## ou l'autre. Aucun plafond en millisecondes.
 func _peindre(main: Node, sens: int) -> void:
 	var ville: Node2D = main.get_node("Ville")
 	var cible: float = ville.position.y - ville.tex_size.y / 2.0 - HAUTEUR_PEINTURE
-	var fin := Time.get_ticks_msec() + DELAI_DESCENTE
+	_passe = {"descente": 0}
 	Input.action_press("deplacer_bas")
-	while is_instance_valid(main) and main.lion != null and main.lion.position.y < cible and Time.get_ticks_msec() < fin:
-		await get_tree().process_frame
+	while _en_manche(main) and main.lion.position.y < cible:
+		await get_tree().physics_frame
+		_passe["descente"] += 1
 	Input.action_release("deplacer_bas")
+	_passe["peinture"] = 0
 	var action := "deplacer_droite" if sens > 0 else "deplacer_gauche"
 	Input.action_press(action)
 	Input.action_press("vomir")
-	await get_tree().create_timer(DUREE_PASSE, true).timeout
+	while _en_manche(main) and _passe["peinture"] < TICKS_PASSE:
+		await get_tree().physics_frame
+		_passe["peinture"] += 1
 	Input.action_release(action)
 	Input.action_release("vomir")
+
+
+## Vrai tant que la manche de la scène de jeu `main` se joue sur ce poste, son lion là.
+func _en_manche(main: Node) -> bool:
+	return is_instance_valid(main) and main.lion != null and GameState.partie_en_cours \
+		and not main.get_node("Manche").finie

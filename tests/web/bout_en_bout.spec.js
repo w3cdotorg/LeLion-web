@@ -68,8 +68,12 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 
 	for (const page of pages) await commander(page, "pret");
 	await commander(hote, "demarrer");
+	// Les passes partent tout de suite : le pilote attend lui-même la manche commencée (GameState.pret),
+	// sans le retard des relectures du test, page après page. Toutes vers la gauche : les lions partent
+	// espacés d'un tiers de l'écran et ne se croisent pas (deux lions qui se heurtent de face s'arrêtent l'un
+	// l'autre et peignent à peine) ; celui de l'hôte, le plus à gauche, peint jusqu'au bord.
+	for (const page of pages) await commander(page, "peindre", -1);
 	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 60_000);
-	for (const [page, sens] of [[hote, 1], [invites[0], -1], [invites[1], 1]]) await commander(page, "peindre", sens);
 
 	const fins = [];
 	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 10 s finit partout", 60_000));
@@ -77,7 +81,12 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
 	expect(empreintes[2]).toBe(empreintes[0]);
-	for (const fin of fins) expect(fin.scores.slice(0, 3).every((cellules) => cellules > 0), `chacun a peint : ${fin.scores}`).toBe(true);
+	// La cadence de chaque page (images par seconde) et sa passe (ticks physiques de la descente, de la
+	// peinture) : une page lente en CI se lit ici.
+	const cadences = fins.map((fin) => `${fin.fps} i/s, passe ${JSON.stringify(fin.passe)}`).join(" ; ");
+	console.log(`Fin de manche : scores ${fins[0].scores} ; ${cadences}`);
+	// Les scores du territoire : à l'index 0 les cellules de personne, puis un par joueur (l'hôte, Anna, Bruno).
+	for (const fin of fins) expect(fin.scores.slice(1, 4).every((cellules) => cellules > 0), `chacun a peint : ${fin.scores} (${cadences})`).toBe(true);
 
 	const depart = Date.now();
 	await commander(hote, "quitter");
