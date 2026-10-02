@@ -21,6 +21,9 @@ extends Node
 ## Une commande mal formée (nom inconnu, nombre ou types d'arguments, `erreur_commande`) est rejetée
 ## (`push_warning`) et retirée de la file, sans bloquer celles qui la suivent.
 ## État : `window.lelionPilote.etat`, un texte JSON réécrit à chaque image (`etat()`), que la page relit.
+## Pour un client mobile (phase 6), qui joue au doigt (de vrais touchers de la page, jamais des commandes),
+## l'état donne aussi, en px CSS de la page, ce qu'un toucher vise : Rejoindre, les boutons tactiles du
+## salon et de la manche, le stick ; et la hauteur où peindre.
 ##
 ## Autoload : les tests `--script` ne le nomment pas.
 
@@ -92,21 +95,53 @@ func etat() -> Dictionary:
 	var nom := "" if scene == null else str(scene.name)
 	var e := {"scene": nom, "en_ligne": Reseau.en_ligne(), "hote": Reseau.en_ligne() and multiplayer.is_server(),
 		"code": Reseau.code_partie, "pertes": _pertes, "echecs": _echecs, "empreinte": _empreinte, "scores": _scores,
-		"fps": Engine.get_frames_per_second(), "passe": _passe}
+		"fps": Engine.get_frames_per_second(), "passe": _passe, "mobile": Parametres.mobile, "voile": Parametres.voile.visible,
+		"images": Engine.get_process_frames()}
 	if nom == "EcranEnLigne":
-		e["ecran"] = {"etat": scene.etat, "code": scene.champ_code.text, "message": scene.message.text}
+		var rejoindre: Rect2 = scene.bouton_rejoindre.get_global_rect()
+		e["ecran"] = {"etat": scene.etat, "code": scene.champ_code.text, "message": scene.message.text,
+			"creer": scene.bouton_creer.visible, "rejoindre": _css(rejoindre.position) + _css(rejoindre.end)}
 	elif nom == "Salon":
-		var table: Array = Reseau.table_salon.map(func(f: Dictionary) -> Dictionary: return {"pseudo": f.pseudo, "pret": f.pret})
+		var table: Array = Reseau.table_salon.map(func(f: Dictionary) -> Dictionary:
+			return {"pseudo": f.pseudo, "pret": f.pret, "couleur": f.couleur.to_html(false)})
 		var bouton: Button = scene.bouton_copier
-		var centre := get_viewport().get_screen_transform() * bouton.get_global_rect().get_center()
-		var echelle := float(JavaScriptBridge.eval("window.devicePixelRatio", true))
+		var tactile: CanvasLayer = scene.controles_tactiles
 		e["salon"] = {"table": table, "attente": Reseau.raison_attente(Reseau.fiches_attente()),
 			"invitation": scene.etiquette_code.text, "copier": bouton.text,
-			"bouton_copier": [centre.x / echelle, centre.y / echelle] if bouton.is_visible_in_tree() else []}
+			"bouton_copier": _css(bouton.get_global_rect().get_center()) if bouton.is_visible_in_tree() else [],
+			"tactile": {"visible": tactile.visible, "gauche": _css_bouton(tactile.bouton_gauche), "droite": _css_bouton(tactile.bouton_droite),
+				"pret": _css_bouton(tactile.bouton_vomir)}}
 	elif nom == "Main":
 		var manche: Node = scene.get_node("Manche")
-		e["manche"] = {"barriere": manche.barriere, "en_cours": GameState.pret and GameState.partie_en_cours, "finie": manche.finie}
+		var tactile: CanvasLayer = scene.get_node("ControlesTactiles")
+		var stick: Control = tactile.joystick
+		e["manche"] = {"barriere": manche.barriere, "en_cours": GameState.pret and GameState.partie_en_cours, "finie": manche.finie,
+			"temps": GameState.temps_ecoule, "lion": [] if scene.lion == null else [scene.lion.position.x, scene.lion.position.y],
+			"cible": _hauteur_peinture(scene),
+			"tactile": {"visible": tactile.visible, "vomir": _css_bouton(tactile.bouton_vomir),
+				"stick": _css(Vector2(stick.rayon * 3.0, stick.get_viewport_rect().size.y - stick.rayon * 3.0)),
+				"rayon": _css(Vector2(stick.rayon, 0))[0] - _css(Vector2.ZERO)[0]}}
 	return e
+
+
+## Le point `point` de l'écran du jeu, en px CSS de la page (ce que vise un clic ou un toucher de la page).
+func _css(point: Vector2) -> Array:
+	var ecran := get_viewport().get_screen_transform() * point
+	var echelle := float(JavaScriptBridge.eval("window.devicePixelRatio", true))
+	return [ecran.x / echelle, ecran.y / echelle]
+
+
+## Le centre d'un bouton tactile en px CSS de la page, et son côté : `[x, y, côté]`.
+func _css_bouton(bouton: TouchScreenButton) -> Array:
+	var cote := bouton.texture_normal.get_size() * bouton.scale
+	var coin := _css(bouton.position)
+	return _css(bouton.position + cote / 2.0) + [_css(bouton.position + cote)[0] - coin[0]]
+
+
+## L'ordonnée où peindre dans la scène de jeu `main` : HAUTEUR_PEINTURE au-dessus des toits.
+static func _hauteur_peinture(main: Node) -> float:
+	var ville: Node2D = main.get_node("Ville")
+	return ville.position.y - ville.tex_size.y / 2.0 - HAUTEUR_PEINTURE
 
 
 ## L'empreinte de la manche finie de la scène de jeu `main` (la même sur chaque poste qui a tout reçu) :
@@ -210,8 +245,7 @@ func _executer(commande: Variant) -> bool:
 ## lion près de son départ : des lions qui partent dans le même sens ne se rattrapent pas, et celui qu'un
 ## bord arrête (sa gerbe, qui tombe devant lui, y sort de la ville) peint au retour.
 func _peindre(main: Node, sens: int) -> void:
-	var ville: Node2D = main.get_node("Ville")
-	var cible: float = ville.position.y - ville.tex_size.y / 2.0 - HAUTEUR_PEINTURE
+	var cible := _hauteur_peinture(main)
 	_passe = {"descente": 0}
 	Input.action_press("deplacer_bas")
 	while _en_manche(main) and main.lion.position.y < cible:

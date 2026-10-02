@@ -1,8 +1,9 @@
 // Le jeu en ligne de bout en bout (spec §10) : de vrais navigateurs, de vraies connexions WebRTC, la
 // signalisation en local. Chaque page est menée par le pilote de l'export « Web pilote »
 // (Scripts/PiloteWeb.gd) : des commandes poussées dans window.lelionPilote.commandes, son état relu
-// dans window.lelionPilote.etat, par les vrais écrans du jeu (titre, En ligne, salon, manche).
-import { expect, test } from "@playwright/test";
+// dans window.lelionPilote.etat, par les vrais écrans du jeu (titre, En ligne, salon, manche). Le mobile,
+// lui, joue au doigt : de vrais touchers de la page, aux places que l'état du pilote donne.
+import { devices, expect, test } from "@playwright/test";
 
 const ALPHABET = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
 const HOTE_PARTI = "L'hôte a quitté la partie";
@@ -39,6 +40,13 @@ async function ouvrir(navigateur, chemin, consoles, rang = 0) {
 }
 
 const etat = (page) => page.evaluate(() => JSON.parse(window.lelionPilote.etat));
+
+/**
+ * Le mobile du test : un Android en paysage (Pixel 7, 863×360 px CSS : son agent utilisateur donne
+ * `web_android` au jeu, l'écran est tactile), sans écran haute densité : le jeu se met à l'échelle de la
+ * page, pas de ses pixels, et un rendu logiciel 2,6 fois plus fin ralentirait le conteneur.
+ */
+const MOBILE = { ...devices["Pixel 7 landscape"], deviceScaleFactor: 1 };
 const commander = (page, ...commande) => page.evaluate((c) => window.lelionPilote.commandes.push(c), commande);
 
 /** Relit l'état de `page` jusqu'à ce que `condition` le vérifie ; le rend. */
@@ -142,4 +150,93 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 	await attendre(page, (e) => e.salon.copier === "SALON_LIEN_COPIE", "le bouton dit « Lien copié ! »");
 	await expect.poll(() => page.evaluate(() => window.presse)).toEqual({ texte: `http://localhost:8060/?salle=${salle.code}`, issue: "acceptee" });
 	expect(erreurs([lignes]), "aucune erreur dans la console").toEqual([[]]);
+});
+
+test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et le jeu continue @mobile", async ({ browser }) => {
+	const consoles = [];
+	const hote = await ouvrir(browser, "/", consoles);
+	await commander(hote, "duree", 12);
+	await commander(hote, "creer", "Hote");
+	const salle = await attendre(hote, (e) => e.scene === "Salon" && ALPHABET.test(e.code), "l'hôte a sa salle");
+	expect(salle.mobile).toBe(false);
+
+	const contexte = await browser.newContext(MOBILE);
+	const mobile = await contexte.newPage();
+	const lignes = [];
+	consoles.push(lignes);
+	mobile.on("console", (message) => lignes.push(message.text()));
+	await mobile.goto(`/?salle=${salle.code}`);
+	await mobile.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
+	// Un mobile : pas de Créer une partie, Rejoindre à la taille d'un doigt (44 px CSS au moins)
+	const accueil = await attendre(mobile, (e) => e.scene === "EcranEnLigne", "le lien ouvre l'écran En ligne du mobile");
+	expect(accueil.mobile).toBe(true);
+	expect(accueil.ecran.creer).toBe(false);
+	const [x0, y0, x1, y1] = accueil.ecran.rejoindre;
+	expect(y1 - y0, `Rejoindre fait ${y1 - y0} px CSS de haut`).toBeGreaterThanOrEqual(44);
+	await commander(mobile, "duree", 12);
+	// Rejoindre au doigt, sans pseudo (l'hôte le nomme « Joueur 2 ») : ce premier toucher demande aussi le plein écran
+	await mobile.touchscreen.tap((x0 + x1) / 2, (y0 + y1) / 2);
+	await attendre(mobile, (e) => e.scene === "Salon", "le mobile arrive au salon (Rejoindre touché)");
+	for (const page of [hote, mobile]) {
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Joueur 2", "la même table du salon partout");
+	}
+	// Le plein écran, demandé par ce premier toucher (Chromium l'accorde : le toucher est le geste qu'il exige)
+	await expect.poll(() => mobile.evaluate(() => document.fullscreenElement !== null), { message: "le premier toucher met le mobile en plein écran" }).toBe(true);
+
+	// Au salon, au doigt : la flèche droite change la couleur, PRÊT rend prêt (vu chez l'hôte)
+	const salon = (await etat(mobile)).salon;
+	expect(salon.tactile.visible).toBe(true);
+	const [dx, dy, cote] = salon.tactile.droite;
+	expect(cote, `les boutons tactiles font ${cote} px CSS`).toBeGreaterThanOrEqual(44);
+	const couleur = salon.table[1].couleur;
+	await mobile.touchscreen.tap(dx, dy);
+	await attendre(hote, (e) => e.salon?.table[1].couleur !== couleur, "la flèche touchée change la couleur du mobile, chez l'hôte");
+	await mobile.touchscreen.tap(salon.tactile.pret[0], salon.tactile.pret[1]);
+	await attendre(hote, (e) => e.salon?.table[1].pret === true, "PRÊT touché : le mobile est prêt, chez l'hôte");
+
+	// En portrait : le voile « Tourne ton téléphone », et le jeu qui continue derrière ; en paysage, plus rien.
+	// Playwright ne tourne qu'une page hors du plein écran : le joueur en sort d'abord (le jeu le laisse en sortir).
+	await mobile.evaluate(() => document.exitFullscreen());
+	await expect.poll(() => mobile.evaluate(() => document.fullscreenElement === null)).toBe(true);
+	const paysage = mobile.viewportSize();
+	await mobile.setViewportSize({ width: paysage.height, height: paysage.width });
+	const voile = await attendre(mobile, (e) => e.voile === true, "en portrait, le voile");
+	await attendre(mobile, (e) => e.images > voile.images + 30, "le jeu continue derrière le voile");
+	await mobile.setViewportSize(paysage);
+	await attendre(mobile, (e) => e.voile === false, "en paysage, plus de voile");
+
+	await commander(hote, "pret");
+	await commander(hote, "demarrer");
+	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 60_000);
+	const jeu = (await etat(mobile)).manche;
+	expect(jeu.tactile.visible).toBe(true);
+	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces
+	const cdp = await contexte.newCDPSession(mobile);
+	const doigts = (type, points) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+	const [sx, sy] = jeu.tactile.stick;
+	const pousse = jeu.tactile.rayon * 1.2;
+	// Le pouce gauche pose le stick et le pousse vers le bas aux quatre cinquièmes (le lion descend à 60 % de sa
+	// vitesse : la zone morte des actions est de 0,5) : le lion descend vers la ville, un peu sous la hauteur de
+	// peinture (l'hôte, qui fait foi, le voit un peu plus haut que sa prédiction), jamais jusqu'aux toits, 233 px
+	// plus bas, même relu 300 ms trop tard
+	await doigts("touchStart", [[sx, sy]]);
+	await doigts("touchMove", [[sx, sy + jeu.tactile.rayon * 0.8]]);
+	await attendre(mobile, (e) => e.manche?.lion.length === 2 && e.manche.lion[1] >= e.manche.cible + 20, "le stick fait descendre le lion du mobile", 60_000);
+	// Puis vers la gauche (son lion part à droite de l'écran), VOMIR tenu du pouce droit : il peint 2,5 s de jeu
+	const [vx, vy] = jeu.tactile.vomir;
+	await doigts("touchMove", [[sx - pousse, sy]]);
+	await doigts("touchStart", [[sx - pousse, sy], [vx, vy]]);
+	const debut = (await etat(mobile)).manche.temps;
+	await attendre(mobile, (e) => e.manche?.finie || e.manche?.temps >= debut + 2.5, "le mobile peint 2,5 s de jeu", 60_000);
+	await doigts("touchEnd", []);
+
+	const fins = [];
+	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 60_000));
+	const empreintes = consoles.map((l) => l.find((ligne) => ligne.startsWith("EMPREINTE ")));
+	expect(empreintes[0]).toBeTruthy();
+	expect(empreintes[1]).toBe(empreintes[0]);
+	console.log(`Fin de manche : scores ${fins[0].scores} ; hôte ${fins[0].fps} i/s, mobile ${fins[1].fps} i/s`);
+	// Les scores du territoire : à l'index 0 les cellules de personne, puis l'hôte, puis le mobile
+	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores}`).toBeGreaterThan(0);
+	expect(erreurs(consoles), "aucune erreur dans les consoles des deux pages").toEqual([[], []]);
 });
