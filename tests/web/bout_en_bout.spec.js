@@ -69,10 +69,12 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	for (const page of pages) await commander(page, "pret");
 	await commander(hote, "demarrer");
 	// Les passes partent tout de suite : le pilote attend lui-même la manche commencée (GameState.pret),
-	// sans le retard des relectures du test, page après page. Toutes vers la gauche : les lions partent
-	// espacés d'un tiers de l'écran et ne se croisent pas (deux lions qui se heurtent de face s'arrêtent l'un
-	// l'autre et peignent à peine) ; celui de l'hôte, le plus à gauche, peint jusqu'au bord.
-	for (const page of pages) await commander(page, "peindre", -1);
+	// sans le retard des relectures du test, page après page. Toutes d'abord vers la droite, puis retour
+	// (l'aller-retour du pilote) : les lions partent espacés d'un tiers de l'écran et ne se croisent pas (une
+	// gerbe qui touche un lion l'étourdit : deux lions face à face s'arrêtent l'un l'autre et peignent à
+	// peine) ; Bruno, le plus à droite, que le bord arrête à l'aller (sa gerbe y tombe hors de la ville :
+	// mesuré, 1 à 7 cellules sans retour), peint au retour.
+	for (const page of pages) await commander(page, "peindre", 1);
 	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 60_000);
 
 	const fins = [];

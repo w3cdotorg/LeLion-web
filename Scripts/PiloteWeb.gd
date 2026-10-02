@@ -14,9 +14,9 @@ extends Node
 ##   `?salle=` a rempli ;
 ## - `["pret"]` : au salon, ce poste se dit prêt ;
 ## - `["demarrer"]` : au salon, l'hôte démarre dès que le salon est prêt ;
-## - `["peindre", sens]` : en manche, le lion de ce poste descend vers la ville, puis la peint en allant
-##   dans le sens `sens` (1 : à droite, -1 : à gauche) TICKS_PASSE ticks physiques (la passe du test
-##   réseau, comptée en temps de jeu) ;
+## - `["peindre", sens]` : en manche, le lion de ce poste descend vers la ville, puis la peint TICKS_PASSE
+##   ticks physiques (comptés en temps de jeu), un aller dans le sens `sens` (1 : à droite, -1 : à gauche)
+##   puis le retour ;
 ## - `["quitter"]` : retour au titre (qui quitte le réseau : l'adieu, spec §5).
 ## Une commande mal formée (nom inconnu, nombre ou types d'arguments, `erreur_commande`) est rejetée
 ## (`push_warning`) et retirée de la file, sans bloquer celles qui la suivent.
@@ -26,11 +26,12 @@ extends Node
 
 const SCENE_TITRE := "res://Scenes/Titre.tscn"
 ## La hauteur de peinture, au-dessus des toits (celle du pilote de la démo), en px ; la durée d'une passe,
-## en ticks physiques (2,5 s de jeu). Comptée en temps de jeu, jamais à l'horloge murale : une page lente
+## en ticks physiques (2,5 s de jeu), et celle de son aller (la moitié). Comptée en temps de jeu, jamais à l'horloge murale : une page lente
 ## (la CI sous Chromium, en rendu logiciel, tourne à 0,4× le temps réel ou moins) joue au ralenti, et
 ## une passe minutée en millisecondes s'y arrêtait avant que le lion n'atteigne la ville.
 const HAUTEUR_PEINTURE := 233.0
 const TICKS_PASSE := 150
+const TICKS_ALLER := 75
 ## Les arguments de chaque commande, leurs types dans l'ordre (les nombres arrivent du JSON en flottants),
 ## et combien sont facultatifs à la fin (le code de `rejoindre`).
 const ARGUMENTS := {"duree": [TYPE_FLOAT], "creer": [TYPE_STRING], "rejoindre": [TYPE_STRING, TYPE_STRING],
@@ -201,11 +202,13 @@ func _executer(commande: Variant) -> bool:
 	return true
 
 
-## La passe du lion de ce poste dans la scène de jeu `main` (comme celle du test réseau), en ticks
-## physiques : il descend à HAUTEUR_PEINTURE au-dessus des toits (la position du lion d'un client est
-## celle que l'hôte lui renvoie), aussi longtemps qu'il le faut, puis peint la ville en allant dans le
-## sens `sens` TICKS_PASSE ticks, touches pressées comme un joueur ; la fin de la manche arrête l'une
-## ou l'autre. Aucun plafond en millisecondes.
+## La passe du lion de ce poste dans la scène de jeu `main`, en ticks physiques : il descend à
+## HAUTEUR_PEINTURE au-dessus des toits (la position du lion d'un client est celle que l'hôte lui
+## renvoie), aussi longtemps qu'il le faut, puis peint la ville TICKS_PASSE ticks à cette hauteur,
+## touches pressées comme un joueur : la moitié en allant dans le sens `sens`, l'autre en revenant ; la
+## fin de la manche arrête l'une ou l'autre. Aucun plafond en millisecondes. L'aller-retour garde chaque
+## lion près de son départ : des lions qui partent dans le même sens ne se rattrapent pas, et celui qu'un
+## bord arrête (sa gerbe, qui tombe devant lui, y sort de la ville) peint au retour.
 func _peindre(main: Node, sens: int) -> void:
 	var ville: Node2D = main.get_node("Ville")
 	var cible: float = ville.position.y - ville.tex_size.y / 2.0 - HAUTEUR_PEINTURE
@@ -216,13 +219,23 @@ func _peindre(main: Node, sens: int) -> void:
 		_passe["descente"] += 1
 	Input.action_release("deplacer_bas")
 	_passe["peinture"] = 0
-	var action := "deplacer_droite" if sens > 0 else "deplacer_gauche"
-	Input.action_press(action)
+	var aller := "deplacer_droite" if sens > 0 else "deplacer_gauche"
+	var retour := "deplacer_gauche" if sens > 0 else "deplacer_droite"
 	Input.action_press("vomir")
-	while _en_manche(main) and _passe["peinture"] < TICKS_PASSE:
-		await get_tree().physics_frame
-		_passe["peinture"] += 1
-	Input.action_release(action)
+	for etape: Array in [[aller, TICKS_ALLER], [retour, TICKS_PASSE]]:  # l'action, et le tick où elle finit
+		Input.action_press(etape[0])
+		while _en_manche(main) and _passe["peinture"] < etape[1]:
+			# La hauteur se tient pendant la passe : chez un client, la prédiction atteint la hauteur avant
+			# que l'hôte ne l'y mette (une page lente : l'hôte saute des commandes), puis l'hôte le recale
+			# plus haut, d'où sa gerbe tomberait au-dessus des toits.
+			if main.lion.position.y < cible:
+				Input.action_press("deplacer_bas")
+			else:
+				Input.action_release("deplacer_bas")
+			await get_tree().physics_frame
+			_passe["peinture"] += 1
+		Input.action_release(etape[0])
+	Input.action_release("deplacer_bas")
 	Input.action_release("vomir")
 
 
