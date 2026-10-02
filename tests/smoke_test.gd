@@ -1972,6 +1972,8 @@ func _tester_salon(params: Node) -> void:
 	var c0: Dictionary = salon.cartes[0]
 	_check(root.content_scale_size == Vector2i(2000, 1125) and salon.cartes.size() == 6
 		and salon.cartes.all(func(c: Dictionary) -> bool: return c.cadre.visible), "le salon est en 16:9, une carte par place (6)")
+	_check(salon.cartes.all(func(c: Dictionary) -> bool: return c.pseudo is Label and c.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+		"phase 7 (spec §8.2) : le pseudo de chaque carte, un Label jamais traduit de lui-même (un pseudo n'est pas une clé)")
 	_check(c0.pseudo.text == "MMMMMMMMMMMM" and c0.badge.text == "HÔTE · TOI" and c0.etat.text == tr("SALON_PAS_PRET")
 		and c0.lion.material == c0.teinte and c0.teinte.get_shader_parameter("couleur_joueur") == palette[0] and c0.style.border_color == palette[0],
 		"la carte de l'hôte : pseudo, badges, pas prêt, lion et contour à sa couleur")
@@ -2626,6 +2628,8 @@ func _tester_manche_reseau() -> void:
 		_check(hud != null and hud.vignettes.map(func(v: Dictionary) -> String: return v.pseudo.text) == ["Hôte", "Bob"]
 			and hud.vignettes[0].badge.text == "TOI",
 			"(%s) le HUD de la bataille : une vignette par joueur de la table, « TOI » sur celle de l'hôte" % essai)
+		_check(hud.vignettes.all(func(v: Dictionary) -> bool: return v.pseudo is Label and v.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+			"(%s) phase 7 (spec §8.2) : les pseudos du HUD, des Label jamais traduits d'eux-mêmes (un pseudo n'est pas une clé)" % essai)
 		if essai == "absent":
 			_check(not reseau.inscrits.has(7) and main.lions.size() == 1, "(absent) un joueur exclu n'a pas de lion")
 			_check(manche._partis == [1] and hud.partis == [false, true] and hud.vignettes[1].badge.text == "PARTI",
@@ -2765,6 +2769,9 @@ func _tester_manche_reseau() -> void:
 			and resultats.bouton_revanche.disabled and resultats.bouton_suivant.disabled and not resultats.bouton_salon.disabled
 			and resultats.etat.text == tr("SALON_ATTENTE_JOUEURS"),
 			"l'écran Résultats de l'hôte en réseau : Retour au salon ; Bob parti, Revanche et Niveau suivant attendent deux joueurs")
+		_check(resultats != null and resultats.lignes.size() == 2
+			and resultats.lignes.all(func(l: Dictionary) -> bool: return l.pseudo is Label and l.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+			"phase 7 (spec §8.2) : les pseudos de l'écran Résultats, des Label jamais traduits d'eux-mêmes")
 		# Un hôte perdu (chez un client) : message, tout se fige ; M5 (revue finale phase 17) : la boucle du
 		# vomi d'un joueur qui tenait Espace s'arrête
 		var audio: Node = root.get_node("Audio")

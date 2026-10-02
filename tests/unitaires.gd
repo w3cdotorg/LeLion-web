@@ -57,6 +57,7 @@ func _run() -> void:
 	_tester_transport_webrtc()
 	_tester_mobile()
 	_tester_limites()
+	_tester_pseudos_affiches()
 	await _tester_demandes_salon()
 	await _tester_exclusion()
 	await _tester_retour_de_gel()
@@ -827,6 +828,18 @@ func _tester_reseau() -> void:
 		+ "e" + char(0x2028) + "f" + char(0xFEFF) + "g"
 	_check(reseau.pseudo_valide(brut) == "abcdefg",
 		"le pseudo est aussi nettoyé du DEL, des contrôles C1, des forçages de sens et des caractères invisibles")
+	# Phase 7 du jeu en ligne (spec §8.2) : tous les caractères de mise en forme (catégorie Cf), et ce qui fait
+	# un pseudo invisible ; le nettoyage passe avant la coupe à 12 caractères
+	var formats := ""
+	for c: int in [0x00AD, 0x034F, 0x0600, 0x061C, 0x06DD, 0x070F, 0x0891, 0x08E2, 0x115F, 0x1160, 0x17B4, 0x180B, 0x180E, 0x2066,
+			0x2069, 0x3164, 0xFFA0, 0xFFF9, 0xFFFB, 0x110BD, 0x13430, 0x1BCA0, 0x1D173, 0xE0001, 0xE0041, 0xE007F, 0xE0100]:
+		formats += char(c) + "x"
+	var masques := (char(0x200B) + "W" + char(0x2066)).repeat(20)
+	_check(reseau.pseudo_valide(formats) == "xxxxxxxxxxxx" and reseau.pseudo_valide(masques) == "WWWWWWWWWWWW"
+		and reseau.pseudo_valide("Zoé" + char(0x2003) + "Léa " + char(0x1F600)) == "Zoé" + char(0x2003) + "Léa " + char(0x1F600),
+		"phase 7 : nettoyé aussi des caractères de mise en forme d'Unicode (trait d'union conditionnel, marque arabe, étiquettes…) et des lettres vides, avant la coupe à 12 ; espaces, accents et emoji restent")
+	_check(reseau.pseudo_ou_defaut(char(0x3164).repeat(5) + char(0xE0041), 2) == "Joueur 3",
+		"un pseudo fait seulement de lettres vides et d'étiquettes retombe sur « Joueur N »")
 	_check(reseau.pseudo_valide("abcdefghijk lmn") == "abcdefghijk",
 		"la coupe à %d caractères ne laisse pas d'espace finale (nettoyage après la coupe)" % reseau.PSEUDO_MAX)
 	_check(reseau.pseudo_valide("   \n\t  ") == "", "un pseudo qui ne contient rien d'affichable devient une chaîne vide")
@@ -2261,6 +2274,29 @@ func _tester_limites() -> void:
 		"salon : 10 demandes d'un coup, puis une par dixième de seconde (%d, %s)" % [en_rafale, ensuite])
 	salon.vider()
 	_check(salon.rejets.is_empty() and salon.admettre(9, 0.0), "vidé (une session neuve) : plus aucun seau ni rejet")
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : un pseudo n'est jamais interprété (BBCode, traduction) : aucun
+## `RichTextLabel` dans le jeu, et l'étiquette du lion ne se traduit pas d'elle-même (un pseudo « PAUSE » n'est
+## pas une clé) ; les cartes du salon, le HUD et l'écran Résultats sont vérifiés par le smoke test.
+func _tester_pseudos_affiches() -> void:
+	print("-- Pseudos affichés (phase 7)")
+	var interpretes: Array[String] = []
+	for dossier: String in ["res://Scripts", "res://Scenes"]:
+		for fichier in _fichiers_du_dossier(dossier, ".gd" if dossier.ends_with("Scripts") else ".tscn"):
+			var texte := FileAccess.get_file_as_string(dossier.path_join(fichier))
+			if texte.contains("RichTextLabel") or texte.contains("bbcode"):
+				interpretes.append(fichier)
+	_check(interpretes.is_empty(), "aucun RichTextLabel ni BBCode dans les scripts et les scènes du jeu : un pseudo s'affiche en texte brut (%s)" % [interpretes])
+	var etat := (load("res://Scenes/Lion.tscn") as PackedScene).get_state()
+	var etiquette := {}
+	for i in range(etat.get_node_count()):
+		if etat.get_node_name(i) == &"Pseudo":
+			etiquette["type"] = etat.get_node_type(i)
+			for p in range(etat.get_node_property_count(i)):
+				etiquette[etat.get_node_property_name(i, p)] = etat.get_node_property_value(i, p)
+	_check(etiquette.get("type") == &"Label" and etiquette.get("auto_translate_mode") == Node.AUTO_TRANSLATE_MODE_DISABLED,
+		"l'étiquette du pseudo d'un lion est un Label qui ne se traduit pas de lui-même (%s, %s)" % [etiquette.get("type"), etiquette.get("auto_translate_mode")])
 
 
 ## Phase 7 du jeu en ligne (spec §8.2) : entre l'autoload, hôte, et un second poste client dans ce même

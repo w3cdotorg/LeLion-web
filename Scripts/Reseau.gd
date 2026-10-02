@@ -691,11 +691,19 @@ static func premiere_couleur_libre(occupes: Dictionary[int, Dictionary]) -> Colo
 ## Vrai pour un point de code que l'étiquette du lion ne doit jamais afficher : les contrôles C0
 ## (`strip_escapes` ne va que jusqu'à U+001F) et C1, les caractères invisibles (espaces et joints de
 ## largeur nulle, U+FEFF) et les forçages de sens (RLO/LRO, isolats) qui casseraient la lecture ou
-## la mise en page d'un pseudo hostile.
+## la mise en page d'un pseudo hostile. Phase 7 du jeu en ligne (spec §8.2) : aussi tous les autres
+## caractères de mise en forme d'Unicode (catégorie Cf : trait d'union conditionnel U+00AD, marque de lettre
+## arabe U+061C, séparateur mongol U+180E, ancres d'annotation U+FFF9 à U+FFFB, étiquettes U+E0000 à
+## U+E007F…), le joint de graphèmes U+034F, les sélecteurs de variante mongols et ceux du plan 14, et les
+## lettres vides du coréen (U+115F, U+1160, U+3164, U+FFA0) : de quoi faire un pseudo invisible.
 static func _code_point_interdit(c: int) -> bool:
-	return c <= 0x1F or (c >= 0x7F and c <= 0x9F) \
-		or (c >= 0x200B and c <= 0x200F) or c == 0x2028 or c == 0x2029 \
-		or (c >= 0x202A and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) or c == 0xFEFF
+	return c <= 0x1F or (c >= 0x7F and c <= 0x9F) or c == 0xAD or c == 0x34F \
+		or (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x890 or c == 0x891 or c == 0x8E2 \
+		or c == 0x115F or c == 0x1160 or c == 0x17B4 or c == 0x17B5 or (c >= 0x180B and c <= 0x180F) \
+		or (c >= 0x200B and c <= 0x200F) or (c >= 0x2028 and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) \
+		or c == 0x3164 or c == 0xFEFF or c == 0xFFA0 or (c >= 0xFFF9 and c <= 0xFFFB) \
+		or c == 0x110BD or c == 0x110CD or (c >= 0x13430 and c <= 0x1343F) or (c >= 0x1BCA0 and c <= 0x1BCA3) \
+		or (c >= 0x1D173 and c <= 0x1D17A) or (c >= 0xE0000 and c <= 0xE0FFF)
 
 
 ## Le pseudo tel que l'hôte l'inscrit : sans caractères de contrôle, invisibles ni forçages de sens
