@@ -11,6 +11,8 @@ extends CanvasLayer
 ## relâchement : le salon n'agit qu'à l'appui, jamais tenu (phase 18), comme au clavier et à la manette,
 ## inchangés. Chaque bouton fait `Parametres.CIBLE_TACTILE` px de côté au moins et reste à MARGE px des
 ## bords de l'écran (la zone sûre d'un téléphone : ses coins arrondis, sa barre du bas).
+## La fenêtre qui perd le focus (un appel, un autre onglet) relâche tout (`relacher`) : les relâchements des
+## doigts posés n'arriveront jamais.
 
 enum Disposition { JEU, SALON }
 
@@ -43,6 +45,21 @@ func _ready() -> void:
 		if enfant is TouchScreenButton:
 			enfant.set_process_input(visible and enfant.visible)
 	joystick.set_process_input(visible and jeu)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		relacher()
+
+
+## Relâche le stick (au repos, son doigt oublié : le prochain toucher le reprend) et chaque bouton tenu :
+## cacher un `TouchScreenButton` le relâche (son action aussi), il est remontré aussitôt.
+func relacher() -> void:
+	joystick.fin()
+	for enfant in get_children():
+		if enfant is TouchScreenButton and enfant.visible:
+			enfant.hide()
+			enfant.show()
 
 
 ## Vrai si ce poste montre les contrôles tactiles : un mobile, ou tout écran tactile.

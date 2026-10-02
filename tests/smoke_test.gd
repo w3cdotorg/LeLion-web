@@ -2243,6 +2243,35 @@ func _tester_tactile_mobile(params: Node) -> void:
 		jeu.free()
 	_check(dedans and places[Vector2i(2000, 648)] == [Vector2(1780, 428), Vector2(1780, 140)] and places[Vector2i(2000, 1125)] == [Vector2(1780, 905), Vector2(1780, 140)],
 		"en jeu, un mobile a le stick, VOMIR en bas à droite et la pause sous le HUD, à %d px des bords, de %d px au moins, sur l'écran du solo comme sur celui de la bataille (%s)" % [60, cible, places])
+	# La fenêtre perd le focus (un appel, un autre onglet) un pouce sur le stick et l'autre sur VOMIR : leurs
+	# relâchements n'arriveront jamais. Le stick revient au repos, prêt pour un nouveau doigt ; VOMIR est
+	# relâché, et se touche de nouveau ; les boutons restent affichés
+	var tenus: CanvasLayer = load("res://Scenes/ControlesTactiles.tscn").instantiate()
+	root.add_child(tenus)
+	await process_frame
+	var centre_vomir: Vector2 = tenus.bouton_vomir.position + tenus.bouton_vomir.texture_normal.get_size() / 2.0
+	await _toucher(Vector2(300, 800), true)
+	var glisse := InputEventScreenDrag.new()
+	glisse.index = 0
+	glisse.position = Vector2(400, 800)
+	root.push_input(glisse, true)
+	await _toucher(centre_vomir, true, 1)
+	var avant := [tenus.joystick.actif, Input.is_action_pressed("deplacer_droite"), Input.is_action_pressed("vomir"), tenus.bouton_vomir.is_pressed()]
+	root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	await process_frame
+	var apres := [tenus.joystick.actif, Input.is_action_pressed("deplacer_droite"), Input.is_action_pressed("vomir"), tenus.bouton_vomir.is_pressed()]
+	var affiches := [tenus.joystick.visible, tenus.bouton_vomir.visible, tenus.bouton_pause.visible, tenus.bouton_gauche.visible, tenus.bouton_droite.visible]
+	await _toucher(Vector2(300, 800), true, 2)
+	await _toucher(centre_vomir, true, 3)
+	var de_nouveau := [tenus.joystick.actif and tenus.joystick._index_touche == 2, tenus.bouton_vomir.is_pressed() and Input.is_action_pressed("vomir")]
+	await _toucher(Vector2(300, 800), false, 2)
+	await _toucher(centre_vomir, false, 3)
+	de_nouveau.append_array([tenus.joystick.actif, Input.is_action_pressed("vomir")])
+	tenus.free()
+	_check(avant == [true, true, true, true] and apres == [false, false, false, false] and affiches == [true, true, true, false, false]
+		and de_nouveau == [true, true, false, false],
+		"le focus perdu, doigts posés : le stick revient au repos et VOMIR est relâché (%s puis %s), les boutons restent (%s), de nouveaux doigts reprennent le stick et VOMIR, et les relâchent (%s)"
+			% [avant, apres, affiches, de_nouveau])
 
 	# Au salon, sur un mobile : les flèches de la couleur et PRÊT, ni stick ni pause ; Retour agrandi, pas de
 	# Plein écran
