@@ -280,7 +280,17 @@ jobs:
 
       - name: Sonder le Worker déployé (une salle depuis la page publiée, STUN seul ; localhost refusé)
         shell: bash
-        run: node outils/sonder.mjs "$(sed -n 's/^signalisation\/url="\(.*\)"$/\1/p' ../project.godot)"
+        # Juste après un déploiement (le tout premier surtout), le Worker peut ne pas encore
+        # répondre : quatre essais à 15 s d'écart, sous la limite de 5 créations par minute
+        # (une origine refusée ne compte pas, elle est écartée avant la limite).
+        run: |
+          url="$(sed -n 's/^signalisation\/url="\(.*\)"$/\1/p' ../project.godot)"
+          for essai in 1 2 3 4; do
+            if node outils/sonder.mjs "$url"; then exit 0; fi
+            [ "$essai" -lt 4 ] && sleep 15
+          done
+          echo "::error::sonde en échec après 4 essais : $url"
+          exit 1
 
   deploiement-page:
     name: Déploiement de la page (GitHub Pages, tag vX.Y)
