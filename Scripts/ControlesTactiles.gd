@@ -62,6 +62,15 @@ func relacher() -> void:
 			enfant.show()
 
 
+## Cache les contrôles (l'écran Résultats, sur chaque poste) : relâchés d'abord, puis sourds aux touchers (un
+## Control d'une couche cachée reçoit encore `_input` : le stick reprendrait un pouce).
+func cacher() -> void:
+	relacher()
+	hide()
+	for enfant in get_children():
+		enfant.set_process_input(false)
+
+
 ## Vrai si ce poste montre les contrôles tactiles : un mobile, ou tout écran tactile.
 static func affiches() -> bool:
 	return Parametres.mobile or DisplayServer.is_touchscreen_available()

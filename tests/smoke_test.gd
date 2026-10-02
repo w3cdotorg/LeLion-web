@@ -2432,14 +2432,19 @@ func _rect_du_texte(etiquette: Label) -> Rect2:
 
 
 ## Un toucher (ou son relâchement) du doigt `index` en `position` (px de l'écran du jeu), comme un écran
-## tactile l'envoie.
+## tactile l'envoie, puis une image.
 func _toucher(position: Vector2, appui: bool, index := 0) -> void:
+	_pousser_toucher(position, appui, index)
+	await process_frame
+
+
+## Le même toucher, reçu tout de suite, sans attendre d'image.
+func _pousser_toucher(position: Vector2, appui: bool, index := 0) -> void:
 	var toucher := InputEventScreenTouch.new()
 	toucher.index = index
 	toucher.position = position
 	toucher.pressed = appui
 	root.push_input(toucher, true)  # coordonnées du viewport, pas de la fenêtre
-	await process_frame
 
 
 ## Un appui (ou un relâchement) de `action`, comme le clavier ou la manette l'envoient au jeu.
@@ -2581,12 +2586,29 @@ func _tester_manche_reseau() -> void:
 		GS.joueurs[1].cellules_volees = 17
 		var bilans_vus: Array = []
 		manche.bilan_recu.connect(func(b: RefCounted) -> void: bilans_vus.append(b))
+		# Les contrôles tactiles de la manche, affichés comme sur un mobile, un pouce sur le stick et l'autre sur
+		# VOMIR au gong (sans attendre d'image : rien d'autre ne doit partir avant la fin, I2 ci-dessous)
+		var tactile: CanvasLayer = main.get_node("ControlesTactiles")
+		tactile.show()
+		for controle: Node in tactile.get_children():
+			controle.set_process_input(true)
+		var centre_vomir: Vector2 = tactile.bouton_vomir.position + tactile.bouton_vomir.texture_normal.get_size() / 2.0
+		_pousser_toucher(Vector2(300, 800), true)
+		_pousser_toucher(centre_vomir, true, 1)
+		var tenus_au_gong := [tactile.joystick.actif, tactile.bouton_vomir.is_pressed(), Input.is_action_pressed("vomir")]
 		# La fin de la manche chez l'hôte : la manche la note (elle part vers chaque client prêt, après les
 		# derniers tampons et le territoire), tout se fige, l'écran Résultats remplace le HUD
 		GS.terminer_partie(true)
 		var resultats: CanvasLayer = main.resultats
 		_check(manche.finie and paused and resultats != null and resultats.visible and not hud.visible and not menu.visible,
 			"la fin de manche chez l'hôte : la manche la diffuse, tout se fige, l'écran Résultats remplace le HUD")
+		_pousser_toucher(Vector2(300, 800), false)
+		_pousser_toucher(Vector2(300, 800), true, 2)  # un nouveau pouce, là où était le stick
+		var sourds := [tactile.joystick.actif, tactile.joystick.is_processing_input(), tactile.bouton_vomir.is_pressed(), Input.is_action_pressed("vomir")]
+		_pousser_toucher(Vector2(300, 800), false, 2)
+		_check(tenus_au_gong == [true, true, true] and not tactile.visible and sourds == [false, false, false, false],
+			"à l'écran Résultats, les contrôles tactiles de la manche se cachent : VOMIR et le stick tenus au gong (%s) sont relâchés, le stick n'entend plus les touchers (%s)"
+				% [tenus_au_gong, sourds])
 		_check(manche.envois_ordre == ([&"_recevoir_tampons", &"_recevoir_territoire", &"_recevoir_fin_manche"] as Array[StringName]),
 			"I2 : les derniers tampons et le territoire partent avant la fin, sur le même canal (%s)" % [manche.envois_ordre])
 		# Phase 18 : la fin porte le bilan de l'hôte : cellules, crans, statistiques, départs, l'état final
