@@ -2287,6 +2287,10 @@ func _tester_code_salle() -> void:
 	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
 		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
 	_check(not CodeSalle.valide("k7q2xm") and CodeSalle.valide("K7Q2XM"), "valide() attend un code déjà normalisé")
+	var adresses := ["192.168.1.20:7777", "127.0.0.1:7777", "10.0.0.1"]
+	_check(adresses.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"l'adresse ip:port d'un hôte ENet n'est pas un code : mal formée, pas une confusion (ses 0 et ses 1 ne sont pas ceux d'un code) (%s)"
+		% [adresses.map(func(t: String) -> String: return CodeSalle.erreur(t))])
 
 	# L'affichage et le lien d'invitation
 	_check(CodeSalle.formater("K7Q2XM") == "K7Q-2XM" and CodeSalle.formater("127.0.0.1:7777") == "127.0.0.1:7777",
@@ -2702,6 +2706,19 @@ func _tester_transport_tardif() -> void:
 	transports[-1].perdu = true
 	_check(await _attendre(func() -> bool: return echecs.size() == 4, 1.0) and echecs[3].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
 		"un client dont le transport se ferme avant son pair : connexion échouée, pas un hôte perdu (%s)" % [echecs])
+
+	# Vague finale (T3) : sur le Web, un code ip:port est refusé proprement par Rejoindre, sans rien changer,
+	# pas même la partie hébergée en cours.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne(), "(pré-condition) une partie hébergée")
+	var hote_en_cours := transports[-1]
+	reseau.fabrique_transport = func(_port: int) -> Transport: return TransportWebRTC.new()
+	_check(reseau.rejoindre_partie("192.168.1.20:7777") == ERR_INVALID_PARAMETER and reseau.en_ligne() and root.multiplayer.is_server()
+		and root.multiplayer.multiplayer_peer == hote_en_cours.pair() and not reseau._connexion_en_cours,
+		"sur le Web (TransportWebRTC), un code ip:port est refusé (ERR_INVALID_PARAMETER) : la partie hébergée continue, rien n'est tenté")
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		return transports[-1]
+	reseau.quitter()
 
 	# Vague finale (T1) : un pair_pret périmé, arrivé pendant une session neuve en cours, n'y touche pas.
 	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) une connexion")

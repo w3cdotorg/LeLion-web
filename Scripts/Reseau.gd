@@ -316,13 +316,13 @@ func creer_partie(port := PORT) -> Error:
 
 
 ## Rejoint la partie `code` avec le transport de ce poste (l'écran En ligne) : un code de salle en WebRTC
-## (l'export Web, qui refuse une adresse `ip:port`), le code `ip:port` (ou `ip`) d'un hôte en ENet. Un code que le transport refuse
-## (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution bloquerait le jeu), ou aucun transport
-## (`transport_disponible` faux : ERR_UNAVAILABLE), ne change rien, pas même la session en cours. La
-## réponse arrive par `inscrit`, `refuse` ou `connexion_echouee` (au plus tard après le délai du canal du
-## transport, puis DELAI_CONNEXION). Renvoie l'erreur du transport si le client ne peut même pas être créé.
-## Le pair du transport est posé dès qu'il existe : au retour (ENet), ou à `Transport.pair_pret` (WebRTC,
-## à l'arrivée de son identifiant) ; d'ici là `en_ligne()` reste faux.
+## (l'export Web, qui refuse une adresse `ip:port`), le code `ip:port` (ou `ip`) d'un hôte en ENet. Un
+## code que le transport refuse (ERR_INVALID_PARAMETER, M8 : aucun nom d'hôte, dont la résolution
+## bloquerait le jeu), ou aucun transport (`transport_disponible` faux : ERR_UNAVAILABLE), ne change rien,
+## pas même la session en cours. La réponse arrive par `inscrit`, `refuse` ou `connexion_echouee` (au plus
+## tard après le délai du canal du transport, puis DELAI_CONNEXION). Renvoie l'erreur du transport si le
+## client ne peut même pas être créé. Le pair du transport est posé dès qu'il existe : au retour (ENet),
+## ou à `Transport.pair_pret` (WebRTC, à l'arrivée de son identifiant) ; d'ici là `en_ligne()` reste faux.
 func rejoindre_partie(code: String) -> Error:
 	if not transport_disponible:
 		return ERR_UNAVAILABLE

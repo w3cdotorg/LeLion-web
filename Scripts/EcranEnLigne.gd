@@ -125,8 +125,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	retour()
 
 
-## Crée une partie avec le pseudo saisi (hors du Web, ENet sur `port_jeu`) : le salon s'ouvre quand elle a
-## son code, tout de suite en ENet, à la salle de la signalisation en WebRTC (CREATION d'ici là).
+## Crée une partie avec le pseudo saisi : sur le Web, en WebRTC (`TransportWebRTC`), le salon s'ouvre à la
+## salle de la signalisation, qui donne son code (CREATION d'ici là, ou l'échec et son message) ; hors du
+## Web, en ENet sur `port_jeu`, tout de suite.
 func creer_partie() -> void:
 	if etat != Etat.ACCUEIL:
 		return
@@ -288,10 +289,15 @@ func _sur_refus(raison: String, version_hote: String) -> void:
 	_afficher_message(cle, [version_hote] if cle == Reseau.REFUS_VERSION else [], true)
 
 
+## Le message de l'échec (`cle_echec`) ; pendant une création (CREATION), une raison vide ou inconnue est
+## la signalisation qui n'a pas abouti (ENLIGNE_SERVICE_INDISPONIBLE), pas un hôte : il n'y en a pas.
 func _sur_connexion_echouee() -> void:
+	var cle := cle_echec(Reseau.raison_echec)
+	if etat == Etat.CREATION and not MESSAGES_ECHEC.has(Reseau.raison_echec):
+		cle = "ENLIGNE_SERVICE_INDISPONIBLE"
 	_changer_etat(Etat.ACCUEIL)
 	_reprendre_focus_echec()
-	_afficher_message(cle_echec(Reseau.raison_echec), [], true)
+	_afficher_message(cle, [], true)
 
 
 func _sur_hote_perdu() -> void:

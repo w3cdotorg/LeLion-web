@@ -1596,7 +1596,10 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 		"le pseudo mémorisé est repris, la saisie bornée à %d caractères ; le champ du code montre « K7Q-2XM »" % reseau.PSEUDO_MAX)
 
 	# Un code mal formé est refusé à la saisie (spec §9), sans rien tenter, le focus sur le code
-	var refus := {"K7Q2X": "ENLIGNE_CODE_FORMAT", "K7Q-2XM9": "ENLIGNE_CODE_FORMAT", "": "ENLIGNE_CODE_FORMAT", "k7q-2o1": "ENLIGNE_CODE_CONFUSION"}
+	# L'adresse ip:port d'un hôte ENet n'est pas un code sur le Web : mal formée, pas une confusion (ses 0 et
+	# ses 1 ne sont pas ceux d'un code), et rien n'est tenté
+	var refus := {"K7Q2X": "ENLIGNE_CODE_FORMAT", "K7Q-2XM9": "ENLIGNE_CODE_FORMAT", "": "ENLIGNE_CODE_FORMAT", "k7q-2o1": "ENLIGNE_CODE_CONFUSION",
+		"192.168.1.20:7777": "ENLIGNE_CODE_FORMAT"}
 	var faux: Array[String] = []
 	for saisie: String in refus:
 		ecran.champ_code.text = saisie
@@ -1749,10 +1752,26 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == "Trop de parties en ce moment, réessaie plus tard."
 		and ecran.bouton_creer.has_focus(),
 		"la création échoue avant le code (quota) : son message, retour à l'accueil, Créer une partie au focus (%s)" % ecran.message.text)
+	# Pendant la création, une raison vide ou inconnue est la signalisation, pas l'hôte (il n'y en a pas)
+	var messages_creation: Array[String] = []
+	for raison: String in ["", "bizarre"]:
+		ecran.creer_partie()
+		transports[-1].echec.emit(raison)
+		var fin_echec := Time.get_ticks_msec() + 1000
+		while ecran.etat != ecran.Etat.ACCUEIL and Time.get_ticks_msec() < fin_echec:
+			await process_frame
+		messages_creation.append(ecran.message.text)
+	_check(messages_creation == [service, service] and ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne(),
+		"la création échoue sans raison, ou d'une raison inconnue : « %s », pas « Connexion impossible avec l'hôte » (%s)" % [service, messages_creation])
 	ecran.creer_partie()
 	ecran.retour(false)
 	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and transports[-1].pair() == null,
 		"Retour pendant la création l'annule : l'accueil, hors réseau, le transport quitté")
+	transports[-1].pret.emit("K7Q2XM")
+	await process_frame
+	_check(ecran.etat == ecran.Etat.ACCUEIL and reseau.code_partie.is_empty() and not reseau.en_ligne()
+		and (current_scene == null or current_scene.scene_file_path != "res://Scenes/Salon.tscn"),
+		"le pret d'une création annulée par Retour, arrivé après, est ignoré : l'accueil reste, pas de salon")
 	ecran.creer_partie()
 	transports[-1].pret.emit("K7Q2XM")
 	_check(ecran.etat == ecran.Etat.SALON and reseau.code_partie == "K7Q2XM", "le code arrive (pret) : en route vers le salon")
