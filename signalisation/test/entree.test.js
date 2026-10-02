@@ -106,7 +106,8 @@ describe("routes du Worker", () => {
 
 	it("origine refusée : erreur origine puis fermeture, à la création comme à l'arrivée", async () => {
 		for (const chemin of ["/v1/creer", "/v1/rejoindre/K7Q2XM"]) {
-			for (const origine of [null, "https://exemple.net"]) {
+			// http://localhost:8060 : la configuration de production (wrangler.jsonc) n'admet que la page publiée.
+			for (const origine of [null, "https://exemple.net", "http://localhost:8060"]) {
 				const socket = await ouvrir(chemin, { origine });
 				expect(socket.reponse.status).toBe(101);
 				expect(await socket.suivant()).toEqual({ t: "erreur", raison: "origine" });
@@ -184,6 +185,18 @@ describe("limiteurs", () => {
 		}
 		const messages = journal.mock.calls.map(([ligne]) => JSON.parse(ligne).message);
 		expect(messages).toEqual(["limite injoignable", "limite injoignable"]);
+	});
+
+	it("sans binding (le bloc ratelimits retiré, repli de la phase 5) : tout passe, sans rien journaliser", async () => {
+		const journal = vi.spyOn(console, "log").mockImplementation(() => {});
+		journal.mockClear(); // l'espion du test précédent, s'il reste, garde ses appels
+		const env = envFactice(SALLE_FACTICE, { LIMITE_CREATION: undefined, LIMITE_ARRIVEE: undefined });
+		for (const chemin of ["/v1/creer", "/v1/rejoindre/K7Q2XM"]) {
+			const reponse = await worker.fetch(requete(chemin), env);
+			expect(await reponse.text(), chemin).toBe("salle factice");
+		}
+		expect(journal).not.toHaveBeenCalled();
+		journal.mockRestore();
 	});
 
 	it("arrivée au-delà de la limite de l'IP : erreur debit, sans appeler la salle", async () => {
