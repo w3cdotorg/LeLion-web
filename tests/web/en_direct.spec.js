@@ -5,9 +5,12 @@
 // la salle (le canal WebRTC des deux pages est ouvert), les serveurs ICE sont du STUN seul.
 import { expect, test } from "@playwright/test";
 
-/** Une page neuve (son propre contexte) qui note sa console et les messages de ses WebSockets. */
-async function ouvrir(navigateur, chemin) {
-	const page = await (await navigateur.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
+/** Une page neuve (son propre contexte, ajouté à `contextes` avant tout : le test les ferme tous) qui note sa
+ * console et les messages de ses WebSockets. */
+async function ouvrir(navigateur, chemin, contextes) {
+	const contexte = await navigateur.newContext({ viewport: { width: 1280, height: 720 } });
+	contextes.push(contexte);
+	const page = await contexte.newPage();
 	const journal = { lignes: [], recus: [], envoyes: [], sockets: [] };
 	page.on("console", (message) => journal.lignes.push(message.text()));
 	page.on("pageerror", (erreur) => journal.lignes.push(`PAGEERROR ${erreur.message}`));
@@ -35,23 +38,31 @@ async function jusqua(page, touches, condition, message, delai = 60_000) {
 }
 
 test("deux pages jouent ensemble sur la page déployée : une salle, une arrivée, le canal WebRTC ouvert, STUN seul", async ({ browser }) => {
-	const hote = await ouvrir(browser, "./");
-	const salle = () => hote.journal.recus.find((message) => message.t === "salle");
-	// Le titre a le focus sur Jouer : Droite va à Multijoueur ; l'écran En ligne a le focus sur Créer une partie.
-	await jusqua(hote.page, ["ArrowRight", "Enter", "Enter"], () => salle() !== undefined, "l'hôte crée une partie");
-	const { code, ice } = salle();
-	expect(code).toMatch(/^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
-	const invite = await ouvrir(browser, `./?salle=${code}`);
-	const ouvert = () => hote.journal.envoyes.some((message) => message.t === "ouvert");
-	await jusqua(invite.page, ["Enter"], () => invite.journal.sockets.length > 0, "l'invité rejoint par le lien");
-	await expect.poll(ouvert, { message: "le canal WebRTC entre les deux pages s'ouvre (l'hôte dit ouvert)", timeout: 30_000 }).toBe(true);
-	const bienvenue = invite.journal.recus.find((message) => message.t === "bienvenue");
-	for (const serveurs of [ice, bienvenue?.ice]) {
-		const urls = (serveurs ?? []).flatMap((serveur) => serveur.urls);
-		expect(urls.length > 0 && urls.every((url) => url.startsWith("stun:")), JSON.stringify(serveurs)).toBe(true);
+	const contextes = [];
+	try {
+		const hote = await ouvrir(browser, "./", contextes);
+		const salle = () => hote.journal.recus.find((message) => message.t === "salle");
+		// Le titre a le focus sur Jouer : Droite va à Multijoueur ; l'écran En ligne a le focus sur Créer une
+		// partie. Les touches seulement jusqu'à la socket de la création : une fois ouverte, une autre séquence
+		// créerait une seconde salle (une création de plus sur les 5 par minute de l'IP) ; puis la salle, attendue.
+		await jusqua(hote.page, ["ArrowRight", "Enter", "Enter"], () => hote.journal.sockets.length > 0, "l'hôte crée une partie");
+		await expect.poll(() => salle() !== undefined, { message: "la signalisation donne la salle à l'hôte", timeout: 30_000 }).toBe(true);
+		const { code, ice } = salle();
+		expect(code).toMatch(/^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
+		const invite = await ouvrir(browser, `./?salle=${code}`, contextes);
+		const ouvert = () => hote.journal.envoyes.some((message) => message.t === "ouvert");
+		await jusqua(invite.page, ["Enter"], () => invite.journal.sockets.length > 0, "l'invité rejoint par le lien");
+		await expect.poll(ouvert, { message: "le canal WebRTC entre les deux pages s'ouvre (l'hôte dit ouvert)", timeout: 30_000 }).toBe(true);
+		const bienvenue = invite.journal.recus.find((message) => message.t === "bienvenue");
+		for (const serveurs of [ice, bienvenue?.ice]) {
+			const urls = (serveurs ?? []).flatMap((serveur) => serveur.urls);
+			expect(urls.length > 0 && urls.every((url) => url.startsWith("stun:")), JSON.stringify(serveurs)).toBe(true);
+		}
+		expect(await hote.page.evaluate(() => typeof window.lelionPilote), "le pilote du bout en bout absent de la page").toBe("undefined");
+		const erreurs = [hote, invite].flatMap(({ journal }) => journal.lignes.filter((ligne) => /SCRIPT ERROR|ERROR:|PAGEERROR|PILOTE PRET/.test(ligne)));
+		expect(erreurs).toEqual([]);
+		console.log(`Salle ${code} : ${hote.journal.sockets[0]} ; ${invite.journal.sockets[0]} ; canal ouvert ; ICE ${JSON.stringify(ice)}`);
+	} finally {
+		await Promise.all(contextes.map((contexte) => contexte.close()));
 	}
-	expect(await hote.page.evaluate(() => typeof window.lelionPilote), "le pilote du bout en bout absent de la page").toBe("undefined");
-	const erreurs = [hote, invite].flatMap(({ journal }) => journal.lignes.filter((ligne) => /SCRIPT ERROR|ERROR:|PAGEERROR|PILOTE PRET/.test(ligne)));
-	expect(erreurs).toEqual([]);
-	console.log(`Salle ${code} : ${hote.journal.sockets[0]} ; ${invite.journal.sockets[0]} ; canal ouvert ; ICE ${JSON.stringify(ice)}`);
 });
