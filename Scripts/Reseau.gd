@@ -13,10 +13,13 @@ extends Node
 ## `OfflineMultiplayerPeer` : ce poste est son propre hôte (`multiplayer.is_server()` vrai), et
 ## `quitter()` y revient toujours.
 ##
-## Transport (phase 1 du jeu en ligne) : les canaux sont ceux d'un `Transport` (`TransportENet`, puis
-## `TransportWebRTC` en phase 4), dont ce script donne le pair à `SceneMultiplayer` et qu'il sert à
-## chaque image ; il ne nomme aucune classe d'ENet. Un transport quitté finit son départ en
-## arrière-plan (`_partants`).
+## Transport (phase 1 du jeu en ligne) : les canaux sont ceux d'un `Transport` (`TransportENet`, ou
+## `TransportWebRTC` dans l'export Web), dont ce script donne le pair à `SceneMultiplayer` dès qu'il
+## existe (au retour de `rejoindre()`, ou plus tard : `Transport.pair_pret`) et qu'il sert à chaque
+## image ; il ne nomme aucune classe d'ENet. Un transport quitté finit son départ en arrière-plan
+## (`_partants`). Chez l'hôte, la partie n'existe qu'au `pret` du transport (son code) : un échec avant
+## est un échec de connexion ; après, la fermeture de la salle (`Transport.salle_fermee`) n'arrête que
+## les arrivées.
 ##
 ## Battement et silences : chaque poste en session envoie un battement par seconde (`_battement`, non
 ## fiable) ; tout ce que ce script reçoit d'un pair, battement ou RPC, remet son silence à zéro
@@ -70,8 +73,9 @@ signal inscrit(index: int, couleur: Color)
 ## revenu hors réseau quand le signal part.
 signal refuse(raison: String, version_hote: String)
 ## Chez le client : pas d'inscription (le transport n'a pas ouvert son canal, ou la poignée de main n'a
-## pas fini dans son délai). Le poste est déjà revenu hors réseau quand le signal part ; `raison_echec`
-## dit pourquoi.
+## pas fini dans son délai). Chez l'hôte : la partie n'a pas pu être créée (le transport échoue avant son
+## `pret` : la signalisation refuse ou ne répond pas). Le poste est déjà revenu hors réseau quand le
+## signal part ; `raison_echec` dit pourquoi.
 signal connexion_echouee()
 ## Chez le client : l'hôte a quitté la partie ou ne répond plus. Le poste est déjà revenu hors
 ## réseau quand le signal part ; `raison_perte` dit pourquoi (phase 18 : un joueur exclu par la barrière
@@ -82,7 +86,8 @@ signal connexion_echouee()
 signal hote_perdu()
 ## Sur chaque poste en session : la table du salon (`table_salon`), son niveau ou ses places ont
 ## changé ; chez l'hôte, aussi quand une place se réserve ou se libère (le bouton Démarrer en
-## dépend, `raison_attente`).
+## dépend, `raison_attente`), quand la partie a son code (`code_partie`) et quand plus personne ne peut
+## la rejoindre (`raison_salle_fermee`).
 signal salon_change()
 ## Sur chaque poste en session : l'hôte lance la manche. `fiches` : une fiche
 ## `{"id_reseau", "pseudo", "couleur"}` par joueur, dans l'ordre des index compactés (0..n-1), à
@@ -185,14 +190,22 @@ var niveau_manche := 0
 ## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE ou PERTE_EXCLU), posé juste
 ## avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
 var raison_perte := PERTE_HOTE
-## Chez un client : pourquoi la dernière connexion a échoué, posé juste avant `connexion_echouee` : la raison
-## du transport (Transport.ECHEC_*), ou vide (la poignée de main sans réponse dans son délai, un transport
-## fermé de lui-même) ; ce que montre l'écran En ligne (spec §9).
+## Chez un client, ou chez l'hôte dont la partie n'a pas pu être créée : pourquoi la dernière connexion a
+## échoué, posé juste avant `connexion_echouee` : la raison du transport (Transport.ECHEC_*), ou vide (la
+## poignée de main sans réponse dans son délai, un transport fermé de lui-même) ; ce que montre l'écran En
+## ligne (spec §9).
 var raison_echec := ""
+## Chez l'hôte : pourquoi plus personne ne peut rejoindre la partie (`Transport.salle_fermee` :
+## Transport.ECHEC_EXPIREE, ou une autre raison), vide tant que la salle accueille ; le salon le dit à la
+## place du code. La partie continue. Vide hors réseau et chez un client.
+var raison_salle_fermee := ""
 ## Vrai si ce poste a un transport pour jouer en réseau : ENet hors du Web (le desktop de développement, les
 ## tests) ; faux dans l'export Web jusqu'à `TransportWebRTC` (phase 4) : `creer_partie` et
 ## `rejoindre_partie` y renvoient ERR_UNAVAILABLE sans rien ouvrir. Modifiable par les tests.
 var transport_disponible := not OS.has_feature("web")
+## Si valide, fabrique le transport de chaque nouvelle session à la place de `_nouveau_transport`
+## (`func(port: int) -> Transport`) : les tests y mettent un transport simulé. Invalide dans le jeu.
+var fabrique_transport := Callable()
 ## Index et couleur de ce poste, attribués par l'hôte (-1 et transparente hors réseau).
 var index_local := -1
 var couleur_locale := Color.TRANSPARENT
@@ -221,6 +234,10 @@ var _partants: Array[Transport] = []
 ## Chez un client : vrai de `rejoindre()` à l'inscription ; une fermeture pendant ce temps est un échec
 ## de connexion, pas un hôte perdu.
 var _connexion_en_cours := false
+## Chez l'hôte : vrai de `heberger()` au `pret` du transport, quand il ne vient pas pendant l'appel
+## (WebRTC : la salle de la signalisation) ; un échec ou une fermeture pendant ce temps est un échec de
+## connexion : la partie n'a jamais existé.
+var _creation_en_cours := false
 ## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
 ## perte de l'hôte qui suit.
 var _exclu := false
@@ -269,6 +286,7 @@ func heberger(port := PORT) -> Error:
 	if erreur != OK:
 		return erreur
 	_transport = transport
+	_creation_en_cours = code_partie.is_empty()  # `pret` n'est pas parti pendant l'appel : il viendra
 	_activer_poignee_de_main()
 	multiplayer.multiplayer_peer = transport.pair()
 	index_local = premier_index_libre(inscrits, places)
@@ -301,6 +319,8 @@ func creer_partie(port := PORT) -> Error:
 ## (`transport_disponible` faux : ERR_UNAVAILABLE), ne change rien, pas même la session en cours. La
 ## réponse arrive par `inscrit`, `refuse` ou `connexion_echouee` (au plus tard après le délai du canal du
 ## transport, puis DELAI_CONNEXION). Renvoie l'erreur du transport si le client ne peut même pas être créé.
+## Le pair du transport est posé dès qu'il existe : au retour (ENet), ou à `Transport.pair_pret` (WebRTC,
+## à l'arrivée de son identifiant) ; d'ici là `en_ligne()` reste faux.
 func rejoindre_partie(code: String) -> Error:
 	if not transport_disponible:
 		return ERR_UNAVAILABLE
@@ -313,7 +333,8 @@ func rejoindre_partie(code: String) -> Error:
 	_transport = transport
 	_connexion_en_cours = true
 	_activer_poignee_de_main()
-	multiplayer.multiplayer_peer = transport.pair()
+	if transport.pair() != null:
+		multiplayer.multiplayer_peer = transport.pair()
 	return OK
 
 
@@ -343,8 +364,10 @@ func quitter() -> void:
 	silence = SILENCE_SESSION
 	_entendus.clear()
 	code_partie = ""
+	raison_salle_fermee = ""
 	_raison_transport = ""
 	_connexion_en_cours = false
+	_creation_en_cours = false
 	niveau_salon = 0
 	places_salon = EtatPartie.NB_JOUEURS_MAX
 	places_reservees = 0
@@ -357,8 +380,11 @@ func quitter() -> void:
 	_issue_decidee = false
 
 
-## Le transport d'une nouvelle session : ENet (le desktop, les tests ; WebRTC dans l'export Web, phase 4).
+## Le transport d'une nouvelle session : celui de `fabrique_transport` (les tests), sinon ENet (le
+## desktop, les tests ; WebRTC dans l'export Web, phase 4).
 func _nouveau_transport(port: int) -> Transport:
+	if fabrique_transport.is_valid():
+		return fabrique_transport.call(port)
 	return TransportENet.new(port, places)
 
 
@@ -367,7 +393,9 @@ func _nouveau_transport(port: int) -> Transport:
 func _brancher(transport: Transport) -> void:
 	transport.pret.connect(_sur_transport_pret.bind(_generation))
 	transport.connecte.connect(_sur_transport_connecte.bind(_generation))
+	transport.pair_pret.connect(_sur_transport_pair_pret.bind(_generation))
 	transport.echec.connect(_sur_transport_echec.bind(_generation))
+	transport.salle_fermee.connect(_sur_transport_salle_fermee.bind(_generation))
 
 
 ## En session, le transport, le battement et l'écoute des silences ; puis les départs en cours, oubliés
@@ -544,7 +572,9 @@ func _noter_scene_chargee(id: int) -> void:
 		scene_chargee.emit(id)
 
 
-## Vrai si ce poste est en réseau (hôte ou client), faux hors réseau (solo).
+## Vrai si ce poste est en réseau (hôte ou client), faux hors réseau (solo), et chez un client tant que
+## le pair de son transport n'existe pas (WebRTC : avant l'arrivée de son identifiant, `pair_pret`) :
+## l'écran En ligne ne s'y fie pas pendant une connexion.
 func en_ligne() -> bool:
 	return not (multiplayer.multiplayer_peer is OfflineMultiplayerPeer)
 
@@ -1078,11 +1108,11 @@ func _sur_connexion_echouee() -> void:
 
 
 ## L'hôte ferme la connexion, ou le transport de la session s'est fermé de lui-même (`_process`). Avant
-## l'inscription, c'est un échec de connexion, pas un hôte perdu : ce poste n'a jamais été dans la partie.
-## Chez l'hôte, la session est perdue : `hote_perdu` aussi, le chemin de N4 (son pair tombé en erreur).
-## Idempotent (`_decider`).
+## l'inscription, c'est un échec de connexion, pas un hôte perdu : ce poste n'a jamais été dans la partie ;
+## de même chez l'hôte avant le `pret` de son transport. Chez l'hôte, la session est perdue : `hote_perdu`
+## aussi, le chemin de N4 (son pair tombé en erreur). Idempotent (`_decider`).
 func _sur_hote_perdu() -> void:
-	_decider("connexion_echouee" if _connexion_en_cours else "hote_perdu")
+	_decider("connexion_echouee" if _connexion_en_cours or _creation_en_cours else "hote_perdu")
 
 
 ## La poignée de main d'un client n'a pas fini dans DELAI_CONNEXION, une fois le canal ouvert.
@@ -1091,10 +1121,12 @@ func _sur_delai_depasse() -> void:
 		_decider("connexion_echouee")
 
 
-## Chez l'hôte : la session du transport existe ; son code est celui de la partie.
+## Chez l'hôte : la session du transport existe ; son code est celui de la partie (le salon le relit).
 func _sur_transport_pret(code: String, generation: int) -> void:
 	if generation == _generation:
 		code_partie = code
+		_creation_en_cours = false
+		salon_change.emit()
 
 
 ## Chez un client : le canal vers l'hôte est ouvert ; la poignée de main (que `SceneMultiplayer` lance
@@ -1104,12 +1136,28 @@ func _sur_transport_connecte(generation: int) -> void:
 		_delai.start(DELAI_CONNEXION)
 
 
-## Chez un client : le canal vers l'hôte ne s'ouvrira pas : un échec de connexion, dont `raison`
-## (Transport.ECHEC_*) devient `raison_echec`.
+## Chez un client : le pair du transport existe désormais (WebRTC : son identifiant est arrivé) ;
+## `SceneMultiplayer` le prend, la connexion continue.
+func _sur_transport_pair_pret(generation: int) -> void:
+	if generation == _generation and _connexion_en_cours and _transport != null:
+		multiplayer.multiplayer_peer = _transport.pair()
+
+
+## Chez un client, le canal vers l'hôte ne s'ouvrira pas ; chez l'hôte, la partie ne sera pas créée (avant
+## le `pret` de son transport) : un échec de connexion, dont `raison` (Transport.ECHEC_*) devient
+## `raison_echec`. Ailleurs (une partie créée, un client inscrit), sans effet.
 func _sur_transport_echec(raison: String, generation: int) -> void:
-	if generation == _generation and _connexion_en_cours and not _issue_decidee:
+	if generation == _generation and (_connexion_en_cours or _creation_en_cours) and not _issue_decidee:
 		_raison_transport = raison
 		_decider("connexion_echouee")
+
+
+## Chez l'hôte : plus personne ne peut rejoindre la partie (la salle a expiré, ou la signalisation s'est
+## fermée) ; la partie continue, le salon le dit (`raison_salle_fermee`).
+func _sur_transport_salle_fermee(raison: String, generation: int) -> void:
+	if generation == _generation and multiplayer.is_server() and en_ligne():
+		raison_salle_fermee = raison
+		salon_change.emit()
 
 
 ## Décide l'issue de la connexion (signal `nom`), une seule fois. Différé : on ne change pas de

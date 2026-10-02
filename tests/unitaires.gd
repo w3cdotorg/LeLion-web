@@ -53,6 +53,7 @@ func _run() -> void:
 	_tester_transport_enet()
 	await _tester_battement()
 	await _tester_parties_en_ligne()
+	await _tester_transport_tardif()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2630,6 +2631,84 @@ func _tester_parties_en_ligne() -> void:
 	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
 
 
+## Phase 4 du jeu en ligne : un transport dont la partie et le pair arrivent après coup, comme
+## `TransportWebRTC` (simulé : `TransportTardif`) : la création qui attend le `pret` du transport (et son
+## échec, routé comme un échec de connexion), la salle fermée après coup (la partie continue), le pair d'un
+## client posé à `pair_pret`.
+func _tester_transport_tardif() -> void:
+	print("-- Transport tardif (phase 4)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var transports: Array[TransportTardif] = []
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		return transports[-1]
+	var changes := [0]
+	var sur_change := func() -> void: changes[0] += 1
+	reseau.salon_change.connect(sur_change)
+	var echecs: Array[String] = []
+	var sur_echec := func() -> void: echecs.append(reseau.raison_echec)
+	reseau.connexion_echouee.connect(sur_echec)
+	var pertes := [0]
+	var sur_perte := func() -> void: pertes[0] += 1
+	reseau.hote_perdu.connect(sur_perte)
+
+	# L'hôte : la partie a son code au `pret` du transport, qui ne vient pas pendant l'appel.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne() and root.multiplayer.is_server() and reseau.code_partie.is_empty()
+		and reseau.inscrits.size() == 1,
+		"créer une partie : ce poste héberge et s'inscrit, sans code tant que le transport ne l'a pas donné")
+	changes[0] = 0
+	transports[-1].pret.emit("K7Q2XM")
+	_check(reseau.code_partie == "K7Q2XM" and changes[0] == 1,
+		"le pret du transport donne son code à la partie, que le salon relit (un salon_change)")
+	transports[-1].echec.emit(Transport.ECHEC_QUOTA)
+	await process_frame
+	await process_frame
+	_check(echecs.is_empty() and reseau.en_ligne(), "un échec du transport après son pret ne défait pas une partie créée")
+	transports[-1].salle_fermee.emit(Transport.ECHEC_EXPIREE)
+	_check(reseau.raison_salle_fermee == Transport.ECHEC_EXPIREE and changes[0] == 2 and reseau.en_ligne() and reseau.code_partie == "K7Q2XM",
+		"la salle fermée après coup : la partie continue, le salon le sait (raison_salle_fermee, un salon_change)")
+	reseau.quitter()
+	_check(reseau.raison_salle_fermee.is_empty() and transports[-1].quitte, "quitter oublie la salle fermée et quitte le transport")
+
+	# L'hôte : la création échoue avant le pret.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne(), "(pré-condition) une nouvelle partie en création")
+	transports[-1].echec.emit(Transport.ECHEC_QUOTA)
+	_check(await _attendre(func() -> bool: return echecs.size() == 1, 1.0) and echecs == [Transport.ECHEC_QUOTA] and not reseau.en_ligne()
+		and pertes[0] == 0,
+		"un échec du transport avant son pret : connexion échouée chez l'hôte, sa raison dans raison_echec, hors réseau (%s)" % [echecs])
+	_check(reseau.creer_partie() == OK, "(pré-condition) une autre partie en création")
+	transports[-1].perdu = true  # le transport se ferme de lui-même, sans raison
+	_check(await _attendre(func() -> bool: return echecs.size() == 2, 1.0) and echecs[1].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
+		"un transport fermé de lui-même avant son pret : connexion échouée aussi, pas un hôte perdu (%s)" % [echecs])
+	transports[-1].salle_fermee.emit(Transport.ECHEC_EXPIREE)
+	_check(reseau.raison_salle_fermee.is_empty(), "le signal d'un transport quitté ne fait plus rien")
+
+	# Le client : son pair n'existe qu'à pair_pret (son identifiant vient de la signalisation).
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK and not reseau.en_ligne() and reseau._connexion_en_cours,
+		"rejoindre : en connexion, mais pas en ligne tant que le pair du transport n'existe pas")
+	transports[-1].donner_identifiant(123456789)
+	_check(reseau.en_ligne() and root.multiplayer.multiplayer_peer == transports[-1].pair()
+		and root.multiplayer.get_unique_id() == 123456789 and not root.multiplayer.is_server(),
+		"pair_pret : SceneMultiplayer prend le pair du transport, avec son identifiant (%d)" % root.multiplayer.get_unique_id())
+	transports[-1].echec.emit(Transport.ECHEC_DELAI)
+	_check(await _attendre(func() -> bool: return echecs.size() == 3, 1.0) and echecs[2] == Transport.ECHEC_DELAI and not reseau.en_ligne(),
+		"le canal ne s'ouvre pas : connexion échouée, raison delai (%s)" % [echecs])
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) une nouvelle connexion")
+	reseau.quitter()
+	transports[-1].donner_identifiant(42)
+	_check(not reseau.en_ligne(), "le pair_pret d'un transport quitté n'est pas posé")
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) encore une connexion")
+	transports[-1].perdu = true
+	_check(await _attendre(func() -> bool: return echecs.size() == 4, 1.0) and echecs[3].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
+		"un client dont le transport se ferme avant son pair : connexion échouée, pas un hôte perdu (%s)" % [echecs])
+
+	reseau.salon_change.disconnect(sur_change)
+	reseau.connexion_echouee.disconnect(sur_echec)
+	reseau.hote_perdu.disconnect(sur_perte)
+	reseau.fabrique_transport = Callable()
+	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
+
+
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
 ## valeur.
 func _attendre(condition: Callable, delai: float) -> bool:
@@ -2712,3 +2791,45 @@ class TransportPerdu extends Transport:
 
 	func servir() -> bool:
 		return reel.servir() and not perdu
+
+
+## Un transport simulé (`_tester_transport_tardif`) : `heberger()` et `rejoindre()` réussissent sans
+## rien ouvrir ni rien dire ; le test émet lui-même `pret`, `echec` et `salle_fermee`, comme le ferait
+## `TransportWebRTC`. Son pair est un `WebRTCMultiplayerPeer` (il existe sur le desktop, sans connexion) :
+## celui de l'hôte dès `heberger()`, celui d'un client à `donner_identifiant` (puis `pair_pret`).
+## `servir()` faux dès que `perdu` est vrai (fermé de lui-même), ou une fois quitté.
+class TransportTardif extends Transport:
+	var perdu := false
+	var quitte := false
+	var _pair: WebRTCMultiplayerPeer
+
+	func heberger() -> Error:
+		_pair = WebRTCMultiplayerPeer.new()
+		return _pair.create_server()
+
+	func rejoindre(_code: String) -> Error:
+		return OK
+
+	## Chez un client : son identifiant arrive (`bienvenue`) ; son pair naît, puis `pair_pret`.
+	func donner_identifiant(id: int) -> void:
+		_pair = WebRTCMultiplayerPeer.new()
+		_pair.create_client(id)
+		pair_pret.emit()
+
+	func quitter() -> void:
+		quitte = true
+		clore()
+
+	func clore() -> void:
+		if _pair != null:
+			_pair.close()
+			_pair = null
+
+	func pair() -> MultiplayerPeer:
+		return _pair
+
+	func liberer(_id: int) -> void:
+		pass
+
+	func servir() -> bool:
+		return not perdu and not quitte
