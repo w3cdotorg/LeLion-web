@@ -36,7 +36,9 @@ extends Transport
 ##
 ## Canaux (spec §5) : les trois par défaut de `WebRTCMultiplayerPeer` (le fiable porte la poignée de
 ## main et la table du salon ; les non fiables, `unreliable_lifetime` DUREE_NON_FIABLE), plus un canal
-## fiable ordonné, le canal 1 de `SceneMultiplayer` (`Reseau.CANAL_ORDONNE`, `Manche.CANAL_PEINTURE`).
+## fiable ordonné, le canal 1 de `SceneMultiplayer` (`Reseau.CANAL_ORDONNE`, `Manche.CANAL_PEINTURE`). Les
+## canaux non fiables ne le sont dans le navigateur que par CORRECTIF_CANAUX (posé à la création, une fois par
+## page) : un paquet perdu s'y renvoie DUREE_NON_FIABLE ms au plus, puis il est abandonné.
 ## `?relais=1` dans l'adresse de la page : le relais TURN seulement (`iceTransportPolicy: "relay"`,
 ## spec §10, diagnostic de l'essai réel).
 
@@ -71,6 +73,13 @@ const PERIODE_PING := 30.0
 const PING := '{"t":"ping"}'
 ## Durée de vie d'un paquet non fiable (`unreliable_lifetime`), en ms (spec §5 : environ 100 ms).
 const DUREE_NON_FIABLE := 100
+## Le correctif des canaux non fiables de l'export Web (Godot 4.7.2, phase 7) : `WebRTCMultiplayerPeer.add_peer`
+## crée ses deux canaux non fiables avec l'option `maxPacketLifetime`, que les navigateurs ignorent (le nom
+## du standard, dans `RTCDataChannelInit`, est `maxPacketLifeTime` : vérifié sous Chromium et Firefox, où ces
+## canaux restaient fiables, chaque paquet perdu renvoyé jusqu'à son arrivée). `createDataChannel` lit
+## désormais aussi l'option sous le nom de Godot ; posé une fois par page, avant toute connexion, sans effet
+## là où WebRTC manque.
+const CORRECTIF_CANAUX := "(() => { if (typeof RTCPeerConnection === 'undefined') return; const p = RTCPeerConnection.prototype; if (p.lelionCanaux) return; const creer = p.createDataChannel; p.createDataChannel = function (nom, options) { if (options && options.maxPacketLifetime !== undefined && options.maxPacketLifeTime === undefined) { options = Object.assign({}, options, { maxPacketLifeTime: options.maxPacketLifetime }); delete options.maxPacketLifetime; } return creer.call(this, nom, options); }; p.lelionCanaux = true; })();"
 ## Les canaux en plus des trois par défaut : le canal 1 de `SceneMultiplayer`, fiable et ordonné.
 const CANAUX := [MultiplayerPeer.TRANSFER_MODE_RELIABLE]
 ## Délai laissé à un départ volontaire pour vider ses canaux (l'adieu de `Reseau`), en ms.
@@ -138,6 +147,7 @@ var _fin_depart := -1
 
 func _init() -> void:
 	if OS.has_feature("web"):
+		JavaScriptBridge.eval(CORRECTIF_CANAUX, true)
 		relais = lire_relais(str(JavaScriptBridge.eval("window.location.search", true)))
 
 

@@ -3083,6 +3083,14 @@ func _tester_transport_webrtc() -> void:
 	print("-- Transport WebRTC (phase 4, sans navigateur)")
 	var pilote: Node = root.get_node("PiloteWeb")  # autoload : jamais nommé
 	_check(not pilote.actif and not pilote.is_processing(), "le pilote du test de bout en bout est inerte hors de l'export Web pilote")
+	# Phase 7 (spec §5) : les canaux non fiables du navigateur gardent un paquet DUREE_NON_FIABLE ms au plus. Le
+	# navigateur ignore l'option `maxPacketLifetime` que leur donne Godot : le correctif la lui passe sous son nom
+	# du standard, une fois par page, à la création du transport (vérifié dans le navigateur par le bout en bout)
+	var correctif := TransportWebRTC.CORRECTIF_CANAUX
+	_check(TransportWebRTC.DUREE_NON_FIABLE == 100 and correctif.contains("maxPacketLifeTime: options.maxPacketLifetime")
+		and correctif.contains("delete options.maxPacketLifetime") and correctif.contains("if (p.lelionCanaux) return")
+		and FileAccess.get_file_as_string("res://Scripts/TransportWebRTC.gd").contains("		JavaScriptBridge.eval(CORRECTIF_CANAUX, true)"),
+		"les canaux non fiables du navigateur : un paquet perdu renvoyé 100 ms au plus (le correctif de l'option maxPacketLifetime de Godot, posé une fois par page)")
 	# Vague finale (T4) : une commande mal formée (nom, nombre ou types d'arguments) est rejetée, retirée de
 	# la file, sans bloquer celles qui suivent ; une commande bien formée qui ne peut pas encore s'exécuter
 	# (« pret » hors du salon) reste en tête.
