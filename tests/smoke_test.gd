@@ -2010,6 +2010,23 @@ func _tester_salon(params: Node) -> void:
 		and reseau.table_salon.map(func(f: Dictionary) -> int: return f.id) == [1, 5],
 		"une place seulement réservée n'a pas de carte (M4) ; un joueur arrivé a la sienne")
 	_check(reseau.places_reservees == 1, "phase 18 : la table part avec le nombre de places seulement réservées (%d)" % reseau.places_reservees)
+	# Phase 7 du jeu en ligne (spec §8.2) : chez l'hôte, la croix d'exclusion en haut à droite de la carte de
+	# chaque autre joueur arrivé, à la souris (sans focus), sans couvrir le lion ; elle exclut le joueur de sa
+	# carte (`exclure`, par son index)
+	await process_frame  # la croix, montrée, prend sa place à l'image suivante
+	var croix_bob: Button = salon.cartes[1].croix
+	var cadre_bob: Rect2 = salon.cartes[1].cadre.get_global_rect()
+	var rect_croix := croix_bob.get_global_rect()
+	_check(croix_bob.visible and not c0.croix.visible and salon.cartes.slice(2).all(func(c: Dictionary) -> bool: return not c.croix.visible)
+		and cadre_bob.encloses(rect_croix) and rect_croix.end.x >= cadre_bob.end.x - 20 and rect_croix.position.y <= cadre_bob.position.y + 20
+		and rect_croix.size.x >= 64 and rect_croix.size.y >= 64 and not rect_croix.intersects(salon.cartes[1].lion.get_global_rect())
+		and croix_bob.focus_mode == Control.FOCUS_NONE and croix_bob.tooltip_text == "Exclure ce joueur",
+		"chez l'hôte, la carte de Bob a la croix d'exclusion en haut à droite (%s dans %s), sans couvrir son lion ; ni la sienne ni les places libres"
+			% [rect_croix, cadre_bob])
+	var liens := croix_bob.pressed.get_connections()
+	_check(liens.size() == 1 and (liens[0].callable as Callable).get_method() == &"exclure" and (liens[0].callable as Callable).get_bound_arguments() == [1]
+		and not salon.exclure(0) and not salon.exclure(3) and not salon.exclure(1),
+		"la croix de Bob exclut le joueur de la carte 1 ; ni l'hôte, ni une place libre (ni ici Bob, simulé : pas un vrai pair) ne s'excluent")
 
 	# Couleurs : la voisine libre (celle d'une place réservée est prise) ; une seule par appui
 	salon.changer_couleur(1)
@@ -2073,7 +2090,8 @@ func _tester_salon(params: Node) -> void:
 	params.definir_langue("en")
 	await process_frame
 	_check(salon.titre_niveau.text == "Level: Village" and salon.cartes[1].pseudo.text == "Free slot" and c0.etat.text == "READY!"
-		and salon.aide.text.begins_with("Left/Right"), "changer de langue retraduit le salon (%s)" % salon.titre_niveau.text)
+		and salon.aide.text.begins_with("Left/Right") and salon.cartes[1].croix.tooltip_text == "Remove this player"
+		and salon.consigne.text == "Keep this tab in front during the game.", "changer de langue retraduit le salon (%s)" % salon.titre_niveau.text)
 	params.definir_langue("fr")
 	salon.retour(false)
 	_check(not reseau.en_ligne() and reseau.table_salon.is_empty(), "Retour quitte le réseau : les clients voient partir l'hôte")
@@ -2087,8 +2105,9 @@ func _tester_salon(params: Node) -> void:
 	var salon_client: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
-	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible,
-		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton")
+	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible
+		and not salon_client.consigne.visible,
+		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton, pas la consigne de l'onglet")
 	salon_client.changer_niveau(1)
 	salon_client.demarrer()
 	_check(reseau.niveau_salon == 0 and not reseau.manche_en_cours, "un client ne change pas le niveau et ne démarre pas la partie")
@@ -2096,6 +2115,7 @@ func _tester_salon(params: Node) -> void:
 	reseau.table_salon.assign([{"id": 1, "index": 0, "couleur": palette[0], "pseudo": "Hôte", "pret": true},
 		{"id": id_client, "index": 1, "couleur": palette[1], "pseudo": "Moi", "pret": false}])
 	reseau.salon_change.emit()
+	_check(salon_client.cartes.all(func(c: Dictionary) -> bool: return not c.croix.visible), "un client n'a aucune croix d'exclusion")
 	var attente_client: String = salon_client.etat.text
 	reseau.table_salon[1].pret = true
 	reseau.places_reservees = 1  # comme la table de l'hôte pendant qu'un joueur arrive
@@ -2301,7 +2321,8 @@ func _tester_tactile_mobile(params: Node) -> void:
 		and tactile.bouton_gauche.action == "deplacer_gauche" and tactile.bouton_droite.action == "deplacer_droite" and tactile.bouton_vomir.action == "vomir",
 		"au salon, un mobile a les flèches de la couleur et PRÊT, sans stick ni pause")
 	_check(not salon.bouton_plein_ecran.visible and salon.bouton_retour.size.y >= cible and salon.etat.get_theme_font_size("font_size") == 48
-		and salon.aide.get_theme_font_size("font_size") == 40, "un mobile n'a pas Plein écran ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
+		and salon.aide.get_theme_font_size("font_size") == 40 and not salon.consigne.visible,
+		"un mobile n'a pas Plein écran ni la consigne de l'onglet de l'hôte ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
 	var centre := func(bouton: TouchScreenButton) -> Vector2: return bouton.position + bouton.texture_normal.get_size() / 2.0
 	await _toucher(centre.call(tactile.bouton_droite), true)
 	await _toucher(centre.call(tactile.bouton_droite), true, 1)  # un deuxième doigt sur la flèche déjà tenue
@@ -2362,6 +2383,14 @@ func _tester_tactile_mobile(params: Node) -> void:
 	_check(not bureau.controles_tactiles.visible and bureau.bouton_plein_ecran.visible and plein.end.x <= 2000 - 20 and plein.position.y <= 30
 		and bureau.bouton_plein_ecran.focus_mode == Control.FOCUS_NONE and tr(bureau.bouton_plein_ecran.text) == "Plein écran",
 		"sur ordinateur : pas de tactile, « Plein écran » en haut à droite, sans focus")
+	# Phase 7 (spec §5) : la consigne de l'hôte, en haut, entre Retour et Plein écran, au-dessus du titre
+	var consigne: Rect2 = _rect_du_texte(bureau.consigne)
+	var titre_salon: Rect2 = _rect_du_texte(bureau.get_node("Centre/Colonne/Titre"))
+	_check(bureau.consigne.visible and bureau.consigne.text == "Garde cet onglet au premier plan pendant la partie."
+		and consigne.position.x >= bureau.bouton_retour.get_global_rect().end.x + 20 and consigne.end.x <= plein.position.x - 20
+		and consigne.position.y >= 20 and consigne.end.y <= titre_salon.position.y + 20,
+		"chez l'hôte, sur ordinateur : « Garde cet onglet au premier plan pendant la partie. » en haut (%s), entre Retour et Plein écran, au-dessus du titre (%s)"
+			% [consigne, titre_salon])
 	bureau.bouton_plein_ecran.pressed.emit()
 	_check(params.plein_ecran, "Plein écran, cliqué : le plein écran")
 	params.definir_plein_ecran(false)

@@ -13,7 +13,15 @@ extends Control
 ## (« K7Q-2XM ») et « Copier le lien », qui met le lien d'invitation dans le presse-papiers (spec §4.4) ;
 ## sur le desktop de développement, l'adresse `ip:port` de l'hôte ENet, sans lien. Une salle qui
 ## n'accueille plus personne (`Reseau.raison_salle_fermee`) : son message à la place du code, sans lien
-## (spec §4.3 : « Salle expirée : crée une nouvelle partie pour inviter »).
+## (spec §4.3 : « Salle expirée : crée une nouvelle partie pour inviter »). En haut, la consigne de l'hôte
+## (spec §5) : « Garde cet onglet au premier plan pendant la partie. » (le navigateur fige un onglet caché,
+## et le jeu de tous avec lui).
+##
+## Exclusion (phase 7 du jeu en ligne, spec §8.2) : chez l'hôte, la carte de chaque autre joueur arrivé a
+## une croix, en haut à droite ; cliquée (`exclure`), elle exclut ce joueur (`Reseau.exclure_du_salon`), qui
+## lit « L'hôte t'a exclu de la partie. » ; sa carte se libère à son départ. La croix se clique à la souris
+## (l'hôte est un ordinateur) ou au doigt ; ni le clavier ni la manette ne l'atteignent : le salon n'a pas
+## de curseur de carte.
 ##
 ## Retour (ou Échap, B à la manette) quitte le réseau et ramène à l'écran En ligne ; un hôte perdu y
 ## ramène avec « L'hôte a quitté la partie ». Aucun contrôle ne prend le focus (les boutons se
@@ -34,6 +42,10 @@ const SHADER_TEINTE := preload("res://Shaders/Lion.gdshader")
 ## (« WWWWWWWWWWWW ») tient dans la carte à POLICE_PSEUDO px (vérifié par le smoke test).
 const TAILLE_CARTE := Vector2(310, 470)
 const POLICE_PSEUDO := 24
+## La croix d'exclusion, en haut à droite d'une carte : 64 px de l'écran (45 px CSS dans la fenêtre de
+## 1400 px d'un ordinateur), la police du jeu (le « × » y est).
+const TAILLE_CROIX := Vector2(64, 64)
+const POLICE_CROIX := 40
 const COULEUR_BADGE := Color(1, 0.85, 0.2)
 const COULEUR_PRET := Color(0.55, 1.0, 0.55)
 const COULEUR_ATTENTE := Color(1, 1, 1, 0.55)
@@ -44,7 +56,8 @@ const DUREE_LIEN_COPIE := 2.0
 const ACTIONS: Array[StringName] = [&"deplacer_gauche", &"deplacer_droite", &"deplacer_haut", &"deplacer_bas",
 	&"vomir", &"demarrer"]
 ## Une carte par place, dans l'ordre des index : {"cadre": PanelContainer, "style": StyleBoxFlat,
-## "badge": Label, "lion": TextureRect, "teinte": ShaderMaterial, "pseudo": Label, "etat": Label}.
+## "badge": Label, "lion": TextureRect, "teinte": ShaderMaterial, "pseudo": Label, "etat": Label,
+## "croix": Button}.
 var cartes: Array[Dictionary] = []
 
 @onready var titre_niveau: Label = $Centre/Colonne/Niveau
@@ -57,6 +70,7 @@ var cartes: Array[Dictionary] = []
 @onready var bouton_demarrer: Button = $Centre/Colonne/Demarrer
 @onready var bouton_retour: Button = $BoutonRetour
 @onready var bouton_plein_ecran: Button = $BoutonPleinEcran
+@onready var consigne: Label = $Consigne
 @onready var controles_tactiles: CanvasLayer = $ControlesTactiles
 
 ## Vrai une fois la manche lancée : plus rien ne se décide ici pendant le changement de scène.
@@ -84,7 +98,7 @@ func _ready() -> void:
 		etat.add_theme_font_size_override("font_size", 48)
 		aide.add_theme_font_size_override("font_size", 40)
 	for i in range(EtatPartie.NB_JOUEURS_MAX):
-		cartes.append(_creer_carte())
+		cartes.append(_creer_carte(i))
 	Reseau.salon_change.connect(_sur_salon_change)
 	Reseau.manche_lancee.connect(_sur_manche_lancee)
 	Reseau.hote_perdu.connect(_sur_hote_perdu)
@@ -185,6 +199,17 @@ func basculer_plein_ecran() -> void:
 	Parametres.basculer_plein_ecran()
 
 
+## L'hôte : exclut le joueur de la carte d'index `index` (sa croix) ; vrai si l'exclusion part
+## (`Reseau.exclure_du_salon` : jamais l'hôte, ni une place libre, ni pendant le lancement).
+func exclure(index: int) -> bool:
+	if _lance:
+		return false
+	for fiche in Reseau.table_salon:
+		if fiche.index == index:
+			return Reseau.exclure_du_salon(fiche.id)
+	return false
+
+
 func _remettre_bouton_copier() -> void:
 	bouton_copier.text = "SALON_COPIER_LIEN"
 
@@ -244,6 +269,8 @@ func _sur_hote_perdu() -> void:
 
 
 func _sur_langue_changee(_langue: String) -> void:
+	for carte in cartes:
+		(carte.croix as Button).tooltip_text = tr("SALON_EXCLURE")
 	_afficher()
 
 
@@ -262,6 +289,8 @@ func _afficher() -> void:
 		cartes[i].cadre.visible = i < Reseau.places_salon
 		_afficher_carte(cartes[i], par_index.get(i, {}), id_local)
 	var hote := multiplayer.is_server()
+	consigne.visible = hote and not Parametres.mobile
+	consigne.text = tr("SALON_PREMIER_PLAN")
 	titre_niveau.text = tr("SALON_NIVEAU") % tr(GameState.NIVEAUX[Reseau.niveau_salon].nom)
 	aide.text = tr("SALON_AIDE_HOTE" if hote else ("SALON_AIDE_TACTILE" if Parametres.mobile else "SALON_AIDE"))
 	rangee_invitation.visible = hote and not Reseau.code_partie.is_empty()
@@ -277,13 +306,16 @@ func _afficher() -> void:
 
 ## Une place libre : silhouette sombre, sans couleur ; une place prise : le lion teinté de la
 ## couleur du joueur (le même shader qu'en jeu), son pseudo dans sa couleur, Prêt ou non, le
-## contour à sa couleur (plus épais pour ce poste).
+## contour à sa couleur (plus épais pour ce poste) ; chez l'hôte, la croix d'exclusion sur la carte de
+## chaque autre joueur.
 func _afficher_carte(carte: Dictionary, fiche: Dictionary, id_local: int) -> void:
 	var style: StyleBoxFlat = carte.style
 	var lion: TextureRect = carte.lion
 	var pseudo: Label = carte.pseudo
 	var etat_carte: Label = carte.etat
 	var badge: Label = carte.badge
+	var croix: Button = carte.croix
+	croix.visible = multiplayer.is_server() and not _lance and not fiche.is_empty() and fiche.id != id_local
 	if fiche.is_empty():
 		badge.text = " "
 		lion.material = null
@@ -326,7 +358,8 @@ func _afficher_etat() -> void:
 		etat.text = tr("SALON_PRET_A_DEMARRER" if hote else "SALON_ATTENTE_HOTE")
 
 
-func _creer_carte() -> Dictionary:
+## La carte de la place d'index `index` (sa croix exclut le joueur qui l'occupe : `exclure`).
+func _creer_carte(index: int) -> Dictionary:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0.3)
 	style.set_corner_radius_all(16)
@@ -350,8 +383,23 @@ func _creer_carte() -> Dictionary:
 	var etat_carte := _etiquette(28, COULEUR_ATTENTE)
 	for noeud: Control in [badge, lion, pseudo, etat_carte]:
 		colonne.add_child(noeud)
+	# Par-dessus la colonne, en haut à droite (le conteneur respecte ses drapeaux de taille) : au-dessus du
+	# lion, à côté des badges (un autre joueur n'en a pas chez l'hôte)
+	var croix := Button.new()
+	croix.text = "×"
+	croix.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	croix.tooltip_text = tr("SALON_EXCLURE")
+	croix.custom_minimum_size = TAILLE_CROIX
+	croix.size_flags_horizontal = Control.SIZE_SHRINK_END
+	croix.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	croix.focus_mode = Control.FOCUS_NONE
+	croix.add_theme_font_size_override("font_size", POLICE_CROIX)
+	croix.visible = false
+	croix.pressed.connect(exclure.bind(index))
+	cadre.add_child(croix)
 	rangee_cartes.add_child(cadre)
-	return {"cadre": cadre, "style": style, "badge": badge, "lion": lion, "teinte": teinte, "pseudo": pseudo, "etat": etat_carte}
+	return {"cadre": cadre, "style": style, "badge": badge, "lion": lion, "teinte": teinte, "pseudo": pseudo, "etat": etat_carte,
+		"croix": croix}
 
 
 ## Une étiquette centrée, jamais traduite d'elle-même (les textes sont traduits ici, et un pseudo
