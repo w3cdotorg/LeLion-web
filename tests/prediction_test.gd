@@ -15,6 +15,9 @@ extends SceneTree
 ## celle que le client avait prédite pour elle), les recalages, les à-coups de l'affichage, la
 ## convergence après l'arrêt des commandes, la régularité d'un lion distant ; vérifie qu'aucune
 ## commande n'est appliquée deux fois. Chaque scénario écrit sa ligne « MESURE ».
+## Deux profils de lien (spec §5 du jeu en ligne) : le Wi-Fi du LAN (80 ms, 40 ms, 5 %), pour tous les
+## scénarios, et le mobile en 4G (150 ms, 60 ms, 8 %, phase 6), pour le parcours, l'étourdissement et le
+## choc : `InterpolationLion.RETARD` et les seuils de `PredictionLocale` ne se règlent que sur ces mesures.
 ## Compilé avant les autoloads : ne nomme ni `GameState`, ni `Lion`, ni `PredictionLocale`.
 
 const TICK_MS := 1000.0 / 60.0
@@ -25,6 +28,15 @@ const ECART_MAX := 4.0
 const TICKS_CONVERGENCE := 9
 ## Au-delà, un saut de l'affichage d'un tick à l'autre (pleine vitesse, et moitié en plus) est un à-coup.
 const A_COUP := PAS * 1.5
+## Les profils de lien : latence (aller-retour, ms), gigue (ms), pertes (%), et ce que coûte au plus ce que
+## le client ne peut pas prévoir : l'erreur de prédiction d'un étourdissement décidé par l'hôte (le lion
+## court encore un aller-retour avant de l'apprendre : 30 px sous le Wi-Fi ; 60 px sous le mobile, mesuré
+## 41,5 px, pour 63 px d'un aller-retour et d'une demi-gigue à pleine vitesse) et celle d'un choc contre un
+## lion distant (ECART_MAX sous le Wi-Fi ; un à-coup, A_COUP, sous le mobile : mesuré 5,83 px, un pas).
+const WIFI := {"nom": "80 ms, 40 ms de gigue, 5 % de pertes", "latence": 80.0, "gigue": 40.0, "pertes": 5.0,
+	"erreur_etourdi": 30.0, "erreur_choc": ECART_MAX}
+const MOBILE := {"nom": "mobile : 150 ms, 60 ms de gigue, 8 % de pertes", "latence": 150.0, "gigue": 60.0, "pertes": 8.0,
+	"erreur_etourdi": 60.0, "erreur_choc": A_COUP}
 ## Le programme du joueur du client : `[ticks, direction]`, joué au clavier ; il passe par un bord
 ## (en haut, sous son pseudo).
 const PROGRAMME: Array = [[30, Vector2.ZERO], [90, Vector2.RIGHT], [40, Vector2(1, 1)], [60, Vector2.LEFT],
@@ -121,9 +133,12 @@ func _run() -> void:
 	print("== banc de la prédiction LeLion ==")
 	GS = root.get_node("GameState")
 	await _scenario_parcours("lien parfait", 0.0, 0.0, 0.0)
-	await _scenario_parcours("80 ms, 40 ms de gigue, 5 % de pertes", 80.0, 40.0, 5.0)
-	await _scenario_etourdissement()
-	await _scenario_choc()
+	await _scenario_parcours(WIFI.nom, WIFI.latence, WIFI.gigue, WIFI.pertes)
+	await _scenario_parcours(MOBILE.nom, MOBILE.latence, MOBILE.gigue, MOBILE.pertes)
+	await _scenario_etourdissement(WIFI)
+	await _scenario_etourdissement(MOBILE)
+	await _scenario_choc(WIFI)
+	await _scenario_choc(MOBILE)
 	await _scenario_choc_pendant_correction()
 	await _scenario_ecarts()
 	await _scenario_hote_fige()
@@ -384,9 +399,9 @@ func _scenario_parcours(titre: String, latence: float, gigue: float, pertes: flo
 ## Un ennemi étourdit le lion du client chez l'hôte pendant qu'il court : la prédiction suit l'hôte
 ## (commandes ignorées, même règle que l'hôte), sans appliquer le recul deux fois, puis repart dès la
 ## fin de l'étourdissement reçue.
-func _scenario_etourdissement() -> void:
-	print("-- Étourdissement décidé par l'hôte, sous 80 ms, 40 ms, 5 %")
-	_preparer(Vector2(300, 150), Vector2(400, 500), 80.0, 40.0, 5.0, 1700)
+func _scenario_etourdissement(profil: Dictionary) -> void:
+	print("-- Étourdissement décidé par l'hôte, sous %s" % profil.nom)
+	_preparer(Vector2(300, 150), Vector2(400, 500), profil.latence, profil.gigue, profil.pertes, 1700)
 	_presser(Vector2.RIGHT)
 	var j_hote: Joueur = GS.joueurs[1]
 	var j_client: Joueur = _joueurs_client[1]
@@ -422,24 +437,25 @@ func _scenario_etourdissement() -> void:
 	# l'étourdissement arrive ici avec un aller simple de retard, et l'hôte applique déjà les commandes
 	# que ce poste croit encore ignorées (un écart attendu, qu'absorbe le recalage).
 	var pendant: float = p.erreur_max(numero_suivi, numero_fin - 12)
-	print("MESURE étourdissement : reçu au tick %d, fini au tick %d, recul de l'hôte %.0f px/s ; le lion du client recule de %.1f px pendant l'étourdissement ; erreur max %.2f px, %.2f px pendant l'étourdissement ; recalages %d ; à-coups %d"
-		% [tick_etourdi, tick_fin, recul_hote, bouge_etourdi, p.erreur_max(), pendant, p.recalages, _a_coups])
+	print("MESURE étourdissement (%s) : reçu au tick %d, fini au tick %d, recul de l'hôte %.0f px/s ; le lion du client recule de %.1f px pendant l'étourdissement ; erreur max %.2f px, %.2f px pendant l'étourdissement ; recalages %d ; à-coups %d"
+		% [profil.nom, tick_etourdi, tick_fin, recul_hote, bouge_etourdi, p.erreur_max(), pendant, p.recalages, _a_coups])
 	_check(tick_etourdi > 60 and tick_fin > tick_etourdi, "(pré-condition) l'étourdissement de l'hôte arrive au client, puis sa fin")
 	# Le recul de l'hôte (700 px/s, amorti en 0,19 s) arrive dans ses états ; rejoué une seconde fois
 	# par le client, ou ses commandes suivies malgré l'étourdissement, le lion prédit partirait devant.
-	_check(numero_suivi > 0 and pendant >= 0.0 and pendant < ECART_MAX and p.recalages == 0 and p.erreur_max() < 30.0,
-		"étourdi, le lion du client suit l'hôte : un seul recul, ses commandes ignorées (erreur au plus %.2f px pendant l'étourdissement, %.2f px en tout), sans recalage" % [pendant, p.erreur_max()])
-	_check(repart >= 0 and repart <= 2, "la fin de l'étourdissement reçue, le lion repart aussitôt à ses commandes (%d tick(s))" % repart)
-	await _verifier_convergence("étourdissement", arret, 90)
-	_verifier_commandes("étourdissement", h1.commandes.numero_applique / 100)
+	_check(numero_suivi > 0 and pendant >= 0.0 and pendant < ECART_MAX and p.recalages == 0 and p.erreur_max() < profil.erreur_etourdi,
+		"(%s) étourdi, le lion du client suit l'hôte : un seul recul, ses commandes ignorées (erreur au plus %.2f px pendant l'étourdissement, %.2f px en tout, %.0f permis), sans recalage"
+		% [profil.nom, pendant, p.erreur_max(), profil.erreur_etourdi])
+	_check(repart >= 0 and repart <= 2, "(%s) la fin de l'étourdissement reçue, le lion repart aussitôt à ses commandes (%d tick(s))" % [profil.nom, repart])
+	await _verifier_convergence("étourdissement, %s" % profil.nom, arret, 90)
+	_verifier_commandes("étourdissement, %s" % profil.nom, h1.commandes.numero_applique / 100)
 	await _liberer()
 
 
 ## Le lion du client percute celui de l'hôte, arrêté sur sa route : le choc est simulé tout de suite
 ## contre le lion affiché (interpolé), sans attendre l'hôte ; l'hôte le compte ; la prédiction converge.
-func _scenario_choc() -> void:
-	print("-- Choc contre un lion distant, sous 80 ms, 40 ms, 5 %")
-	_preparer(Vector2(1200, 500), Vector2(700, 500), 80.0, 40.0, 5.0, 1800)
+func _scenario_choc(profil: Dictionary) -> void:
+	print("-- Choc contre un lion distant, sous %s" % profil.nom)
+	_preparer(Vector2(1200, 500), Vector2(700, 500), profil.latence, profil.gigue, profil.pertes, 1800)
 	for i in range(30):
 		await _pas()  # le lion distant s'affiche à sa place
 	_presser(Vector2.RIGHT)
@@ -460,15 +476,15 @@ func _scenario_choc() -> void:
 			x_min = minf(x_min, _affiche(c1).x)
 			rebond = maxf(rebond, _affiche(c1).x - x_min)
 	var p: Node = c1.prediction
-	print("MESURE choc : simulé chez le client au tick %d, chez l'hôte au tick %d ; erreur max %.2f px ; rebond de l'affichage %.2f px ; recalages %d ; à-coups %d"
-		% [tick_client, tick_hote, p.erreur_max(), rebond, p.recalages, _a_coups])
+	print("MESURE choc (%s) : simulé chez le client au tick %d, chez l'hôte au tick %d ; erreur max %.2f px ; rebond de l'affichage %.2f px ; recalages %d ; à-coups %d"
+		% [profil.nom, tick_client, tick_hote, p.erreur_max(), rebond, p.recalages, _a_coups])
 	_check(tick_client > 0 and tick_hote > 0 and tick_client <= tick_hote and GS.joueurs[1].chocs >= 1,
-		"le choc est simulé chez le client sans attendre l'hôte (tick %d, l'hôte au tick %d), et l'hôte le compte" % [tick_client, tick_hote])
+		"(%s) le choc est simulé chez le client sans attendre l'hôte (tick %d, l'hôte au tick %d), et l'hôte le compte" % [profil.nom, tick_client, tick_hote])
 	# Le lion repart en arrière et s'arrête, sans revenir vers le lion percuté : le choc simulé, noté,
 	# est rejoué tant que l'hôte ne l'a pas (oublié, le lion reviendrait avant de repartir).
-	_check(p.recalages == 0 and rebond < ECART_MAX and p.erreur_max() < ECART_MAX,
-		"le choc ne fait ni recalage ni aller-retour visible (rebond de %.2f px ; erreur au plus %.2f px)" % [rebond, p.erreur_max()])
-	await _verifier_convergence("choc", arret, 90)
+	_check(p.recalages == 0 and rebond < ECART_MAX and p.erreur_max() < profil.erreur_choc,
+		"(%s) le choc ne fait ni recalage ni aller-retour visible (rebond de %.2f px ; erreur au plus %.2f px, %.2f permis)" % [profil.nom, rebond, p.erreur_max(), profil.erreur_choc])
+	await _verifier_convergence("choc, %s" % profil.nom, arret, 90)
 	await _liberer()
 
 
