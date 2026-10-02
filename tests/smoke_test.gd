@@ -2190,6 +2190,7 @@ func _tester_mobile(params: Node) -> void:
 		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter ni mettre en pause" % voile.layer)
 	params.actualiser_voile(Vector2i(844, 390))
 	await _tester_tactile_mobile(params)
+	await _tester_en_ligne_mobile(params)
 	params.mobile = false
 	params.plein_ecran_demande = false
 
@@ -2301,6 +2302,72 @@ func _tester_tactile_mobile(params: Node) -> void:
 	bureau.free()
 	reseau.pseudo = ""
 	params.mobile = true
+
+
+## Phase 6 : l'écran En ligne d'un mobile : sans Créer une partie, le focus au premier contrôle visible,
+## les cibles au doigt, la rangée en édition au-dessus du clavier virtuel ; sur ordinateur, rien ne change.
+func _tester_en_ligne_mobile(params: Node) -> void:
+	var scores: Node = root.get_node("Scores")
+	var cible: int = params.CIBLE_TACTILE
+	scores.definir_preference("pseudo", "MMMMMMMMMMMM")
+	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran.codes_de_salle = true
+	root.add_child(ecran)
+	await process_frame
+	_check(not ecran.bouton_creer.visible and not ecran.etiquette_ou.visible and ecran.bouton_rejoindre.has_focus(),
+		"sur un mobile, ni Créer une partie ni « ou rejoins… » ; à l'accueil, le focus va à Rejoindre, le premier contrôle visible")
+	var petits: Array[String] = []
+	for controle: Control in [ecran.champ_pseudo, ecran.champ_code, ecran.bouton_rejoindre, ecran.bouton_retour]:
+		if controle.size.y < cible:
+			petits.append("%s %d px" % [controle.name, controle.size.y])
+	var champ: LineEdit = ecran.champ_pseudo
+	var largeur_m: float = champ.get_theme_font("font").get_string_size("MMMMMMMMMMMM", HORIZONTAL_ALIGNMENT_LEFT, -1, champ.get_theme_font_size("font_size")).x
+	var colonne: Rect2 = ecran.get_node("Centre/Colonne").get_global_rect()
+	_check(petits.is_empty() and ecran.message.get_theme_font_size("font_size") == 44 and largeur_m <= champ.size.x - 30
+		and Rect2(0, 0, 2000, 1125).encloses(colonne) and ecran.bouton_rejoindre.action_mode == BaseButton.ACTION_MODE_BUTTON_PRESS,
+		"les champs, Rejoindre et Retour font %d px de haut au moins (%s), le message 44 px, 12 caractères larges tiennent dans le pseudo (%d px), tout dans l'écran ; Rejoindre agit à l'appui" % [cible, petits, largeur_m])
+	ecran.champ_code.text = ""
+	ecran._sur_pseudo_valide(ecran.champ_pseudo.text)
+	_check(ecran.champ_code.has_focus(), "Entrée dans le pseudo, sans code : le focus va au code (Créer une partie n'existe pas)")
+	# Le clavier virtuel couvre le bas de l'écran : la rangée en édition remonte en haut, le message dessous.
+	# Un champ entre en édition quand il prend le focus (au doigt, ou rendu par un refus : Godot 4.7) et en
+	# sort quand il le perd.
+	ecran.bouton_rejoindre.grab_focus()
+	ecran.champ_code.text = "K7Q2X"
+	ecran.rejoindre()
+	await process_frame
+	var rangee_code: Rect2 = ecran.champ_code.get_parent().get_global_rect()
+	var message: Rect2 = ecran.message.get_global_rect()
+	var pendant: float = ecran.centre.position.y
+	var en_edition: bool = ecran.champ_code.is_editing()
+	ecran.bouton_rejoindre.grab_focus()
+	await process_frame
+	var apres: float = ecran.centre.position.y
+	ecran.champ_pseudo.grab_focus()
+	await process_frame
+	var rangee_pseudo: Rect2 = ecran.champ_pseudo.get_parent().get_global_rect()
+	ecran.bouton_rejoindre.grab_focus()
+	await process_frame
+	_check(en_edition and pendant < 0.0 and rangee_code.position.y == ecran.MARGE_CLAVIER and message.end.y <= 1125 * 0.4 and ecran.message.text == tr("ENLIGNE_CODE_FORMAT")
+		and apres == 0.0 and rangee_pseudo.position.y == ecran.MARGE_CLAVIER and ecran.centre.position.y == 0.0,
+		"un refus rend le code en édition : sa rangée remonte à %d px du haut, le message dessous dans les 40 %% du haut (fin à %d px) ; le pseudo aussi ; tout redescend à la fin de l'édition"
+			% [ecran.MARGE_CLAVIER, message.end.y])
+	ecran.free()
+
+	# Sur ordinateur : Créer une partie et son focus, rien ne bouge en édition
+	params.mobile = false
+	var bureau: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	bureau.codes_de_salle = true
+	root.add_child(bureau)
+	await process_frame
+	bureau.champ_code.grab_focus()
+	await process_frame
+	_check(bureau.bouton_creer.visible and bureau.etiquette_ou.visible and bureau.centre.position.y == 0.0
+		and bureau.bouton_rejoindre.action_mode == BaseButton.ACTION_MODE_BUTTON_RELEASE and bureau.bouton_rejoindre.size.y < cible,
+		"sur ordinateur, l'écran En ligne ne change pas : Créer une partie, rien ne remonte en édition")
+	bureau.free()
+	params.mobile = true
+	scores.definir_preference("pseudo", "")
 
 
 ## Le rectangle (px de l'écran) du texte d'une étiquette centrée sur une ligne, plus étroit qu'elle.
