@@ -310,14 +310,20 @@ jobs:
 
       - name: La page publiée répond (index.html et le paquet de cette version)
         shell: bash
+        env:
+          PAGE_URL: ${{ steps.pages.outputs.page_url }}
+        # bash -eo pipefail : un curl en échec (404 le temps que Pages serve la version, délai dépassé) ne doit
+        # pas finir l'étape, d'où les « || true » ; le corps de la page lu en entier avant grep (un grep -q qui
+        # s'arrête tôt ferait échouer curl, donc le tuyau, sous pipefail).
         run: |
-          base="${{ steps.pages.outputs.page_url }}"
+          attendue="$(wc -c < export/web/index.pck | tr -d ' ')"
           for _ in $(seq 1 30); do
-            taille="$(curl -sf "${base}index.pck?v=${GITHUB_SHA}" | wc -c | tr -d ' ')"
-            [ "$taille" = "$(wc -c < export/web/index.pck | tr -d ' ')" ] && curl -sf "${base}?v=${GITHUB_SHA}" | grep -q "index.js" && { echo "page publiée : $base"; exit 0; }
+            taille="$({ curl -sf --max-time 20 "${PAGE_URL}index.pck?v=${GITHUB_SHA}" || true; } | wc -c | tr -d ' ')"
+            page="$(curl -sf --max-time 20 "${PAGE_URL}?v=${GITHUB_SHA}" || true)"
+            if [ "$taille" = "$attendue" ] && grep -q "index.js" <<< "$page"; then echo "page publiée : $PAGE_URL"; exit 0; fi
             sleep 10
           done
-          echo "::error::$base ne sert pas le paquet de cette version (taille ${taille:-?})"; exit 1
+          echo "::error::$PAGE_URL ne sert pas le paquet de cette version (taille $taille, attendue $attendue)"; exit 1
 
       - name: Une partie de contrôle sur la page publiée (deux pages Chromium, le Worker déployé, STUN seul)
         working-directory: tests/web
