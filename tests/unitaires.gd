@@ -3021,6 +3021,40 @@ func _tester_transport_webrtc() -> void:
 			instants.append(t)
 	_check(instants == [200000, 200050, 200100, 200150, 200200],
 		"deux envois sont espacés de 50 ms au moins, en plus du plafond par seconde (une rafale retardée par TCP arriverait d'un coup à la salle) (%s)" % [instants])
+	# Phase 6 (note de la revue de la phase 4) : sur un appareil lent, une image dure plus de 50 ms ; la file
+	# rattrape les créneaux passés depuis l'image précédente, pas plus (une réponse et ses 8 candidats, à 2
+	# images par seconde : en 2 images, au lieu de 9), et la salle, un seau de 20 jetons rempli de 20 par
+	# seconde, n'est jamais à sec, quelle que soit la cadence des images.
+	var lente := TransportWebRTCSimule.new()
+	lente.rejoindre("K7Q2XM")
+	for i in range(9):
+		lente._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	var par_image: Array[int] = []
+	for t in range(300000, 302500, 500):  # 2 images par seconde
+		var avant := lente.ecrits.size()
+		lente._vider_file(t)
+		par_image.append(lente.ecrits.size() - avant)
+	_check(par_image == [1, 8, 0, 0, 0] and lente.ecrits.size() == 9,
+		"à 2 images par seconde, la file rattrape les créneaux de 50 ms de l'image écoulée : 9 messages en 2 images, pas en 9 (%s)" % [par_image])
+	var seaux := {}
+	for duree: int in [16, 200, 500, 1000]:
+		var cadencee := TransportWebRTCSimule.new()
+		cadencee.rejoindre("K7Q2XM")
+		for i in range(80):
+			cadencee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+		var seau := 20.0
+		var plus_bas := seau
+		var precedent := 400000
+		for t in range(400000, 412000, duree):
+			seau = minf(20.0, seau + (t - precedent) * 20.0 / 1000.0)
+			precedent = t
+			var avant := cadencee.ecrits.size()
+			cadencee._vider_file(t)
+			seau -= cadencee.ecrits.size() - avant
+			plus_bas = minf(plus_bas, seau)
+		seaux[duree] = [snappedf(plus_bas, 0.1), cadencee.ecrits.size()]
+	_check(seaux.values().all(func(v: Array) -> bool: return v[0] >= 0.0 and v[1] == 80),
+		"une image de 16, 200, 500 ou 1000 ms : les 80 messages partent, et le seau de la salle (20 jetons, 20 par seconde) n'est jamais à sec ({durée: [jetons au plus bas, envoyés]} %s)" % [seaux])
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
