@@ -204,6 +204,9 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 });
 
 test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et le jeu continue @mobile", async ({ browser }) => {
+	// 234 à 248 s mesurés sur les 300 s du réglage commun, la machine bridée à 1 CPU (le gel de 12 s compris) : une
+	// marge, comme pour @manche
+	test.setTimeout(420_000);
 	const consoles = [];
 	const hote = await ouvrir(browser, "/", consoles);
 	await commander(hote, "duree", 12);
@@ -286,36 +289,51 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	let pose = null;
 	let vomir = false;
 	const trajet = [];
+	// Une échéance à l'horloge murale, comme les autres attentes du test ; le trajet est journalisé à chaque issue
+	const echeance = Date.now() + 150_000;
+	let dernier = null;
 	await doigts("touchStart", [[sx, sy]]);
-	for (;;) {
-		const manche = (await etat(mobile)).manche;
-		if (manche === undefined || manche.finie || manche.territoire[2] > 0) {
-			trajet.push(manche === undefined ? "hors manche" : `${manche.finie ? "fin" : "peint"} ${manche.temps.toFixed(1)} s ${manche.lion.map(Math.round)}`);
-			break;
+	try {
+		for (;;) {
+			// Une courte pause à chaque tour : la boucle ne dispute pas le processeur au jeu
+			await mobile.waitForTimeout(80);
+			if (Date.now() > echeance) {
+				throw new Error(`les pouces : ni cellule du mobile ni fin de manche en 150000 ms (dernier état ${JSON.stringify(dernier)} ; pouces : ${trajet.join(" ; ")})`);
+			}
+			dernier = await etat(mobile);
+			const manche = dernier.manche;
+			if (manche === undefined) {
+				throw new Error(`les pouces : le mobile n'est plus en manche (scène ${dernier.scene}, dernier état ${JSON.stringify(dernier)} ; pouces : ${trajet.join(" ; ")})`);
+			}
+			if (manche.finie || manche.territoire[2] > 0) {
+				trajet.push(`${manche.finie ? "fin" : "peint"} ${manche.temps.toFixed(1)} s ${manche.lion.map(Math.round)}`);
+				break;
+			}
+			if (manche.lion.length !== 2) continue;
+			const [x, y] = manche.lion;
+			if (x < 300) sens = 1;
+			else if (x > 1500) sens = -1;
+			// La pente du stick, en rayons : le stick poussé au-delà de son bord donne toute la vitesse, dans sa direction
+			let pente;
+			if (y < haut - 150) pente = [0, 0.8];
+			else if (y < haut + quart) pente = biais(0.2).map((v) => v * 1.2);
+			else if (y > bas - quart) pente = biais(-0.2).map((v) => v * 1.2);
+			else pente = [sens * 1.2, 0];
+			const stick = [sx + pente[0] * jeu.tactile.rayon, sy + pente[1] * jeu.tactile.rayon];
+			const nouvelle = stick.join(",");
+			if (nouvelle === pose) continue;
+			pose = nouvelle;
+			trajet.push(`${manche.temps.toFixed(1)} s ${Math.round(x)},${Math.round(y)} ${pente.map((v) => v.toFixed(2)).join("/")}${manche.vomit ? " vomit" : ""}`);
+			await doigts("touchMove", vomir ? [stick, [vx, vy]] : [stick]);
+			if (!vomir && y >= haut - 150) {
+				await doigts("touchStart", [stick, [vx, vy]]);
+				vomir = true;
+			}
 		}
-		if (manche.lion.length !== 2) continue;
-		const [x, y] = manche.lion;
-		if (x < 300) sens = 1;
-		else if (x > 1500) sens = -1;
-		// La pente du stick, en rayons : le stick poussé au-delà de son bord donne toute la vitesse, dans sa direction
-		let pente;
-		if (y < haut - 150) pente = [0, 0.8];
-		else if (y < haut + quart) pente = biais(0.2).map((v) => v * 1.2);
-		else if (y > bas - quart) pente = biais(-0.2).map((v) => v * 1.2);
-		else pente = [sens * 1.2, 0];
-		const stick = [sx + pente[0] * jeu.tactile.rayon, sy + pente[1] * jeu.tactile.rayon];
-		const nouvelle = stick.join(",");
-		if (nouvelle === pose) continue;
-		pose = nouvelle;
-		trajet.push(`${manche.temps.toFixed(1)} s ${Math.round(x)},${Math.round(y)} ${pente.map((v) => v.toFixed(2)).join("/")}${manche.vomit ? " vomit" : ""}`);
-		await doigts("touchMove", vomir ? [stick, [vx, vy]] : [stick]);
-		if (!vomir && y >= haut - 150) {
-			await doigts("touchStart", [stick, [vx, vy]]);
-			vomir = true;
-		}
+	} finally {
+		console.log(`Pouces (bande ${haut} à ${bas} px) : ${trajet.join(" ; ")}`);
+		await doigts("touchEnd", []);
 	}
-	await doigts("touchEnd", []);
-	console.log(`Pouces (bande ${haut} à ${bas} px) : ${trajet.join(" ; ")}`);
 
 	const fins = [];
 	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 150_000));
