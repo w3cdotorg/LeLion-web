@@ -54,6 +54,7 @@ func _run() -> void:
 	await _tester_battement()
 	await _tester_parties_en_ligne()
 	await _tester_transport_tardif()
+	_tester_transport_webrtc()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2709,6 +2710,163 @@ func _tester_transport_tardif() -> void:
 	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
 
 
+## Phase 4 du jeu en ligne : `TransportWebRTC` sans navigateur. Ses aides pures (adresse du Worker,
+## `?relais=1`, configuration ICE, messages de la salle et leurs entiers), puis ses décisions, sur une
+## sous-classe qui remplace la socket et les connexions WebRTC (`TransportWebRTCSimule`) : l'hôte (salle,
+## arrivées, offre et candidats, `ouvert`, `depart`, délais, `ping`, salle fermée), le client
+## (`bienvenue` et son pair, réponse, fermeture `ouvert`, délai du canal), les échecs de la signalisation
+## (`erreur`, fermeture, silence), et la file cadencée.
+func _tester_transport_webrtc() -> void:
+	print("-- Transport WebRTC (phase 4, sans navigateur)")
+	_check(TransportWebRTC.url_signalisation() == "ws://localhost:8787",
+		"l'adresse du Worker vient du réglage lelion/signalisation/url (wrangler dev en local) : %s" % TransportWebRTC.url_signalisation())
+	_check(TransportWebRTC.lire_relais("?salle=K7Q2XM&relais=1") and TransportWebRTC.lire_relais("relais=1")
+		and not TransportWebRTC.lire_relais("?relais=0") and not TransportWebRTC.lire_relais("?relaisx=1")
+		and not TransportWebRTC.lire_relais(""),
+		"?relais=1 force le relais TURN, rien d'autre ne le fait")
+	var ice := [{"urls": ["stun:stun.cloudflare.com:3478"]}, {"urls": ["turn:turn.cloudflare.com:3478"], "username": "u", "credential": "c"}]
+	_check(TransportWebRTC.configuration_ice(ice, false) == {"iceServers": ice}
+		and TransportWebRTC.configuration_ice(ice, true) == {"iceServers": ice, "iceTransportPolicy": "relay"},
+		"la configuration ICE : les serveurs de la salle tels quels, et iceTransportPolicy relay avec ?relais=1")
+
+	var bienvenue := TransportWebRTC.decoder('{"t":"bienvenue","id":123456789,"ice":[]}')
+	var candidat := TransportWebRTC.decoder('{"t":"candidat","de":2147483647,"media":"0","index":0,"nom":"candidate:1"}')
+	_check(typeof(bienvenue.get("id")) == TYPE_INT and bienvenue.id == 123456789 and typeof(candidat.get("de")) == TYPE_INT
+		and candidat.de == 2147483647 and typeof(candidat.get("index")) == TYPE_INT and candidat.index == 0,
+		"les identifiants et l'index d'un message deviennent des entiers (le JSON de Godot donne des flottants)")
+	var invalides := ['pas du JSON', '[1, 2]', '{"t":"inconnu"}', '{"id":5}', '{"t":"bienvenue","ice":[]}',
+		'{"t":"bienvenue","id":1.5,"ice":[]}', '{"t":"bienvenue","id":0,"ice":[]}', '{"t":"bienvenue","id":2147483648,"ice":[]}',
+		'{"t":"bienvenue","id":"5","ice":[]}', '{"t":"bienvenue","id":5,"ice":{}}', '{"t":"offre","de":1,"sdp":5}',
+		'{"t":"candidat","de":1,"media":"0","index":-1,"nom":"c"}', '{"t":"erreur"}']
+	_check(invalides.all(func(t: String) -> bool: return TransportWebRTC.decoder(t).is_empty()),
+		"un message mal formé (pas un objet, type inconnu, champ absent ou mal typé, identifiant hors de 1..2³¹-1) est vide")
+	_check(TransportWebRTC.decoder('{"t":"depart","id":7,"plus":true}').get("id") == 7, "un champ en plus est toléré")
+	_check(TransportWebRTC.new().rejoindre("127.0.0.1:7777") == ERR_INVALID_PARAMETER and TransportWebRTC.new().rejoindre("k7q2xm") == ERR_INVALID_PARAMETER,
+		"un code qui n'est pas un code de salle normalisé (l'adresse ip:port d'un hôte ENet comprise) est refusé sans rien tenter")
+
+	# L'hôte
+	var hote := TransportWebRTCSimule.new()
+	_check(hote.heberger() == OK and hote.url == "ws://localhost:8787/v1/creer" and hote.pair() is WebRTCMultiplayerPeer
+		and hote.pair().get_unique_id() == 1 and hote.signaux.is_empty(),
+		"héberger : le pair serveur existe (identifiant 1), /v1/creer s'ouvre, rien n'est dit pendant l'appel")
+	hote.recevoir('{"t":"salle","code":"K7Q2XM","id":1,"ice":[]}')
+	_check(hote.signaux == ["pret K7Q2XM"], "la salle existe : pret avec son code (%s)" % [hote.signaux])
+	hote.recevoir('{"t":"arrivee","id":5,"ice":[{"urls":["stun:neuf"]}]}')
+	_check(hote.appels == ["relier 5"] and hote._ice == [{"urls": ["stun:neuf"]}],
+		"une arrivée : sa connexion se crée avec les serveurs ICE neufs de l'arrivée (%s)" % [hote.appels])
+	hote._sur_description("offer", "SDP-O", 5)
+	hote._sur_candidat("0", 0, "candidate:1", 5)
+	_check(Array(hote._file) == ['{"sdp":"SDP-O","t":"offre","vers":5}', '{"index":0,"media":"0","nom":"candidate:1","t":"candidat","vers":5}'],
+		"son offre puis ses candidats partent par la salle, dans l'ordre, les entiers en entiers (%s)" % [hote._file])
+	hote.recevoir('{"t":"reponse","de":5,"sdp":"SDP-R"}')
+	hote.recevoir('{"t":"candidat","de":5,"media":"0","index":0,"nom":"candidate:2"}')
+	hote.recevoir('{"t":"reponse","de":9,"sdp":"SDP-X"}')
+	_check(hote.appels == ["relier 5", "description 5 answer SDP-R", "candidat 5 0 0 candidate:2"],
+		"sa réponse et ses candidats s'appliquent à sa connexion ; ceux d'un inconnu sont ignorés (%s)" % [hote.appels])
+	hote._file.clear()
+	hote._sur_pair_connecte(5)
+	_check(Array(hote._file) == ['{"id":5,"t":"ouvert"}'], "son canal ouvert : l'hôte dit ouvert à la salle (%s)" % [hote._file])
+	hote.recevoir('{"t":"depart","id":5}')
+	hote.recevoir('{"t":"arrivee","id":6,"ice":[]}')
+	hote.recevoir('{"t":"depart","id":6}')
+	hote.recevoir('{"t":"arrivee","id":7,"ice":[]}')
+	hote._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	_check(hote.appels.slice(3) == ["relier 6", "retirer 6", "relier 7", "retirer 7"],
+		"un depart après ouvert est ignoré ; un arrivant parti, ou au canal fermé 15 s après son arrivée, est retiré (%s)" % [hote.appels.slice(3)])
+	hote._file.clear()
+	hote._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.PERIODE_PING * 1000.0) + 1)
+	_check(Array(hote._file) == ['{"t":"ping"}'], "toutes les 30 s, l'hôte envoie le ping, ce texte exact")
+	hote.recevoir('{"t":"pong"}')
+	hote.recevoir('{"t":"erreur","raison":"expiree"}')
+	hote._sur_socket_fermee(1000, "expiree")
+	_check(hote.signaux == ["pret K7Q2XM", "salle_fermee expiree"] and hote.servir(),
+		"la salle expire après pret : seulement salle_fermee (une fois), la session continue (%s)" % [hote.signaux])
+	hote.quitter()
+	_check(not hote.servir() and hote.pair() == null and hote.appels[-1] == "fermer socket",
+		"quitter sans pair connecté : la socket se ferme, le transport aussi")
+
+	# La création échoue avant pret
+	var refuse := TransportWebRTCSimule.new()
+	refuse.heberger()
+	refuse.recevoir('{"t":"erreur","raison":"quota"}')
+	refuse._sur_socket_fermee(1000, "quota")
+	var coupe := TransportWebRTCSimule.new()
+	coupe.heberger()
+	coupe._sur_socket_fermee(1006, "")
+	var muet := TransportWebRTCSimule.new()
+	muet.heberger()
+	muet._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_SIGNALISATION * 1000.0) + 1)
+	var motif := TransportWebRTCSimule.new()
+	motif.heberger()
+	motif._sur_socket_fermee(1000, "debit")
+	_check(refuse.signaux == ["echec quota"] and coupe.signaux == ["echec injoignable"] and muet.signaux == ["echec injoignable"]
+		and motif.signaux == ["echec debit"],
+		"avant pret, la création échoue (une fois) : l'erreur de la salle, une socket coupée, 5 s sans salle, ou le motif de la fermeture (%s, %s, %s, %s)"
+		% [refuse.signaux, coupe.signaux, muet.signaux, motif.signaux])
+
+	# Le client
+	var client := TransportWebRTCSimule.new()
+	_check(client.rejoindre("K7Q2XM") == OK and client.url == "ws://localhost:8787/v1/rejoindre/K7Q2XM" and client.pair() == null
+		and client.servir(),
+		"rejoindre : /v1/rejoindre/K7Q2XM s'ouvre, pas encore de pair (son identifiant vient de la salle)")
+	client.recevoir('{"t":"bienvenue","id":123456789,"ice":[]}')
+	_check(client.signaux == ["pair_pret"] and client.pair() != null and client.pair().get_unique_id() == 123456789
+		and client.appels == ["relier 1"],
+		"bienvenue : son pair naît avec son identifiant, relié à l'hôte (pair_pret) (%s)" % [client.signaux])
+	client.recevoir('{"t":"offre","de":1,"sdp":"SDP-O"}')
+	client.recevoir('{"t":"candidat","de":1,"media":"0","index":0,"nom":"candidate:3"}')
+	client.recevoir('{"t":"candidat","de":8,"media":"0","index":0,"nom":"candidate:4"}')
+	client._sur_description("answer", "SDP-R", 1)
+	_check(client.appels.slice(1) == ["description 1 offer SDP-O", "candidat 1 0 0 candidate:3"]
+		and Array(client._file) == ['{"sdp":"SDP-R","t":"reponse","vers":1}'],
+		"l'offre et les candidats de l'hôte s'appliquent (pas ceux d'un autre), sa réponse part (%s)" % [client.appels])
+	client._sur_socket_fermee(1000, "ouvert")
+	client._sur_pair_connecte(1)
+	client._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	_check(client.signaux == ["pair_pret", "connecte"] and client.appels.count("fermer socket") == 0,
+		"la salle ferme la socket (1000 ouvert) sans échec, le canal s'ouvre : connecte ; le client n'a pas fermé sa socket (%s)" % [client.signaux])
+	var lent := TransportWebRTCSimule.new()
+	lent.rejoindre("K7Q2XM")
+	lent.recevoir('{"t":"bienvenue","id":42,"ice":[]}')
+	lent._sur_socket_fermee(1000, "ouvert")
+	lent._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	var retarde := TransportWebRTCSimule.new()
+	retarde.rejoindre("K7Q2XM")
+	retarde.recevoir('{"t":"bienvenue","id":43,"ice":[]}')
+	retarde.recevoir('{"t":"erreur","raison":"delai"}')
+	var inconnu := TransportWebRTCSimule.new()
+	inconnu.rejoindre("K7Q2XM")
+	inconnu.recevoir('{"t":"erreur","raison":"inconnue"}')
+	inconnu._sur_socket_fermee(1000, "inconnue")
+	var perdu := TransportWebRTCSimule.new()
+	perdu.rejoindre("K7Q2XM")
+	perdu.recevoir('{"t":"bienvenue","id":44,"ice":[]}')
+	perdu._sur_socket_fermee(1006, "")
+	_check(lent.signaux == ["pair_pret", "echec delai"] and retarde.signaux == ["pair_pret", "echec delai"]
+		and inconnu.signaux == ["echec inconnue"] and perdu.signaux == ["pair_pret", "echec injoignable"],
+		"un client échoue : canal fermé 15 s après bienvenue, erreur delai de la salle, salle inconnue, socket coupée avant ouvert (%s, %s, %s, %s)"
+		% [lent.signaux, retarde.signaux, inconnu.signaux, perdu.signaux])
+
+	# La file cadencée
+	var file := TransportWebRTCSimule.new()
+	file.rejoindre("K7Q2XM")
+	for i in range(20):
+		file._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	file.ouverte = false
+	file._vider_file(100000)
+	var avant_ouverture := file.ecrits.size()
+	file.ouverte = true
+	for t in range(100000, 101000, 16):  # une seconde, une image toutes les 16 ms
+		file._vider_file(t)
+	var en_une_seconde := file.ecrits.size()
+	for t in range(101000, 103000, 16):
+		file._vider_file(t)
+	_check(avant_ouverture == 0 and en_une_seconde == TransportWebRTC.ENVOIS_PAR_SECONDE and file.ecrits.size() == 20
+		and file.ecrits == range(20).map(func(i: int) -> String: return JSON.stringify({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})),
+		"la file attend la socket ouverte, puis envoie 15 messages au plus par seconde, tous, dans l'ordre (%d, %d, %d)"
+		% [avant_ouverture, en_une_seconde, file.ecrits.size()])
+
+
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
 ## valeur.
 func _attendre(condition: Callable, delai: float) -> bool:
@@ -2833,3 +2991,53 @@ class TransportTardif extends Transport:
 
 	func servir() -> bool:
 		return not perdu and not quitte
+
+
+## `TransportWebRTC` sans socket ni WebRTC (`_tester_transport_webrtc`) : la socket s'ouvre toujours
+## (`url` retenue), `ouverte` dit si elle est prête, ses écritures vont dans `ecrits` ; les connexions
+## WebRTC ne sont que notées dans `appels` (leur pair, un `WebRTCMultiplayerPeer`, est réel). Ses signaux
+## vont dans `signaux`.
+class TransportWebRTCSimule extends TransportWebRTC:
+	var url := ""
+	var ouverte := true
+	var ecrits: Array[String] = []
+	var appels: Array[String] = []
+	var signaux: Array[String] = []
+
+	func _init() -> void:
+		pret.connect(func(code: String) -> void: signaux.append("pret " + code))
+		pair_pret.connect(func() -> void: signaux.append("pair_pret"))
+		connecte.connect(func() -> void: signaux.append("connecte"))
+		echec.connect(func(raison: String) -> void: signaux.append("echec " + raison))
+		salle_fermee.connect(func(raison: String) -> void: signaux.append("salle_fermee " + raison))
+
+	func _ouvrir_socket(adresse: String) -> Error:
+		url = adresse
+		return OK
+
+	func _servir_socket() -> void:
+		pass
+
+	func _socket_prete() -> bool:
+		return ouverte
+
+	func _ecrire(texte: String) -> void:
+		ecrits.append(texte)
+
+	func _fermer_socket() -> void:
+		appels.append("fermer socket")
+
+	func _relier(id: int) -> Error:
+		_connexions[id] = null
+		appels.append("relier %d" % id)
+		return OK
+
+	func _retirer(id: int) -> void:
+		appels.append("retirer %d" % id)
+		super._retirer(id)
+
+	func _appliquer_description(id: int, type: String, sdp: String) -> void:
+		appels.append("description %d %s %s" % [id, type, sdp])
+
+	func _appliquer_candidat(id: int, media: String, index: int, nom: String) -> void:
+		appels.append("candidat %d %s %d %s" % [id, media, index, nom])
