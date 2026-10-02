@@ -7,8 +7,9 @@ extends Node2D
 ## leur donnant joueur et commandes avant l'ajout), comme les ennemis et les pastilles que fait
 ## apparaître le Spawner de l'hôte ; lions, Spawner et intro attendent la barrière de chargement.
 ## Échap y ouvre un menu local qui ne met pas la partie en pause ; un hôte perdu ramène au titre
-## après son message (à l'écran En ligne un poste revenu d'un onglet caché, déclaré parti entre-temps). Une bataille finie (phase 18) montre l'écran Résultats (`Resultats`) sur le bilan
-## de l'hôte, et suit le choix qu'on y fait.
+## après son message (à l'écran En ligne un poste revenu d'un onglet caché, déclaré parti
+## entre-temps). Une bataille finie (phase 18) montre l'écran Résultats (`Resultats`) sur le bilan de
+## l'hôte, et suit le choix qu'on y fait.
 
 @export var game_over_scene: PackedScene
 
