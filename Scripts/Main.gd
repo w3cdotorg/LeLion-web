@@ -7,8 +7,9 @@ extends Node2D
 ## leur donnant joueur et commandes avant l'ajout), comme les ennemis et les pastilles que fait
 ## apparaître le Spawner de l'hôte ; lions, Spawner et intro attendent la barrière de chargement.
 ## Échap y ouvre un menu local qui ne met pas la partie en pause ; un hôte perdu ramène au titre
-## après son message. Une bataille finie (phase 18) montre l'écran Résultats (`Resultats`) sur le bilan
-## de l'hôte, et suit le choix qu'on y fait.
+## après son message (à l'écran En ligne un poste revenu d'un onglet caché, déclaré parti
+## entre-temps). Une bataille finie (phase 18) montre l'écran Résultats (`Resultats`) sur le bilan de
+## l'hôte, et suit le choix qu'on y fait.
 
 @export var game_over_scene: PackedScene
 
@@ -20,7 +21,9 @@ extends Node2D
 
 const SCENE_TITRE := "res://Scenes/Titre.tscn"
 const SCENE_SALON := "res://Scenes/Salon.tscn"
+const SCENE_EN_LIGNE := "res://Scenes/EcranEnLigne.tscn"
 const _Salon := preload("res://Scripts/Salon.gd")
+const _EcranEnLigne := preload("res://Scripts/EcranEnLigne.gd")
 const SCRIPT_PILOTE := preload("res://Scripts/Pilote.gd")
 const SCENE_LION := preload("res://Scenes/Lion.tscn")
 const SCENE_HUD_BATAILLE := preload("res://Scenes/HUDBataille.tscn")
@@ -225,7 +228,8 @@ func _suspendre_commandes() -> void:
 ## L'hôte est parti, vu d'un client, ou son propre pair ENet en erreur chez l'hôte lui-même (M2 de
 ## la revue finale) : ce poste est déjà hors réseau. Tout se fige sous le message (« L'hôte a quitté la
 ## partie », ou l'exclusion de ce poste par la barrière de chargement : `Reseau.raison_perte`, phase 18),
-## puis retour au titre (spec §9).
+## puis retour au titre (spec §9) ; ou, pour un poste revenu d'un onglet caché (« Tu as été déconnecté »,
+## phase 7 du jeu en ligne), à l'écran En ligne.
 func _sur_hote_perdu() -> void:
 	# M5 (revue finale phase 17) : l'arbre se fige avant qu'aucun lion n'arrête la boucle du vomi d'un
 	# joueur qui tenait Espace ; elle continuerait sur le titre.
@@ -256,7 +260,20 @@ func _sur_hote_perdu() -> void:
 	couche.add_child(message)
 	add_child(couche)
 	get_tree().paused = true
-	get_tree().create_timer(DELAI_HOTE_PERDU, true).timeout.connect(_revenir_au_titre)
+	get_tree().create_timer(DELAI_HOTE_PERDU, true).timeout.connect(_apres_la_perte.bind(Reseau.raison_perte))
+
+
+## Après le message de la perte de l'hôte, de raison `raison` : le titre (spec §9, comme au LAN), sauf pour un
+## poste revenu d'un onglet caché ou d'un téléphone verrouillé (`Reseau.PERTE_DECONNECTE`) : l'écran En
+## ligne, qui redit le message (spec §9 : « Tu as été déconnecté » puis écran En ligne), d'où le lien
+## d'invitation le ramène.
+func _apres_la_perte(raison: String) -> void:
+	if raison != Reseau.PERTE_DECONNECTE:
+		_revenir_au_titre()
+		return
+	get_tree().paused = false
+	_EcranEnLigne.message_a_l_arrivee = raison
+	get_tree().change_scene_to_file(SCENE_EN_LIGNE)
 
 
 func _revenir_au_titre() -> void:

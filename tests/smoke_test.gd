@@ -1972,6 +1972,8 @@ func _tester_salon(params: Node) -> void:
 	var c0: Dictionary = salon.cartes[0]
 	_check(root.content_scale_size == Vector2i(2000, 1125) and salon.cartes.size() == 6
 		and salon.cartes.all(func(c: Dictionary) -> bool: return c.cadre.visible), "le salon est en 16:9, une carte par place (6)")
+	_check(salon.cartes.all(func(c: Dictionary) -> bool: return c.pseudo is Label and c.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+		"phase 7 (spec §8.2) : le pseudo de chaque carte, un Label jamais traduit de lui-même (un pseudo n'est pas une clé)")
 	_check(c0.pseudo.text == "MMMMMMMMMMMM" and c0.badge.text == "HÔTE · TOI" and c0.etat.text == tr("SALON_PAS_PRET")
 		and c0.lion.material == c0.teinte and c0.teinte.get_shader_parameter("couleur_joueur") == palette[0] and c0.style.border_color == palette[0],
 		"la carte de l'hôte : pseudo, badges, pas prêt, lion et contour à sa couleur")
@@ -2010,6 +2012,31 @@ func _tester_salon(params: Node) -> void:
 		and reseau.table_salon.map(func(f: Dictionary) -> int: return f.id) == [1, 5],
 		"une place seulement réservée n'a pas de carte (M4) ; un joueur arrivé a la sienne")
 	_check(reseau.places_reservees == 1, "phase 18 : la table part avec le nombre de places seulement réservées (%d)" % reseau.places_reservees)
+	# Phase 7 du jeu en ligne (spec §8.2) : chez l'hôte, la croix d'exclusion en haut à droite de la carte de
+	# chaque autre joueur arrivé, à la souris (sans focus), sans couvrir le lion ; elle exclut le joueur de sa
+	# carte (`exclure`, par son index)
+	await process_frame  # la croix, montrée, prend sa place à l'image suivante
+	var croix_bob: Button = salon.cartes[1].croix
+	var cadre_bob: Rect2 = salon.cartes[1].cadre.get_global_rect()
+	var rect_croix := croix_bob.get_global_rect()
+	_check(croix_bob.visible and not c0.croix.visible and salon.cartes.slice(2).all(func(c: Dictionary) -> bool: return not c.croix.visible)
+		and cadre_bob.encloses(rect_croix) and rect_croix.end.x >= cadre_bob.end.x - 20 and rect_croix.position.y <= cadre_bob.position.y + 20
+		and rect_croix.size.x >= 64 and rect_croix.size.y >= 64 and not rect_croix.intersects(salon.cartes[1].lion.get_global_rect())
+		and croix_bob.focus_mode == Control.FOCUS_NONE and croix_bob.tooltip_text == "Exclure ce joueur",
+		"chez l'hôte, la carte de Bob a la croix d'exclusion en haut à droite (%s dans %s), sans couvrir son lion ; ni la sienne ni les places libres"
+			% [rect_croix, cadre_bob])
+	var liens := croix_bob.pressed.get_connections()
+	_check(liens.size() == 1 and (liens[0].callable as Callable).get_method() == &"exclure" and (liens[0].callable as Callable).get_bound_arguments() == [1]
+		and not salon.exclure(0) and not salon.exclure(3) and not salon.exclure(1),
+		"la croix de Bob exclut le joueur de la carte 1 ; ni l'hôte, ni une place libre (ni ici Bob, simulé : pas un vrai pair) ne s'excluent")
+	# Bob exclu, pas encore parti (le délai de secours de l'hôte) : sa carte reste, sans croix
+	reseau.inscrits[5].exclu = true
+	reseau.salon_change.emit()
+	var croix_exclu: bool = croix_bob.visible
+	reseau.inscrits[5].erase("exclu")
+	reseau.salon_change.emit()
+	_check(not croix_exclu and croix_bob.visible and salon.cartes[1].pseudo.text == "Bob",
+		"la carte d'un exclu pas encore parti reste, sans croix (une 2e exclusion n'a pas lieu d'être)")
 
 	# Couleurs : la voisine libre (celle d'une place réservée est prise) ; une seule par appui
 	salon.changer_couleur(1)
@@ -2073,7 +2100,8 @@ func _tester_salon(params: Node) -> void:
 	params.definir_langue("en")
 	await process_frame
 	_check(salon.titre_niveau.text == "Level: Village" and salon.cartes[1].pseudo.text == "Free slot" and c0.etat.text == "READY!"
-		and salon.aide.text.begins_with("Left/Right"), "changer de langue retraduit le salon (%s)" % salon.titre_niveau.text)
+		and salon.aide.text.begins_with("Left/Right") and salon.cartes[1].croix.tooltip_text == "Remove this player"
+		and salon.consigne.text == "Keep this tab in front during the game.", "changer de langue retraduit le salon (%s)" % salon.titre_niveau.text)
 	params.definir_langue("fr")
 	salon.retour(false)
 	_check(not reseau.en_ligne() and reseau.table_salon.is_empty(), "Retour quitte le réseau : les clients voient partir l'hôte")
@@ -2087,8 +2115,9 @@ func _tester_salon(params: Node) -> void:
 	var salon_client: Control = load("res://Scenes/Salon.tscn").instantiate()
 	root.add_child(salon_client)
 	await process_frame
-	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible,
-		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton")
+	_check(salon_client.aide.text == tr("SALON_AIDE") and not salon_client.rangee_invitation.visible and not salon_client.bouton_demarrer.visible
+		and not salon_client.consigne.visible,
+		"un client : l'aide sans le niveau ni Démarrer, pas de code, pas de bouton, pas la consigne de l'onglet")
 	salon_client.changer_niveau(1)
 	salon_client.demarrer()
 	_check(reseau.niveau_salon == 0 and not reseau.manche_en_cours, "un client ne change pas le niveau et ne démarre pas la partie")
@@ -2096,6 +2125,7 @@ func _tester_salon(params: Node) -> void:
 	reseau.table_salon.assign([{"id": 1, "index": 0, "couleur": palette[0], "pseudo": "Hôte", "pret": true},
 		{"id": id_client, "index": 1, "couleur": palette[1], "pseudo": "Moi", "pret": false}])
 	reseau.salon_change.emit()
+	_check(salon_client.cartes.all(func(c: Dictionary) -> bool: return not c.croix.visible), "un client n'a aucune croix d'exclusion")
 	var attente_client: String = salon_client.etat.text
 	reseau.table_salon[1].pret = true
 	reseau.places_reservees = 1  # comme la table de l'hôte pendant qu'un joueur arrive
@@ -2301,7 +2331,8 @@ func _tester_tactile_mobile(params: Node) -> void:
 		and tactile.bouton_gauche.action == "deplacer_gauche" and tactile.bouton_droite.action == "deplacer_droite" and tactile.bouton_vomir.action == "vomir",
 		"au salon, un mobile a les flèches de la couleur et PRÊT, sans stick ni pause")
 	_check(not salon.bouton_plein_ecran.visible and salon.bouton_retour.size.y >= cible and salon.etat.get_theme_font_size("font_size") == 48
-		and salon.aide.get_theme_font_size("font_size") == 40, "un mobile n'a pas Plein écran ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
+		and salon.aide.get_theme_font_size("font_size") == 40 and not salon.consigne.visible,
+		"un mobile n'a pas Plein écran ni la consigne de l'onglet de l'hôte ; Retour fait %d px de haut, l'état et l'aide sont agrandis" % salon.bouton_retour.size.y)
 	var centre := func(bouton: TouchScreenButton) -> Vector2: return bouton.position + bouton.texture_normal.get_size() / 2.0
 	await _toucher(centre.call(tactile.bouton_droite), true)
 	await _toucher(centre.call(tactile.bouton_droite), true, 1)  # un deuxième doigt sur la flèche déjà tenue
@@ -2362,6 +2393,14 @@ func _tester_tactile_mobile(params: Node) -> void:
 	_check(not bureau.controles_tactiles.visible and bureau.bouton_plein_ecran.visible and plein.end.x <= 2000 - 20 and plein.position.y <= 30
 		and bureau.bouton_plein_ecran.focus_mode == Control.FOCUS_NONE and tr(bureau.bouton_plein_ecran.text) == "Plein écran",
 		"sur ordinateur : pas de tactile, « Plein écran » en haut à droite, sans focus")
+	# Phase 7 (spec §5) : la consigne de l'hôte, en haut, entre Retour et Plein écran, au-dessus du titre
+	var consigne: Rect2 = _rect_du_texte(bureau.consigne)
+	var titre_salon: Rect2 = _rect_du_texte(bureau.get_node("Centre/Colonne/Titre"))
+	_check(bureau.consigne.visible and bureau.consigne.text == "Garde cet onglet au premier plan pendant la partie."
+		and consigne.position.x >= bureau.bouton_retour.get_global_rect().end.x + 20 and consigne.end.x <= plein.position.x - 20
+		and consigne.position.y >= 20 and consigne.end.y <= titre_salon.position.y + 20,
+		"chez l'hôte, sur ordinateur : « Garde cet onglet au premier plan pendant la partie. » en haut (%s), entre Retour et Plein écran, au-dessus du titre (%s)"
+			% [consigne, titre_salon])
 	bureau.bouton_plein_ecran.pressed.emit()
 	_check(params.plein_ecran, "Plein écran, cliqué : le plein écran")
 	params.definir_plein_ecran(false)
@@ -2597,6 +2636,8 @@ func _tester_manche_reseau() -> void:
 		_check(hud != null and hud.vignettes.map(func(v: Dictionary) -> String: return v.pseudo.text) == ["Hôte", "Bob"]
 			and hud.vignettes[0].badge.text == "TOI",
 			"(%s) le HUD de la bataille : une vignette par joueur de la table, « TOI » sur celle de l'hôte" % essai)
+		_check(hud.vignettes.all(func(v: Dictionary) -> bool: return v.pseudo is Label and v.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+			"(%s) phase 7 (spec §8.2) : les pseudos du HUD, des Label jamais traduits d'eux-mêmes (un pseudo n'est pas une clé)" % essai)
 		if essai == "absent":
 			_check(not reseau.inscrits.has(7) and main.lions.size() == 1, "(absent) un joueur exclu n'a pas de lion")
 			_check(manche._partis == [1] and hud.partis == [false, true] and hud.vignettes[1].badge.text == "PARTI",
@@ -2627,6 +2668,36 @@ func _tester_manche_reseau() -> void:
 			and manche.recevoir_paquet_de(0, Commandes.encoder_paquet(6, [[Vector2(1, 0), false]]), maintenant) == -1
 			and main.lion.commandes.direction() == Vector2.ZERO,
 			"un paquet mal formé, non fini ou pour le lion de l'hôte est refusé")
+		# Phase 7 du jeu en ligne (spec §8.2) : l'hôte admet 120 paquets de commandes d'un coup par client, puis
+		# deux par tick (120 par seconde, à son horloge) ; il jette le reste
+		# Les bornes se lisent à l'horloge de l'hôte, en ms (celle du seau), avant et après chaque boucle : un
+		# runner lent recharge le seau pendant qu'il compte (0,12 paquet par ms)
+		var d_un_coup := 0
+		var avant_rafale := Time.get_ticks_msec()
+		for i in range(150):
+			d_un_coup += int(manche.admettre_commandes(7))
+		var apres_rafale := Time.get_ticks_msec()
+		var recharge_rafale := int((apres_rafale - avant_rafale) * 0.12)
+		var rejets_rafale: int = manche._limite_commandes.rejets.get(7, 0)
+		while Time.get_ticks_msec() - apres_rafale < 100:  # à l'horloge (un minuteur créé pendant une longue image expire à sa fin)
+			await process_frame
+		# Une sonde jusqu'au premier refus (bornée à 1000) : ce que le seau a regagné depuis la rafale
+		var avant_sonde := Time.get_ticks_msec()
+		var ensuite := 0
+		var refuse := false
+		while ensuite < 1000 and not refuse:
+			if manche.admettre_commandes(7):
+				ensuite += 1
+			else:
+				refuse = true
+		var apres_sonde := Time.get_ticks_msec()
+		var au_moins := int((avant_sonde - apres_rafale) * 0.12)
+		var au_plus := int((apres_sonde - apres_rafale) * 0.12)
+		_check(d_un_coup >= manche.RAFALE_COMMANDES and d_un_coup <= manche.RAFALE_COMMANDES + recharge_rafale + 1
+			and rejets_rafale == 150 - d_un_coup and refuse and ensuite >= au_moins - 1 and ensuite <= au_plus + 1
+			and manche._limite_commandes.rejets[7] == 150 - d_un_coup + 1 and manche.admettre_commandes(8),
+			"150 paquets de commandes de Bob d'un coup : %d passent (%d d'un coup, %d regagnés pendant la rafale au plus) ; un dixième de seconde plus tard, %d de plus jusqu'au premier refus (deux par tick, de %d à %d attendus) ; le reste est jeté (%d) ; un autre client a son propre compte"
+				% [d_un_coup, manche.RAFALE_COMMANDES, recharge_rafale, ensuite, au_moins, au_plus, manche._limite_commandes.rejets[7]])
 		await _frames(3)
 		_check(lion_bob.commandes.numero_applique == 5 and lion_bob.commandes.appliquees == 2 and lion_bob.commandes.direction_voulue == Vector2(0.5, 0.0)
 			and lion_bob.commandes.vomir_voulu and EtatLion.decoder(lion_bob.etat_reseau).commande == 5,
@@ -2664,6 +2735,7 @@ func _tester_manche_reseau() -> void:
 			"un joueur parti en pleine manche perd son lion, ses cellules restent au territoire (%d)" % cellules_bob)
 		_check(manche._partis == [1] and hud.partis == [false, true] and hud.vignettes[1].part.text != "0 %",
 			"le HUD grise Bob, parti, avec sa part des cellules peintes (%s) ; la manche annonce son départ" % hud.vignettes[1].part.text)
+		_check(not manche._limite_commandes.rejets.has(7), "phase 7 : Bob parti, la manche oublie le compte de ses paquets")
 		# I2 (revue finale phase 17) : un tampon et une case de territoire tout juste peints, encore en
 		# attente (aucune image écoulée depuis pour les diffuser normalement), doivent partir avec la fin,
 		# avant elle, sur le même canal : sinon la mutation « fin sans vidage » ne serait jamais mise à
@@ -2719,6 +2791,12 @@ func _tester_manche_reseau() -> void:
 			and resultats.bouton_revanche.disabled and resultats.bouton_suivant.disabled and not resultats.bouton_salon.disabled
 			and resultats.etat.text == tr("SALON_ATTENTE_JOUEURS"),
 			"l'écran Résultats de l'hôte en réseau : Retour au salon ; Bob parti, Revanche et Niveau suivant attendent deux joueurs")
+		_check(resultats != null and resultats.lignes.size() == 2
+			and resultats.lignes.all(func(l: Dictionary) -> bool: return l.pseudo is Label and l.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
+			"phase 7 (spec §8.2) : les pseudos de l'écran Résultats, des Label jamais traduits d'eux-mêmes")
+		_check(resultats.cartes_titres.all(func(c: Dictionary) -> bool: return c.nom is Label and c.nom.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED)
+			and resultats.gagnant.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED,
+			"phase 7 (spec §8.2) : les noms des lauréats des titres et celui du gagnant, des Label jamais traduits d'eux-mêmes")
 		# Un hôte perdu (chez un client) : message, tout se fige ; M5 (revue finale phase 17) : la boucle du
 		# vomi d'un joueur qui tenait Espace s'arrête
 		var audio: Node = root.get_node("Audio")
@@ -2739,6 +2817,25 @@ func _tester_manche_reseau() -> void:
 	GS.partie_en_cours = false
 	GS.pret = false
 	GS.niveau_courant = 0
+	# Phase 7 du jeu en ligne (spec §9) : un poste revenu d'un onglet caché, déclaré parti entre-temps (la
+	# perte de l'hôte au retour d'un gel) : « Tu as été déconnecté », puis l'écran En ligne, pas le titre
+	var main_gel: Node = load("res://Scenes/Main.tscn").instantiate()
+	root.add_child(main_gel)
+	current_scene = main_gel
+	await _frames(2)
+	reseau.raison_perte = reseau.PERTE_DECONNECTE
+	main_gel._sur_hote_perdu()
+	var message_gel: String = main_gel.get_node("HotePerdu/Message").text
+	var ecran_gel: Node = await _attendre_scene("res://Scenes/EcranEnLigne.tscn", 6000)
+	_check(message_gel == "RESEAU_DECONNECTE" and tr(message_gel) == "Tu as été déconnecté" and ecran_gel != null
+		and ecran_gel.scene_file_path == "res://Scenes/EcranEnLigne.tscn" and ecran_gel.message.text == "Tu as été déconnecté" and not paused,
+		"revenu d'un onglet caché : « Tu as été déconnecté » sur la manche figée, puis l'écran En ligne qui le redit (%s)"
+			% ("" if ecran_gel == null else ecran_gel.message.text))
+	reseau.raison_perte = reseau.PERTE_HOTE
+	if ecran_gel != null:
+		ecran_gel.free()
+	GS.partie_en_cours = false
+	GS.pret = false
 
 
 ## Attend la scène `chemin` qui remplace celle d'identifiant `avant` (la même scène rechargée compte),

@@ -4,8 +4,8 @@ extends SceneTree
 
 var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
-const PROTOCOLE_VERSION := "0.20"
-const PROTOCOLE_EMPREINTE := 2553814265
+const PROTOCOLE_VERSION := "0.21"
+const PROTOCOLE_EMPREINTE := 1188810746
 
 
 func _init() -> void:
@@ -56,6 +56,11 @@ func _run() -> void:
 	await _tester_transport_tardif()
 	_tester_transport_webrtc()
 	_tester_mobile()
+	_tester_limites()
+	_tester_pseudos_affiches()
+	await _tester_demandes_salon()
+	await _tester_exclusion()
+	await _tester_retour_de_gel()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -823,6 +828,31 @@ func _tester_reseau() -> void:
 		+ "e" + char(0x2028) + "f" + char(0xFEFF) + "g"
 	_check(reseau.pseudo_valide(brut) == "abcdefg",
 		"le pseudo est aussi nettoyé du DEL, des contrôles C1, des forçages de sens et des caractères invisibles")
+	# Phase 7 du jeu en ligne (spec §8.2) : tous les caractères de mise en forme (catégorie Cf), et ce qui fait
+	# un pseudo invisible ; le nettoyage passe avant la coupe à 12 caractères
+	# chaque point de code est vérifié seul (entrelacés, ceux qui suivent la coupe à 12 ne le seraient pas)
+	var oublies: Array[String] = []
+	for c: int in [0x00AD, 0x034F, 0x0600, 0x061C, 0x06DD, 0x070F, 0x0891, 0x08E2, 0x115F, 0x1160, 0x17B4, 0x180B, 0x180E, 0x2066,
+			0x2069, 0x3164, 0xFFA0, 0xFFF9, 0xFFFB, 0x110BD, 0x13430, 0x1BCA0, 0x1D173, 0xE0001, 0xE0041, 0xE007F, 0xE0100]:
+		if reseau.pseudo_valide("a" + char(c) + "b") != "ab":
+			oublies.append("U+%04X" % c)
+	_check(oublies.is_empty(), "phase 7 : chaque caractère de mise en forme d'Unicode de la liste (trait d'union conditionnel, marque arabe, étiquettes…) et chaque lettre vide est retiré (oubliés : %s)" % [oublies])
+	var masques := (char(0x200B) + "W" + char(0x2066)).repeat(20)
+	_check(reseau.pseudo_valide(masques) == "WWWWWWWWWWWW"
+		and reseau.pseudo_valide("Zoé" + char(0x2003) + "Léa " + char(0x1F600)) == "Zoé" + char(0x2003) + "Léa " + char(0x1F600),
+		"phase 7 : le nettoyage passe avant la coupe à 12 ; espaces, accents et emoji restent")
+	# Les pseudos blancs (espaces Unicode, sélecteurs de variante, marques combinantes) retombent sur « Joueur N »
+	var blancs: Array[String] = []
+	for c: int in [0x3000, 0x00A0, 0x2007, 0x205F, 0x1680, 0x202F, 0xFE0F, 0x2800, 0x0301, 0x2003]:
+		if reseau.pseudo_ou_defaut(char(c).repeat(12), 1) != "Joueur 2":
+			blancs.append("U+%04X" % c)
+	_check(blancs.is_empty(), "phase 7 : 12 espaces Unicode, sélecteurs de variante ou marques combinantes retombent sur « Joueur N » (échecs : %s)" % [blancs])
+	var coeur := char(0x2764) + char(0xFE0F)
+	_check(reseau.pseudo_valide(coeur) == coeur and reseau.pseudo_valide("Bob " + coeur) == "Bob " + coeur
+		and reseau.pseudo_valide(char(0xA0) + "Bob" + char(0x3000)) == "Bob" and reseau.pseudo_valide("Bob" + char(0xA0).repeat(12) + "x") == "Bob",
+		"phase 7 : un cœur avec son sélecteur de variante survit, une espace insécable ou idéographique au bord est rognée (avant et après la coupe)")
+	_check(reseau.pseudo_ou_defaut(char(0x3164).repeat(5) + char(0xE0041), 2) == "Joueur 3",
+		"un pseudo fait seulement de lettres vides et d'étiquettes retombe sur « Joueur N »")
 	_check(reseau.pseudo_valide("abcdefghijk lmn") == "abcdefghijk",
 		"la coupe à %d caractères ne laisse pas d'espace finale (nettoyage après la coupe)" % reseau.PSEUDO_MAX)
 	_check(reseau.pseudo_valide("   \n\t  ") == "", "un pseudo qui ne contient rien d'affichable devient une chaîne vide")
@@ -1551,12 +1581,16 @@ func _tester_reseau_manche() -> void:
 	var raisons: Array[String] = []
 	var sur_perte := func() -> void: raisons.append(reseau.raison_perte)
 	reseau.hote_perdu.connect(sur_perte)
-	reseau._recevoir_exclusion()
+	reseau._recevoir_exclusion(false)
 	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._recevoir_exclusion(true)
+	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
+	reseau._recevoir_exclusion("oui")
 	reseau._fermer_puis_emettre(&"hote_perdu", [], reseau._generation)
 	reseau.hote_perdu.disconnect(sur_perte)
-	_check(raisons == [reseau.PERTE_EXCLU, reseau.PERTE_HOTE] and not reseau._exclu,
-		"l'hôte perdu après une exclusion : « exclu » ; la perte suivante, de nouveau « l'hôte a quitté la partie » (%s)" % [raisons])
+	_check(raisons == [reseau.PERTE_EXCLU, reseau.PERTE_HOTE, reseau.PERTE_EXCLU_HOTE, reseau.PERTE_EXCLU] and reseau._exclusion.is_empty(),
+		"l'hôte perdu après une exclusion : « exclu » ; la perte suivante, de nouveau « l'hôte a quitté la partie » ; phase 7 : exclu du salon par l'hôte, « L'hôte t'a exclu de la partie. » ; une annonce illisible, l'exclusion de la barrière (%s)" % [raisons])
 	_check(reseau.heberger(17788) == OK, "(pré-condition) l'hôte écoute de nouveau")
 	reseau.definir_silence(reseau.SILENCE_SESSION)
 	_check(reseau.silence == reseau.SILENCE_SESSION, "fin du chargement : silence de session")
@@ -2203,6 +2237,299 @@ func _tester_mobile() -> void:
 		"le son du Web se lit en Stream (audio/general/default_playback_type.web = 0), pas en Sample")
 
 
+## Phase 7 du jeu en ligne (spec §8.2) : le débit des demandes d'un client chez l'hôte, un seau de jetons
+## par client (`LimiteDebit`) : les paquets de commandes de la manche (2 par tick, 120 par seconde à 60 ticks
+## par seconde, 120 d'un coup), les demandes du salon (couleur, Prêt : 10 par seconde).
+func _tester_limites() -> void:
+	print("-- Limites de débit des clients (phase 7)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var script_manche: Script = load("res://Scripts/Manche.gd")
+	var constantes: Dictionary = script_manche.get_script_constant_map()
+	_check(constantes.COMMANDES_PAR_TICK == 2 and constantes.RAFALE_COMMANDES == 2 * Engine.physics_ticks_per_second
+		and reseau.DEMANDES_SALON_PAR_SECONDE == 10,
+		"spec §8.2 : 2 paquets de commandes par tick (%d par seconde à l'horloge de l'hôte, autant d'un coup : deux secondes d'un client), 10 demandes de salon par seconde"
+			% (2 * Engine.physics_ticks_per_second))
+	var tick := 1.0 / 60.0
+	var commandes := LimiteDebit.new(120.0, 120.0)
+	var admis := 0
+	for i in range(130):
+		admis += int(commandes.admettre(5, 100.0))
+	_check(admis == 120 and commandes.rejets.get(5, 0) == 10 and commandes.admettre(6, 100.0) and not commandes.rejets.has(6),
+		"130 paquets d'un coup : 120 passent (le seau plein), 10 sont jetés et comptés ; un autre client a son propre seau (%d)" % admis)
+	var un_tick_apres := [commandes.admettre(5, 100.0 + tick), commandes.admettre(5, 100.0 + tick), commandes.admettre(5, 100.0 + tick)]
+	_check(un_tick_apres == [true, true, false] and commandes.rejets[5] == 11, "un tick plus tard : deux paquets de plus, pas trois (%s)" % [un_tick_apres])
+	var apres_attente := 0
+	for i in range(150):
+		apres_attente += int(commandes.admettre(5, 5000.0))
+	_check(apres_attente == 120, "après une longue attente, le seau n'a jamais plus que son plein (%d)" % apres_attente)
+	var recul := [commandes.admettre(6, 50.0), commandes.admettre(5, 4000.0)]
+	_check(recul == [true, false], "une horloge qui recule ne remplit rien (%s)" % [recul])
+	commandes.oublier(5)
+	_check(not commandes.rejets.has(5) and commandes.admettre(5, 5000.0), "un client oublié (parti) repart seau plein, sans rejets")
+	var joueur := LimiteDebit.new(120.0, 120.0)
+	var inondeur := LimiteDebit.new(120.0, 120.0)
+	var jetes := 0
+	var passes := 0
+	for t in range(600):
+		jetes += int(not joueur.admettre(1, t * tick))
+		for k in range(10):
+			passes += int(inondeur.admettre(1, t * tick))
+	for k in range(120):  # l'hôte figé 2 s : les paquets du joueur arrivent d'un coup
+		jetes += int(not joueur.admettre(1, 12.0))
+	_check(jetes == 0 and passes == 120 + 2 * 599,
+		"10 s d'un client qui joue (un paquet par tick), puis l'hôte figé 2 s : aucun paquet jeté ; à dix par tick, deux passent par tick (le plein du début en plus : %d)" % passes)
+	var salon := LimiteDebit.new(10.0, 10.0)
+	var en_rafale := 0
+	for i in range(15):
+		en_rafale += int(salon.admettre(9, 3.0))
+	var ensuite := [salon.admettre(9, 3.1), salon.admettre(9, 3.1), salon.admettre(9, 3.35), salon.admettre(9, 3.35), salon.admettre(9, 4.4)]
+	_check(en_rafale == 10 and ensuite == [true, false, true, true, true] and salon.rejets[9] == 6,
+		"salon : 10 demandes d'un coup, puis une par dixième de seconde (%d, %s)" % [en_rafale, ensuite])
+	salon.vider()
+	_check(salon.rejets.is_empty() and salon.admettre(9, 0.0), "vidé (une session neuve) : plus aucun seau ni rejet")
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : un pseudo n'est jamais interprété (BBCode, traduction) : aucun
+## `RichTextLabel` dans le jeu, et l'étiquette du lion ne se traduit pas d'elle-même (un pseudo « PAUSE » n'est
+## pas une clé) ; les cartes du salon, le HUD et l'écran Résultats sont vérifiés par le smoke test.
+func _tester_pseudos_affiches() -> void:
+	print("-- Pseudos affichés (phase 7)")
+	var interpretes: Array[String] = []
+	for dossier: String in ["res://Scripts", "res://Scenes"]:
+		for chemin in _fichiers_recursifs(dossier, ".gd" if dossier.ends_with("Scripts") else ".tscn"):
+			var texte := FileAccess.get_file_as_string(chemin)
+			if texte.contains("RichTextLabel") or texte.contains("bbcode"):
+				interpretes.append(chemin)
+	_check(interpretes.is_empty(), "aucun RichTextLabel ni BBCode dans les scripts et les scènes du jeu : un pseudo s'affiche en texte brut (%s)" % [interpretes])
+	var etat := (load("res://Scenes/Lion.tscn") as PackedScene).get_state()
+	var etiquette := {}
+	for i in range(etat.get_node_count()):
+		if etat.get_node_name(i) == &"Pseudo":
+			etiquette["type"] = etat.get_node_type(i)
+			for p in range(etat.get_node_property_count(i)):
+				etiquette[etat.get_node_property_name(i, p)] = etat.get_node_property_value(i, p)
+	_check(etiquette.get("type") == &"Label" and etiquette.get("auto_translate_mode") == Node.AUTO_TRANSLATE_MODE_DISABLED,
+		"l'étiquette du pseudo d'un lion est un Label qui ne se traduit pas de lui-même (%s, %s)" % [etiquette.get("type"), etiquette.get("auto_translate_mode")])
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : entre l'autoload, hôte, et un second poste client dans ce même
+## processus (comme `_tester_battement`), les demandes de salon d'un client qui inonde l'hôte : au-delà de 10
+## par seconde, jetées sans réponse, couleur et Prêt confondus ; une seconde plus tard, ses demandes passent.
+func _tester_demandes_salon() -> void:
+	print("-- Demandes de salon d'un client (phase 7)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var client := _poste_client("PosteInondeur")
+	var arrives: Array[int] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Inondeur"
+	_check(hote.heberger(17784) == OK and client.rejoindre("127.0.0.1", 17784) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id_client: int = arrives[0] if arrives.size() == 1 else -1
+	var changements := [0]
+	var compter := func() -> void: changements[0] += 1
+	hote.salon_change.connect(compter)
+	for i in range(30):
+		client._demande_couleur.rpc_id(1, 1)
+	client._demande_pret.rpc_id(1, true)
+	_check(await _attendre(func() -> bool: return hote._limite_salon.rejets.get(id_client, 0) >= 21, 2.0),
+		"(pré-condition) les 31 demandes sont arrivées chez l'hôte")
+	await _attendre(func() -> bool: return false, 0.1)
+	_check(changements[0] == 10 and hote._limite_salon.rejets.get(id_client, 0) == 21 and not hote.inscrits[id_client].pret,
+		"30 demandes de couleur et une de Prêt d'un coup : 10 changements de couleur, 21 demandes jetées, Prêt compris (%d, %d)"
+			% [changements[0], hote._limite_salon.rejets.get(id_client, 0)])
+	await _attendre(func() -> bool: return false, 0.3)
+	client.demander_pret(true)
+	_check(await _attendre(func() -> bool: return hote.inscrits.get(id_client, {}).get("pret", false), 1.0),
+		"trois dixièmes de seconde plus tard, sa demande passe : il est prêt")
+	hote.salon_change.disconnect(compter)
+	client.quitter()
+	_check(await _attendre(func() -> bool: return not hote.inscrits.has(id_client), 1.0) and not hote._limite_salon.rejets.has(id_client),
+		"le client parti, l'hôte oublie son seau et ses rejets")
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
+## Phase 7 du jeu en ligne (spec §8.2) : l'hôte exclut un joueur du salon (la croix de sa carte), entre
+## l'autoload, hôte, et un second poste client dans ce même processus : l'exclu lit « L'hôte t'a exclu de la
+## partie. » et s'en va de lui-même ; il revient avec le code, en nouvel arrivant, et l'hôte l'exclut de
+## nouveau ; un exclu qui ne s'en va pas est libéré par l'hôte DELAI_EXCLUSION_SALON plus tard.
+func _tester_exclusion() -> void:
+	print("-- Exclusion par l'hôte (phase 7)")
+	var hote: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var client := _poste_client("PosteExclu")
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Gêneur"
+	var port := 17783
+	_check(hote.heberger(port) == OK and client.rejoindre("127.0.0.1", port) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	var id: int = arrives[0] if arrives.size() == 1 else -1
+	_check(not hote.exclure_du_salon(1) and not hote.exclure_du_salon(4242) and not client.exclure_du_salon(1),
+		"refusée : l'hôte ne s'exclut pas lui-même, ni un inconnu ; un client n'exclut personne")
+	hote.manche_en_cours = true
+	var en_manche: bool = hote.exclure_du_salon(id)
+	hote.manche_en_cours = false
+	hote.inscrits[id].arrive = false
+	var reservee: bool = hote.exclure_du_salon(id)
+	hote.inscrits[id].arrive = true
+	await _attendre(func() -> bool: return false, 0.3)
+	_check(not en_manche and not reservee and pertes.is_empty() and client.en_ligne(),
+		"refusée pendant une manche (seul le salon a la croix), et pour une place seulement réservée (pas de carte)")
+	var exclu_a := Time.get_ticks_msec()
+	_check(hote.exclure_du_salon(id), "l'hôte exclut le client du salon")
+	var parti := await _attendre(func() -> bool: return pertes.size() == 1 and partis.size() == 1, 1.5)
+	var apres := Time.get_ticks_msec() - exclu_a
+	_check(parti and pertes == [client.PERTE_EXCLU_HOTE] and partis == [id] and not client.en_ligne() and not hote.inscrits.has(id)
+		and apres < int(hote.DELAI_EXCLUSION_SALON * 1000.0),
+		"l'exclu lit « L'hôte t'a exclu de la partie. » et s'en va de lui-même, en %d ms (avant le secours de l'hôte, %.0f s) ; sa place se libère"
+			% [apres, hote.DELAI_EXCLUSION_SALON])
+	# Sans compte, rien ne le retient : il revient avec le code, en nouvel arrivant, que l'hôte exclut de nouveau
+	_check(client.rejoindre("127.0.0.1", port) == OK and await _attendre(func() -> bool: return arrives.size() == 2, 3.0) and arrives[1] != id,
+		"l'exclu revient avec le code : accepté, en nouvel arrivant (un autre identifiant)")
+	_check(arrives.size() == 2 and hote.exclure_du_salon(arrives[1])
+		and await _attendre(func() -> bool: return pertes.size() == 2 and partis.size() == 2, 1.5) and pertes[1] == client.PERTE_EXCLU_HOTE,
+		"... et l'hôte l'exclut de nouveau : « L'hôte t'a exclu de la partie. »")
+	# Un exclu qui ne s'en va pas (figé, ou qui ignore l'annonce) : l'hôte le libère au bout de son délai
+	_check(client.rejoindre("127.0.0.1", port) == OK and await _attendre(func() -> bool: return arrives.size() == 3, 3.0),
+		"(pré-condition) il revient une troisième fois")
+	var id_3: int = arrives[2] if arrives.size() == 3 else -1
+	var prets_avant: bool = hote.definir_pret(1, true) and hote.definir_pret(id_3, true)  # le salon prêt à démarrer
+	client._issue_decidee = true  # ce poste n'agira pas sur l'annonce
+	var numero_avant: int = hote.numero_table
+	exclu_a = Time.get_ticks_msec()
+	_check(arrives.size() == 3 and hote.exclure_du_salon(id_3), "(pré-condition) l'hôte l'exclut encore")
+	# Pendant son délai de secours, la fiche de l'exclu reste (il n'est pas encore parti) : marquée chez l'hôte
+	# seulement (la table diffusée n'en dit rien : ni le fil ni l'empreinte ne changent), plus prête
+	var fiche_exclue: Dictionary = hote.inscrits.get(id_3, {})
+	var couleur_exclue: Variant = fiche_exclue.get("couleur")
+	_check(prets_avant and fiche_exclue.get("exclu", false) and not fiche_exclue.get("pret", true) and hote.numero_table > numero_avant
+		and hote.table_salon.all(func(f: Dictionary) -> bool: return not f.has("exclu")) and not hote.exclure_du_salon(id_3),
+		"pendant son délai, la fiche de l'exclu est marquée chez l'hôte (pas dans la table diffusée, rediffusée), plus prête ; une 2e exclusion est refusée")
+	client._demande_pret.rpc_id(1, true)
+	client._demande_couleur.rpc_id(1, 1)
+	var recues := await _attendre(func() -> bool: return hote._limite_salon._jetons.has(id_3), 1.0)
+	await _attendre(func() -> bool: return false, 0.2)  # la seconde, sur le même canal fiable et ordonné
+	var fiche_apres: Dictionary = hote.inscrits.get(id_3, {})
+	_check(recues and not fiche_apres.get("pret", true) and fiche_apres.get("couleur") == couleur_exclue
+		and hote._limite_salon.rejets.get(id_3, 0) == 0,
+		"un _demande_pret(true) hostile de l'exclu est ignoré, sa demande de couleur aussi (admises par le débit, refusées par l'hôte)")
+	if hote.inscrits.has(id_3):
+		hote.inscrits[id_3].pret = true  # même prête, une fiche exclue bloque le démarrage
+	var lance: bool = hote.lancer_manche()
+	if hote.inscrits.has(id_3):
+		hote.inscrits[id_3].pret = false
+	_check(not lance and not hote.manche_en_cours and Time.get_ticks_msec() - exclu_a < int(hote.DELAI_EXCLUSION_SALON * 1000.0),
+		"Démarrer refusé (lancer_manche faux) tant qu'une fiche exclue est dans la table, même prête, pendant son délai")
+	parti = await _attendre(func() -> bool: return partis.size() == 3, hote.DELAI_EXCLUSION_SALON + 2.0)
+	apres = Time.get_ticks_msec() - exclu_a
+	_check(parti and apres >= int(hote.DELAI_EXCLUSION_SALON * 1000.0) - 50 and apres <= int(hote.DELAI_EXCLUSION_SALON * 1000.0) + 1000,
+		"un exclu qui ne s'en va pas : l'hôte le libère au bout de %d ms (son délai de secours : %.0f s)" % [apres, hote.DELAI_EXCLUSION_SALON])
+	client._issue_decidee = false
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	client.hote_perdu.disconnect(sur_perte)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
+## Phase 7 du jeu en ligne (spec §5 et §9) : un poste qui gèle plus longtemps que le silence toléré (un
+## onglet caché, un téléphone verrouillé : plus aucune image) a été déclaré parti par l'hôte ; la perte de
+## l'hôte qu'il constate à son retour dit « Tu as été déconnecté », pas « L'hôte a quitté la partie ». D'abord
+## la règle, puis entre l'autoload, hôte, et un second poste client dans ce même processus : le client se tait
+## (`set_process(false)` : plus d'image ni de battement ; sa `SceneMultiplayer` relève encore ses paquets,
+## comme le navigateur à la première image du retour), l'hôte le libère, le client l'apprend.
+func _tester_retour_de_gel() -> void:
+	print("-- Retour d'un gel : « Tu as été déconnecté » (phase 7)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé
+	var silence_ms := int(reseau.SILENCE_SESSION * 1000.0)
+	# Un instant synthétique, une minute plus tard : chaque `_derniere_image` posée ci-dessous reste positive
+	# (0 veut dire « encore aucune image »), même si ce test passe dans les 11 premières secondes du processus.
+	var maintenant := Time.get_ticks_msec() + 60_000
+	var image_avant: int = reseau._derniere_image
+	var gel_avant: int = reseau._fin_du_gel
+	reseau._fin_du_gel = 0
+	reseau._derniere_image = maintenant - 500
+	var sans_gel: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._derniere_image = maintenant - silence_ms - 1000
+	var pendant: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._derniere_image = maintenant
+	reseau._fin_du_gel = maintenant - 1500
+	var peu_apres: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau._fin_du_gel = maintenant - int(reseau.RETOUR_DE_GEL * 1000.0) - 500
+	var longtemps_apres: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau.definir_silence(reseau.SILENCE_CHARGEMENT)
+	reseau._derniere_image = maintenant - 15000
+	var au_chargement: bool = reseau.au_retour_d_un_gel(maintenant)
+	reseau.definir_silence(reseau.SILENCE_SESSION)
+	_check(not sans_gel and pendant and peu_apres and not longtemps_apres and not au_chargement,
+		"un gel de ce poste : plus de 10 s sans image (encore aucune image depuis), ou une image qui l'a suivi il y a %.0f s au plus ; pas une image d'il y a 0,5 s, ni 15 s pendant le chargement (30 s tolérées)"
+			% reseau.RETOUR_DE_GEL)
+	var raisons: Array[String] = []
+	var sur_perte := func() -> void: raisons.append(reseau.raison_perte)
+	reseau.hote_perdu.connect(sur_perte)
+	# Un gel qui vient de finir (sa première image passée à l'instant) : une `_derniere_image` reculée de
+	# plus que le silence serait négative au début du processus, lue comme « encore aucune image ».
+	reseau._derniere_image = Time.get_ticks_msec()
+	reseau._fin_du_gel = Time.get_ticks_msec()
+	reseau._decider(&"hote_perdu")
+	await process_frame
+	reseau._fin_du_gel = 0
+	reseau._derniere_image = Time.get_ticks_msec()
+	reseau._decider(&"hote_perdu")
+	await process_frame
+	reseau.hote_perdu.disconnect(sur_perte)
+	_check(raisons == [reseau.PERTE_DECONNECTE, reseau.PERTE_HOTE] and not reseau._perte_apres_gel,
+		"l'hôte perdu au retour d'un gel : « Tu as été déconnecté » ; sans gel, « L'hôte a quitté la partie » (%s)" % [raisons])
+	reseau._derniere_image = maxi(image_avant, Time.get_ticks_msec())
+	reseau._fin_du_gel = gel_avant
+
+	var hote := reseau
+	var client := _poste_client("PosteCache")
+	var arrives: Array[int] = []
+	var partis: Array[int] = []
+	var pertes: Array[String] = []
+	var sur_arrivee := func(id: int) -> void: arrives.append(id)
+	var sur_depart := func(id: int) -> void: partis.append(id)
+	var sur_perte_client := func() -> void: pertes.append(client.raison_perte)
+	hote.joueur_arrive.connect(sur_arrivee)
+	hote.joueur_parti.connect(sur_depart)
+	client.hote_perdu.connect(sur_perte_client)
+	hote.pseudo = "Hôte"
+	client.pseudo = "Caché"
+	_check(hote.heberger(17782) == OK and client.rejoindre("127.0.0.1", 17782) == OK, "(pré-condition) un hôte et un client dans ce processus")
+	_check(await _attendre(func() -> bool: return arrives.size() == 1 and client._entendus.has(1), 3.0), "(pré-condition) le client est arrivé")
+	# Des silences raccourcis : 1,5 s chez l'hôte, 1 s chez le client (son gel le dépasse quand l'hôte le libère)
+	hote.definir_silence(1.5)
+	client.definir_silence(1.0)
+	client._prochain_battement = 0
+	client._battre(Time.get_ticks_msec())  # un dernier battement, puis plus rien
+	client.set_process(false)
+	_check(await _attendre(func() -> bool: return partis.size() == 1 and pertes.size() == 1, 5.0),
+		"l'hôte libère le client muet ; le client l'apprend au relevé de ses paquets, avant sa prochaine image")
+	client.set_process(true)
+	_check(pertes == [client.PERTE_DECONNECTE] and not client.en_ligne(),
+		"au retour de son gel : « Tu as été déconnecté » (%s), ce poste hors réseau" % [pertes])
+	hote.joueur_arrive.disconnect(sur_arrivee)
+	hote.joueur_parti.disconnect(sur_depart)
+	client.hote_perdu.disconnect(sur_perte_client)
+	hote.quitter()
+	await _retirer_poste(client)
+	hote.pseudo = ""
+
+
 ## Phase 19 (M7 de la revue de la phase 11) : `application/config/version` est aussi la version du
 ## protocole, présentée à la poignée de main ; deux postes de versions différentes se
 ## refusent (« Version différente de l'hôte »), deux postes de la même version doivent donc parler le même
@@ -2786,12 +3113,20 @@ func _tester_transport_webrtc() -> void:
 	print("-- Transport WebRTC (phase 4, sans navigateur)")
 	var pilote: Node = root.get_node("PiloteWeb")  # autoload : jamais nommé
 	_check(not pilote.actif and not pilote.is_processing(), "le pilote du test de bout en bout est inerte hors de l'export Web pilote")
+	# Phase 7 (spec §5) : les canaux non fiables du navigateur gardent un paquet DUREE_NON_FIABLE ms au plus. Le
+	# navigateur ignore l'option `maxPacketLifetime` que leur donne Godot : le correctif la lui passe sous son nom
+	# du standard, une fois par page, à la création du transport (vérifié dans le navigateur par le bout en bout)
+	var correctif := TransportWebRTC.CORRECTIF_CANAUX
+	_check(TransportWebRTC.DUREE_NON_FIABLE == 100 and correctif.contains("maxPacketLifeTime: options.maxPacketLifetime")
+		and correctif.contains("delete options.maxPacketLifetime") and correctif.contains("if (p.lelionCanaux) return")
+		and FileAccess.get_file_as_string("res://Scripts/TransportWebRTC.gd").contains("		JavaScriptBridge.eval(CORRECTIF_CANAUX, true)"),
+		"les canaux non fiables du navigateur : un paquet perdu renvoyé 100 ms au plus (le correctif de l'option maxPacketLifetime de Godot, posé une fois par page)")
 	# Vague finale (T4) : une commande mal formée (nom, nombre ou types d'arguments) est rejetée, retirée de
 	# la file, sans bloquer celles qui suivent ; une commande bien formée qui ne peut pas encore s'exécuter
 	# (« pret » hors du salon) reste en tête.
 	var duree_avant: float = ReglesBataille.duree_manche
 	pilote._commandes = [["duree", "dix"], ["duree"], ["peindre"], ["peindre", 1, 2], ["peindre", 0], ["peindre", 0.0], ["duree", -3.0], ["creer", 7],
-		["rejoindre"], ["pret", true], 5, [], ["voler"], ["pret"], ["quitter"]]
+		["rejoindre"], ["pret", true], ["rencontrer", 1.0], 5, [], ["voler"], ["pret"], ["quitter"]]
 	pilote._vider_commandes()
 	_check(pilote._commandes == [["pret"], ["quitter"]] and ReglesBataille.duree_manche == duree_avant,
 		"le pilote rejette les commandes mal formées (nombre et types d'arguments), retirées de la file ; « pret » hors du salon attend (%s)" % [pilote._commandes])
@@ -3113,6 +3448,31 @@ func _servir_transports(transports: Array, condition: Callable, delai: float) ->
 	return condition.call()
 
 
+## Un second poste dans ce processus (phase 7, comme `_tester_battement`) : un second `Reseau` (le script
+## chargé : l'autoload n'est pas nommé) sous sa propre `SceneMultiplayer`, posée par `set_multiplayer` sur un
+## nœud à lui, nommé `nom` (le `SceneTree` la relève aussi) ; `_retirer_poste` le défait.
+func _poste_client(nom: String) -> Node:
+	var noeud := Node.new()
+	noeud.name = nom
+	root.add_child(noeud)
+	set_multiplayer(SceneMultiplayer.new(), noeud.get_path())
+	var client: Node = load("res://Scripts/Reseau.gd").new()
+	client.name = "Reseau"  # vu de sa propre API, au même chemin que l'autoload : les RPC s'y retrouvent
+	noeud.add_child(client)
+	return client
+
+
+## Défait le poste `client` de `_poste_client` : il quitte le réseau, son départ fini, puis son nœud et son
+## API partent.
+func _retirer_poste(client: Node) -> void:
+	client.quitter()
+	await _attendre(func() -> bool: return client._partants.is_empty(), 2.0)
+	var noeud: Node = client.get_parent()
+	var chemin := noeud.get_path()
+	noeud.queue_free()
+	set_multiplayer(null, chemin)
+
+
 ## Les fichiers du dossier `dossier` qui finissent par `suffixe`, triés.
 func _fichiers_du_dossier(dossier: String, suffixe: String) -> PackedStringArray:
 	var fichiers := PackedStringArray()
@@ -3121,6 +3481,18 @@ func _fichiers_du_dossier(dossier: String, suffixe: String) -> PackedStringArray
 			fichiers.append(f)
 	fichiers.sort()
 	return fichiers
+
+
+## Les chemins des fichiers de suffixe `suffixe` sous `dossier`, sous-dossiers compris.
+func _fichiers_recursifs(dossier: String, suffixe: String) -> PackedStringArray:
+	var chemins := PackedStringArray()
+	for f in _fichiers_du_dossier(dossier, suffixe):
+		chemins.append(dossier.path_join(f))
+	var sous_dossiers := DirAccess.get_directories_at(dossier)
+	sous_dossiers.sort()
+	for d in sous_dossiers:
+		chemins.append_array(_fichiers_recursifs(dossier.path_join(d), suffixe))
+	return chemins
 
 
 ## Sert l'hôte (`Reseau`) et le pair `autre` jusqu'à ce que la connexion d'ENet soit établie des deux

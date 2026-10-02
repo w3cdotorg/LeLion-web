@@ -51,7 +51,7 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 | 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ➕ `Scripts/PiloteWeb.gd` ✏️ `Scripts/Transport.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scripts/CodeSalle.gd` ✏️ `project.godot` ✏️ `export_presets.cfg` ✏️ `Assets/Traductions/traductions.csv` ➕ `tests/web/` ✏️ tests (`unitaires`, `smoke_test`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. Faite (PR #6). |
 | 5 | **Déploiement** (compte Cloudflare, application TURN et secrets prêts, avec l'utilisateur) : tag `vX.Y` → `wrangler deploy` puis GitHub Pages ; URL du Worker dans le réglage `lelion/signalisation/url`. Vérifier ici : TURN sans carte bancaire. | ✏️ `.github/workflows/ci.yml` ✏️ `project.godot` ✏️ `signalisation/wrangler.jsonc` ✏️ `README.md` | Première partie en ligne sur `https://w3cdotorg.github.io/LeLion-web/`. |
 | 6 | **Mobiles** (§6) : contrôles tactiles au salon et en manche, voile portrait, plein écran au premier toucher, son en `Stream`, *Créer une partie* absent sur mobile ; profil mobile (150/60/8) du banc de la prédiction. ◉ | ✏️ `Scripts/Parametres.gd` ✏️ `Scripts/ControlesTactiles.gd` ✏️ `Scenes/ControlesTactiles.tscn` ✏️ `Scripts/Salon.gd` ✏️ `Scenes/Salon.tscn` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Main.gd` ✏️ `Scripts/Resultats.gd` ✏️ `Scripts/PauseMenu.gd` ✏️ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/PiloteWeb.gd` ✏️ `project.godot` ✏️ `export_presets.cfg` ✏️ `Assets/Traductions/traductions.csv` ✏️ tests (`unitaires`, `smoke_test`, `prediction_test`, `screenshots`, `web/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Captures 360×640 et 844×390 ; banc vert sous le profil mobile. Faite (PR #7). |
-| 7 | **Sécurité du jeu et documentation** (§8.2) : débit des RPC des clients, pseudos nettoyés, exclusion par l'hôte (croix sur la carte, message à l'exclu) ; README « Jouer en ligne » ; fiche `docs/essai-en-ligne.md`. ◉ | ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Salon.gd` ✏️ `tests/unitaires.gd` ✏️ `README.md` ➕ `docs/essai-en-ligne.md` | Unitaires des limites et de l'exclusion ; fiche prête pour l'essai. |
+| 7 | **Sécurité du jeu et documentation** (§8.2) : débit des RPC des clients, pseudos nettoyés, exclusion par l'hôte (croix sur la carte, message à l'exclu) ; README « Jouer en ligne » ; fiche `docs/essai-en-ligne.md`. ◉ | ➕ `Scripts/LimiteDebit.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Manche.gd` ✏️ `Scripts/Main.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scenes/Salon.tscn` ✏️ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/PiloteWeb.gd` ✏️ `project.godot` ✏️ `Assets/Traductions/traductions.csv` ✏️ tests (`unitaires`, `smoke_test`, `web/`) ✏️ spec ✏️ `README.md` ➕ `docs/essai-en-ligne.md` | Unitaires des limites et de l'exclusion ; fiche prête pour l'essai. Faite (PR #8). |
 | 7 bis | **Réglages de l'essai réel** : les réponses de `docs/essai-en-ligne.md` (latence, `InterpolationLion.RETARD`, TURN, mobiles, Safari iOS). | selon l'essai | |
 
 ## Points de vigilance transverses
@@ -192,3 +192,21 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 - La phase 6 ne change ni le protocole ni la surface d'attaque.
 - Fiche de l'essai réel : plein écran Android au relâchement ; premier toucher sur le champ pseudo (clavier et plein écran en même temps) ; lisibilité des textes des Résultats (~10 px CSS) ; zone morte effective du joystick (0,5) ; appareil lent ; Retour à 24 px du coin ; contraste du libellé PRÊT/VOMIR (rose sur anneau rose) ; une tranche de la rangée du pseudo au bord haut quand le clavier est ouvert ; un hôte desktop tactile voit les flèches du salon ; le réglage Plein écran ne reflète pas le mode du téléphone ; position du joystick codée en dur dans le pilote.
 - « Tu as été déconnecté » et « Garde cet onglet au premier plan ».
+
+### Notes de la revue de la phase 7 (pour les phases 5 et 7 bis)
+
+**Phase 5** :
+
+- Déployer depuis le tag v0.21.
+- Vérifier si les journaux d'invocation de Workers Logs enregistrent l'IP du client ; les couper, ou garder le README en accord.
+- Mettre à jour l'URL et le paragraphe de vie privée du README.
+- Le correctif des canaux part aussi dans le préréglage « Web » ordinaire (il n'est pas derrière le pilote) : vérifier à la main la durée de vie d'un canal sur la page déployée.
+
+**Phase 7 bis** :
+
+- Les canaux du navigateur jettent désormais vraiment des paquets : surveiller « autres lions saccadés » et `RETARD`.
+- iOS peut recharger une page passée en arrière-plan au lieu d'afficher « Tu as été déconnecté ».
+- `_battement`, `_scene_chargee` et les paquets de poignée de main ne sont pas limités en débit (seulement bornés par le transport).
+- Signaler en amont à Godot le nom `maxPacketLifetime` (le correctif reste idempotent si Godot renomme la clé).
+- Détecter les marques combinantes de façon générique (catégories Mn/Me).
+- Mineurs reportés : seau créé pour l'id 1 chez un client ; gel de 10-30 s pendant le chargement (« L'hôte a quitté », acceptable) ; consigne visible pendant le changement de scène ; `cartes_titres` peut-être vide (vérification vide) ; pages non synchronisées avant la rencontre.

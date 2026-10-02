@@ -21,7 +21,8 @@ extends Node
 ##   jamais appliqué en retard) : seules la redondance (3 précédentes par paquet) et l'insertion dans
 ##   le désordre le couvrent. Il remet le lion au repos après SILENCE_COMMANDES de temps de jeu sans
 ##   paquet (pas l'horloge murale, M4 de la revue finale : un rattrapage de ticks physiques après un
-##   gel de l'hôte ne doit pas se lire comme un silence).
+##   gel de l'hôte ne doit pas se lire comme un silence). Il admet COMMANDES_PAR_TICK paquets par tick
+##   et par client (spec §8.2 du jeu en ligne) et jette le reste (`admettre_commandes`).
 ## - Tampons : chaque tampon de la ville de l'hôte (`Ville.tampon_peint`) est diffusé, regroupé par
 ##   tick physique, sur le canal fiable 1 (`Peinture.encoder_tampons`) ; un client le dessine
 ##   (`Ville.peindre_tampon_recu`).
@@ -69,6 +70,14 @@ const SILENCE_COMMANDES := 500
 const INTERVALLE_TERRITOIRE := 0.2
 ## Canal ENet des tampons et du territoire (spec §4 : canal 1, fiable ordonné).
 const CANAL_PEINTURE := 1
+## Paquets de commandes admis par tick et par client, chez l'hôte (spec §8.2) : un client en envoie un par
+## tick ; au-delà de deux, l'hôte les jette (`LimiteDebit`). Le tick est celui de la cadence du jeu
+## (`Engine.physics_ticks_per_second`, 60 : 120 paquets par seconde), mesuré à l'horloge de l'hôte, pas à
+## ses ticks physiques : un hôte lent, qui en fait moins (la CI sous Firefox, mesuré), jetterait les paquets
+## d'un client qui joue. La rafale admise d'un coup : RAFALE_COMMANDES, deux secondes d'un client (un hôte
+## figé deux secondes, un onglet ralenti, ne jette aucun des paquets accumulés).
+const COMMANDES_PAR_TICK := 2
+const RAFALE_COMMANDES := 120
 
 ## Délai de la barrière de chargement de la prochaine manche : DELAI_CHARGEMENT, réglable par les
 ## tests réseau (le script de la manche, `load("res://Scripts/Manche.gd")`, porte cette variable).
@@ -108,6 +117,8 @@ var _ville: Node2D
 var _commandes: Dictionary[int, Commandes] = {}
 ## Hôte : par index de joueur, l'instant (ms de temps de jeu) du dernier paquet de commandes reçu.
 var _recues: Dictionary[int, int] = {}
+## Hôte : le débit des paquets de commandes de chaque client (COMMANDES_PAR_TICK par tick), en secondes.
+var _limite_commandes := LimiteDebit.new(COMMANDES_PAR_TICK * Engine.physics_ticks_per_second, RAFALE_COMMANDES)
 ## Hôte : les clients dont la scène est chargée, destinataires de tout ce que diffuse la manche.
 var _prets: Array[int] = []
 ## Hôte : les clients exclus par la barrière, qui partent.
@@ -307,10 +318,23 @@ func _recevoir_commandes(octets: Variant) -> void:
 	if not _hote:
 		return
 	var id := multiplayer.get_remote_sender_id()
+	if not admettre_commandes(id):
+		return
 	for j in GameState.joueurs:
 		if j.id_reseau == id:
 			recevoir_paquet_de(j.index, octets, int(_temps_manche * 1000.0))
 			return
+
+
+## Chez l'hôte : vrai si le paquet de commandes du client `id` passe (COMMANDES_PAR_TICK par tick du jeu,
+## RAFALE_COMMANDES d'un coup, spec §8.2), lisible ou non ; au-delà, il est jeté (un avertissement au premier
+## rejet de ce client, pas à chacun). Un client qui joue n'en envoie qu'un par tick : il n'est jamais limité.
+func admettre_commandes(id: int) -> bool:
+	if _limite_commandes.admettre(id, Time.get_ticks_msec() / 1000.0):
+		return true
+	if _limite_commandes.rejets[id] == 1:
+		push_warning("Manche : plus de %d paquets de commandes par tick du client %d (une inondation, ou une rafale après un gel de l'hôte), l'excédent est jeté" % [COMMANDES_PAR_TICK, id])
+	return false
 
 
 ## Chez l'hôte : le paquet de commandes `octets` du joueur d'index `index` (la dernière et jusqu'à 3
@@ -571,6 +595,7 @@ func _recevoir_fin_manche(recu: Variant) -> void:
 ## Chez l'hôte : le client `id` est parti (ou a été exclu).
 func _sur_depart_reseau(id: int) -> void:
 	_prets.erase(id)
+	_limite_commandes.oublier(id)
 	for j in GameState.joueurs:
 		if j.id_reseau == id:
 			_commandes.erase(j.index)

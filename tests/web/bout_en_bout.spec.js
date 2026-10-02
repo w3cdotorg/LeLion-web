@@ -2,24 +2,34 @@
 // signalisation en local. Chaque page est menée par le pilote de l'export « Web pilote »
 // (Scripts/PiloteWeb.gd) : des commandes poussées dans window.lelionPilote.commandes, son état relu
 // dans window.lelionPilote.etat, par les vrais écrans du jeu (titre, En ligne, salon, manche). Le mobile,
-// lui, joue au doigt : de vrais touchers de la page, aux places que l'état du pilote donne.
+// lui, joue au doigt : de vrais touchers de la page, aux places que l'état du pilote donne ; l'hôte exclut un
+// joueur d'un vrai clic sur la croix de sa carte (phase 7).
 import { devices, expect, test } from "@playwright/test";
 
 const ALPHABET = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
 const HOTE_PARTI = "L'hôte a quitté la partie";
+const EXCLU = "L'hôte t'a exclu de la partie.";
+const DECONNECTE = "Tu as été déconnecté";
 
 /**
  * Le bruit connu des consoles des pages : des lignes d'erreur qui ne disent rien du jeu (aucune pour
  * l'instant). Toute autre ligne qui contient « SCRIPT ERROR » ou « ERROR: » (une erreur de script, un
- * push_error, une erreur du moteur) fait échouer le test.
+ * push_error, une erreur du moteur), une exception JavaScript de la page (« PAGEERROR », phase 7) ou un client
+ * que l'hôte limite (« l'excédent est jeté » : un joueur ne doit jamais l'être) fait échouer le test.
  */
 const BRUIT_CONNU = [];
 
 /** Les erreurs des consoles `consoles` (une liste de lignes par page) hors du bruit connu, par page. */
 function erreurs(consoles) {
 	return consoles.map((lignes) =>
-		lignes.filter((ligne) => /SCRIPT ERROR|ERROR:/.test(ligne) && !BRUIT_CONNU.some((bruit) => bruit.test(ligne))),
+		lignes.filter((ligne) => /SCRIPT ERROR|ERROR:|PAGEERROR|l'excédent est jeté/.test(ligne) && !BRUIT_CONNU.some((bruit) => bruit.test(ligne))),
 	);
+}
+
+/** Note dans `lignes` la console de `page` et ses exceptions JavaScript (une erreur que la console ne dit pas). */
+function ecouter(page, lignes) {
+	page.on("console", (message) => lignes.push(message.text()));
+	page.on("pageerror", (erreur) => lignes.push(`PAGEERROR ${erreur.message}`));
 }
 
 /**
@@ -33,7 +43,7 @@ async function ouvrir(navigateur, chemin, consoles, rang = 0) {
 	const page = await contexte.newPage();
 	const lignes = [];
 	consoles?.push(lignes);
-	page.on("console", (message) => lignes.push(message.text()));
+	ecouter(page, lignes);
 	await page.goto(chemin);
 	await page.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	return page;
@@ -62,10 +72,13 @@ async function attendre(page, condition, message, delai = 30_000) {
 	return dernier;
 }
 
-test("une manche à trois pages par le lien d'invitation : même empreinte partout, départ de l'hôte vu @manche", async ({ browser }) => {
+test("une manche à trois pages par le lien d'invitation, un joueur exclu qui revient, les lions qui se croisent : même empreinte partout, départ de l'hôte vu @manche", async ({ browser }) => {
+	// Le plus long des tests : 216 s mesurés sur les 300 s du réglage commun, quand la machine est bridée
+	// (Chromium ralenti rend la manche de 14 s en plus de 60 s) ; une marge, sans toucher aux autres tests.
+	test.setTimeout(420_000);
 	const consoles = [];
 	const hote = await ouvrir(browser, "/", consoles);
-	await commander(hote, "duree", 10);
+	await commander(hote, "duree", 14);
 	await commander(hote, "creer", "Hote");
 	const salle = await attendre(hote, (e) => e.scene === "Salon" && ALPHABET.test(e.code), "l'hôte a sa salle");
 	const code = salle.code;
@@ -78,7 +91,7 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 		const accueil = await attendre(page, (e) => e.scene === "EcranEnLigne", `${pseudo} : le lien ouvre l'écran En ligne`);
 		expect(accueil.ecran.code).toBe(`${code.slice(0, 3)}-${code.slice(3)}`);
 		expect(accueil.en_ligne).toBe(false);
-		await commander(page, "duree", 10);
+		await commander(page, "duree", 14);
 		await commander(page, "rejoindre", pseudo);
 		await attendre(page, (e) => e.scene === "Salon", `${pseudo} arrive au salon (canal WebRTC ouvert, poignée de main faite)`);
 		invites.push(page);
@@ -86,6 +99,34 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	const pages = [hote, ...invites];
 	for (const page of pages) {
 		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna,Bruno", "la même table du salon partout");
+	}
+	// Spec §5 : les canaux non fiables gardent un paquet 100 ms au plus (le correctif de TransportWebRTC : sans lui,
+	// le navigateur ignore l'option de Godot et ces canaux sont fiables)
+	for (const page of pages) expect((await etat(page)).canaux, "les canaux non fiables, 100 ms").toEqual([100, 100]);
+
+	// L'exclusion (spec §8.2), d'un vrai clic de l'hôte sur la croix de la carte de Bruno : Bruno lit « L'hôte t'a
+	// exclu de la partie. » sur l'écran En ligne, sa carte se libère partout ; il revient avec le code, en nouvel
+	// arrivant (rien ne l'identifie)
+	const bruno = invites[1];
+	const salon = (await etat(hote)).salon;
+	expect(salon.table[0].croix, "pas de croix sur la carte de l'hôte").toEqual([]);
+	expect(salon.table[2].croix.length, "la croix de la carte de Bruno, chez l'hôte").toBe(2);
+	expect((await etat(invites[0])).salon.table.every((f) => f.croix.length === 0), "aucune croix chez un client").toBe(true);
+	await hote.mouse.click(salon.table[2].croix[0], salon.table[2].croix[1]);
+	// Sous Xvfb, sans gestionnaire de fenêtres, le clic monte la fenêtre de l'hôte au-dessus des autres : Firefox
+	// ne dessine plus celle d'Anna, entièrement couverte, et son jeu s'y fige (mesuré : 2 images en 3 s). Les
+	// fenêtres des invités remontent, dans leur ordre. Fait sous chaque navigateur (Chromium compris, sans dommage) :
+	// le test ne dépend pas du navigateur qui le joue.
+	for (const page of invites) await page.bringToFront();
+	const exclu = await attendre(bruno, (e) => e.scene === "EcranEnLigne" && e.pertes.includes(EXCLU), "Bruno, exclu, revient à l'écran En ligne");
+	expect(exclu.ecran.message).toBe(EXCLU);
+	for (const page of [hote, invites[0]]) {
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna", "la carte de Bruno se libère partout");
+	}
+	await commander(bruno, "rejoindre", "Bruno", code);
+	await attendre(bruno, (e) => e.scene === "Salon", "Bruno revient avec le code");
+	for (const page of pages) {
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna,Bruno", "de nouveau la même table partout");
 	}
 
 	for (const page of pages) await commander(page, "pret");
@@ -97,10 +138,13 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	// peine) ; Bruno, le plus à droite, que le bord arrête à l'aller (sa gerbe y tombe hors de la ville :
 	// mesuré, 1 à 7 cellules sans retour), peint au retour.
 	for (const page of pages) await commander(page, "peindre", 1);
-	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 60_000);
+	// Puis la rencontre (phase 7, la note de la revue de la phase 4) : chaque lion va au milieu de l'écran en
+	// vomissant ; ils s'y heurtent et leurs gerbes les étourdissent, ce que l'hôte décide et que chaque page suit
+	for (const page of pages) await commander(page, "rencontrer");
+	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 150_000);
 
 	const fins = [];
-	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 10 s finit partout", 60_000));
+	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 14 s finit partout", 150_000));
 	const empreintes = consoles.map((lignes) => lignes.find((l) => l.startsWith("EMPREINTE ")));
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
@@ -111,6 +155,13 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	console.log(`Fin de manche : scores ${fins[0].scores} ; ${cadences}`);
 	// Les scores du territoire : à l'index 0 les cellules de personne, puis un par joueur (l'hôte, Anna, Bruno).
 	for (const fin of fins) expect(fin.scores.slice(1, 4).every((cellules) => cellules > 0), `chacun a peint : ${fin.scores} (${cadences})`).toBe(true);
+	// La rencontre : des chocs (et des étourdissements, comptés), le bilan de l'hôte le même sur chaque page
+	const bilans = fins.map((fin) => fin.manche.bilan);
+	const somme = (valeurs) => valeurs.reduce((a, b) => a + b, 0);
+	console.log(`Rencontre : étourdissements ${bilans[0].etourdissements}, chocs ${bilans[0].chocs}`);
+	expect(bilans[1]).toEqual(bilans[0]);
+	expect(bilans[2]).toEqual(bilans[0]);
+	expect(somme(bilans[0].chocs), `les lions se sont heurtés : ${JSON.stringify(bilans[0])}`).toBeGreaterThan(0);
 
 	const depart = Date.now();
 	await commander(hote, "quitter");
@@ -140,7 +191,7 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 	});
 	const page = await contexte.newPage();
 	const lignes = [];
-	page.on("console", (message) => lignes.push(message.text()));
+	ecouter(page, lignes);
 	await page.goto("/");
 	await page.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	await commander(page, "creer", "Hote");
@@ -153,6 +204,9 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 });
 
 test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et le jeu continue @mobile", async ({ browser }) => {
+	// 234 à 248 s mesurés sur les 300 s du réglage commun, la machine bridée à 1 CPU (le gel de 12 s compris) : une
+	// marge, comme pour @manche
+	test.setTimeout(420_000);
 	const consoles = [];
 	const hote = await ouvrir(browser, "/", consoles);
 	await commander(hote, "duree", 12);
@@ -164,7 +218,7 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	const mobile = await contexte.newPage();
 	const lignes = [];
 	consoles.push(lignes);
-	mobile.on("console", (message) => lignes.push(message.text()));
+	ecouter(mobile, lignes);
 	await mobile.goto(`/?salle=${salle.code}`);
 	await mobile.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	// Un mobile : pas de Créer une partie, Rejoindre à la taille d'un doigt (44 px CSS au moins)
@@ -207,36 +261,98 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 
 	await commander(hote, "pret");
 	await commander(hote, "demarrer");
-	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 60_000);
+	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 150_000);
 	const jeu = (await etat(mobile)).manche;
 	expect(jeu.tactile.visible).toBe(true);
-	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces
+	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces ; chaque envoi donne tous les doigts posés
 	const cdp = await contexte.newCDPSession(mobile);
 	const doigts = (type, points) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
 	const [sx, sy] = jeu.tactile.stick;
-	const pousse = jeu.tactile.rayon * 1.2;
-	// Le pouce gauche pose le stick et le pousse vers le bas aux quatre cinquièmes (le lion descend à 60 % de sa
-	// vitesse : la zone morte des actions est de 0,5) : le lion descend vers la ville, un peu sous la hauteur de
-	// peinture (l'hôte, qui fait foi, le voit un peu plus haut que sa prédiction), jamais jusqu'aux toits, 233 px
-	// plus bas, même relu 300 ms trop tard
-	await doigts("touchStart", [[sx, sy]]);
-	await doigts("touchMove", [[sx, sy + jeu.tactile.rayon * 0.8]]);
-	await attendre(mobile, (e) => e.manche?.lion.length === 2 && e.manche.lion[1] >= e.manche.cible + 20, "le stick fait descendre le lion du mobile", 60_000);
-	// Puis vers la gauche (son lion part à droite de l'écran), VOMIR tenu du pouce droit : il peint 2,5 s de jeu
 	const [vx, vy] = jeu.tactile.vomir;
-	await doigts("touchMove", [[sx - pousse, sy]]);
-	await doigts("touchStart", [[sx - pousse, sy], [vx, vy]]);
-	const debut = (await etat(mobile)).manche.temps;
-	await attendre(mobile, (e) => e.manche?.finie || e.manche?.temps >= debut + 2.5, "le mobile peint 2,5 s de jeu", 60_000);
-	await doigts("touchEnd", []);
+	// Les pouces suivent le lion, comme les yeux d'un joueur : l'état du mobile relu, le stick penché en conséquence,
+	// VOMIR tenu, jusqu'à ce que le territoire du mobile (les cellules que lui renvoie l'hôte, qui fait foi) compte
+	// une cellule à lui, ou jusqu'à la fin de la manche. La gerbe ne peint que d'une bande de hauteurs du lion : de
+	// `cible` (233 px au-dessus des toits) à `plancher` (plus bas, elle tombe sous l'écran), 181 px. Une relecture
+	// puis un toucher arrivent tard : le lion fait encore 100 px avant que le pouce ne le retienne (mesuré à 1 comme
+	// à 7 images par seconde), et la relecture elle-même tombe jusqu'à 100 px après un seuil. Descendre d'un trait
+	// jusqu'à la cible, puis lâcher le bas, laissait le lion jusqu'à 200 px plus bas : en CI, arrêté à 850,6 px (le
+	// plancher, 832, plus le rayon de la traceuse : 848), il a vomi 7 s sans rien peindre. Le stick ne descend donc
+	// vite (aux quatre cinquièmes : 60 % de la vitesse, la zone morte des actions est de 0,5) que jusqu'à 150 px
+	// au-dessus de la bande ; puis en biais, à 20 % de la vitesse sur la verticale (le lion avance, sa gerbe devant
+	// lui), jusqu'à son premier quart ; il remonte de même sous son dernier quart, et va de bord en bord.
+	const haut = jeu.cible;
+	const bas = jeu.plancher;
+	const quart = (bas - haut) / 4;
+	expect(bas - haut, `la bande où peindre, de ${haut} à ${bas} px`).toBeGreaterThan(150);
+	let sens = -1; // son lion part à droite de l'écran : d'abord vers la gauche
+	const biais = (vertical) => [sens * Math.sqrt(1 - vertical * vertical), vertical];
+	let pose = null;
+	let vomir = false;
+	const trajet = [];
+	// Une échéance à l'horloge murale, comme les autres attentes du test ; le trajet est journalisé à chaque issue
+	const echeance = Date.now() + 150_000;
+	let dernier = null;
+	await doigts("touchStart", [[sx, sy]]);
+	try {
+		for (;;) {
+			// Une courte pause à chaque tour : la boucle ne dispute pas le processeur au jeu
+			await mobile.waitForTimeout(80);
+			if (Date.now() > echeance) {
+				throw new Error(`les pouces : ni cellule du mobile ni fin de manche en 150000 ms (dernier état ${JSON.stringify(dernier)} ; pouces : ${trajet.join(" ; ")})`);
+			}
+			dernier = await etat(mobile);
+			const manche = dernier.manche;
+			if (manche === undefined) {
+				throw new Error(`les pouces : le mobile n'est plus en manche (scène ${dernier.scene}, dernier état ${JSON.stringify(dernier)} ; pouces : ${trajet.join(" ; ")})`);
+			}
+			if (manche.finie || manche.territoire[2] > 0) {
+				trajet.push(`${manche.finie ? "fin" : "peint"} ${manche.temps.toFixed(1)} s ${manche.lion.map(Math.round)}`);
+				break;
+			}
+			if (manche.lion.length !== 2) continue;
+			const [x, y] = manche.lion;
+			if (x < 300) sens = 1;
+			else if (x > 1500) sens = -1;
+			// La pente du stick, en rayons : le stick poussé au-delà de son bord donne toute la vitesse, dans sa direction
+			let pente;
+			if (y < haut - 150) pente = [0, 0.8];
+			else if (y < haut + quart) pente = biais(0.2).map((v) => v * 1.2);
+			else if (y > bas - quart) pente = biais(-0.2).map((v) => v * 1.2);
+			else pente = [sens * 1.2, 0];
+			const stick = [sx + pente[0] * jeu.tactile.rayon, sy + pente[1] * jeu.tactile.rayon];
+			const nouvelle = stick.join(",");
+			if (nouvelle === pose) continue;
+			pose = nouvelle;
+			trajet.push(`${manche.temps.toFixed(1)} s ${Math.round(x)},${Math.round(y)} ${pente.map((v) => v.toFixed(2)).join("/")}${manche.vomit ? " vomit" : ""}`);
+			await doigts("touchMove", vomir ? [stick, [vx, vy]] : [stick]);
+			if (!vomir && y >= haut - 150) {
+				await doigts("touchStart", [stick, [vx, vy]]);
+				vomir = true;
+			}
+		}
+	} finally {
+		console.log(`Pouces (bande ${haut} à ${bas} px) : ${trajet.join(" ; ")}`);
+		await doigts("touchEnd", []);
+	}
 
 	const fins = [];
-	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 60_000));
+	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 150_000));
 	const empreintes = consoles.map((l) => l.find((ligne) => ligne.startsWith("EMPREINTE ")));
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
 	console.log(`Fin de manche : scores ${fins[0].scores} ; hôte ${fins[0].fps} i/s, mobile ${fins[1].fps} i/s`);
 	// Les scores du territoire : à l'index 0 les cellules de personne, puis l'hôte, puis le mobile
-	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores}`).toBeGreaterThan(0);
+	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores} (pouces : ${trajet.join(" ; ")})`).toBeGreaterThan(0);
+
+	// Un téléphone verrouillé (ou un onglet caché, spec §5) : la page ne rend plus la main, plus aucune image ; 10 s
+	// plus tard, l'hôte déclare le mobile parti. À son retour, « Tu as été déconnecté », puis l'écran En ligne
+	await mobile.evaluate(() => {
+		const fin = Date.now() + 12_000;
+		while (Date.now() < fin);
+	});
+	await attendre(mobile, (e) => e.pertes.includes(DECONNECTE), "au retour, « Tu as été déconnecté »", 15_000);
+	const retour = await attendre(mobile, (e) => e.scene === "EcranEnLigne", "puis l'écran En ligne", 15_000);
+	expect(retour.ecran.message).toBe(DECONNECTE);
+	expect(retour.pertes, "pas « L'hôte a quitté la partie »").not.toContain(HOTE_PARTI);
 	expect(erreurs(consoles), "aucune erreur dans les consoles des deux pages").toEqual([[], []]);
 });

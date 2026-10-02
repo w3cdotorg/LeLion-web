@@ -26,7 +26,13 @@ extends Node
 ## (`_entendus`) ; SILENCE_SESSION sans rien de lui le déclare parti, chez l'hôte comme chez un client,
 ## SILENCE_CHARGEMENT pendant le chargement de la manche (un poste qui charge sa scène ou compile ses
 ## shaders ne répond plus). Chez l'hôte, un client parti, muet ou exclu est libéré (`_liberer`, puis
-## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs.
+## `Transport.liberer`) : son départ arrive par `peer_disconnected`, comme tous les départs. L'hôte
+## exclut un joueur du salon (phase 7 du jeu en ligne, spec §8.2 : `exclure_du_salon`, la croix de sa
+## carte) comme la barrière de chargement exclut un absent (`exclure`) : l'exclu l'apprend, part de
+## lui-même, et l'hôte le libère au plus tard peu après. Un poste qui gèle plus longtemps que le silence
+## toléré (un onglet caché, un téléphone verrouillé : le navigateur arrête ses images) a été déclaré parti
+## pendant ce temps : la perte de l'hôte qu'il constate à son retour est la sienne (`au_retour_d_un_gel`,
+## « Tu as été déconnecté », spec §5 et §9).
 ## `quitter()` part proprement (spec §5) : un adieu fiable (`_recevoir_adieu`), que l'autre côté traite
 ## aussitôt (l'hôte libère ce client, un client perd l'hôte), puis le transport ferme sa session une fois
 ## l'adieu envoyé (`Transport.quitter`, une seconde au plus, en arrière-plan). Le relais du serveur est
@@ -43,7 +49,8 @@ extends Node
 ##
 ## Salon : l'hôte tient la table dans `inscrits` et la diffuse, arrivés seulement, à chaque
 ## changement (`_recevoir_salon`, fiable) ; chaque poste la lit dans `table_salon`. Les clients
-## demandent (couleur, Prêt) et l'hôte arbitre. Tous ces RPC passent par cet autoload, présent au
+## demandent (couleur, Prêt) et l'hôte arbitre, DEMANDES_SALON_PAR_SECONDE demandes par seconde et par
+## client au plus (spec §8.2 : au-delà, il les jette). Tous ces RPC passent par cet autoload, présent au
 ## même chemin sur chaque poste dès la connexion : une table envoyée avant que la scène du salon
 ## soit chargée chez un client l'y attend. Les RPC de l'hôte sont en mode "authority" (le moteur
 ## rejette tout autre émetteur) ; ceux des clients vérifient l'émetteur et leurs arguments. Phase 18 : le
@@ -117,12 +124,26 @@ const REFUS_PLEIN := "RESEAU_REFUS_PLEIN"
 const REFUS_MANCHE := "RESEAU_REFUS_MANCHE"
 const REFUS_DEMANDE := "RESEAU_REFUS_DEMANDE"
 ## Pourquoi l'hôte est perdu (`raison_perte`), en clés de traduction : il est parti (ou ne répond
-## plus), ou il a exclu ce poste (barrière de chargement, phase 18).
+## plus), il a exclu ce poste de la manche (la barrière de chargement, phase 18), ou du salon (phase 7 du
+## jeu en ligne : « L'hôte t'a exclu de la partie. »).
 const PERTE_HOTE := "RESEAU_HOTE_PERDU"
 const PERTE_EXCLU := "RESEAU_EXCLU"
+const PERTE_EXCLU_HOTE := "RESEAU_EXCLU_HOTE"
+## Pourquoi l'hôte est perdu, encore : ce poste revient d'un gel plus long que le silence toléré (un onglet
+## caché, un téléphone verrouillé), pendant lequel l'hôte l'a déclaré parti : « Tu as été déconnecté » (phase
+## 7 du jeu en ligne, spec §9).
+const PERTE_DECONNECTE := "RESEAU_DECONNECTE"
+## Après la fin d'un gel de ce poste, en secondes : une perte de l'hôte constatée pendant ce temps est due au
+## gel (la fermeture du pair par l'hôte, ou le silence de l'hôte, se voient dès la première ou la deuxième
+## image qui suit).
+const RETOUR_DE_GEL := 2.0
 ## Entre l'annonce de son exclusion à un joueur et sa libération par l'hôte, en secondes : le temps que
-## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même.
+## l'annonce arrive (renvoyée au besoin), et que l'exclu s'en aille de lui-même. À la barrière de
+## chargement, la manche attend ce départ ; au salon, rien ne l'attend : le délai y est plus long, pour
+## qu'une annonce retardée (une 4G qui la renvoie) arrive avant la fermeture, qui dirait sinon « L'hôte a
+## quitté la partie ».
 const DELAI_EXCLUSION := 0.5
+const DELAI_EXCLUSION_SALON := 2.0
 ## Pourquoi l'hôte ne peut pas encore démarrer la partie (`raison_attente`), en clés de traduction.
 const ATTENTE_JOUEURS := "SALON_ATTENTE_JOUEURS"
 const ATTENTE_ARRIVEE := "SALON_ATTENTE_ARRIVEE"
@@ -138,6 +159,10 @@ const SILENCE_CHARGEMENT := 30.0
 ## Canal du lancement et du retour au salon, table comprise : le canal fiable ordonné de la manche
 ## (`Manche.CANAL_PEINTURE`, spec §4), phase 18.
 const CANAL_ORDONNE := 1
+## Demandes de salon (couleur, Prêt) admises par seconde et par client, chez l'hôte (spec §8.2) : au-delà,
+## il les jette (`LimiteDebit`, un seau de 10 jetons rempli de 10 par seconde). Un joueur n'en fait jamais
+## autant : le salon n'agit qu'à l'appui d'une touche, d'un bouton ou du stick.
+const DEMANDES_SALON_PAR_SECONDE := 10
 
 ## Ce que `_poser_salon` fait d'une table reçue de l'hôte (M6) : posée, plus ancienne que la dernière
 ## posée (ignorée), ou illisible (ignorée, signalée).
@@ -187,8 +212,8 @@ var numero_table := 0
 ## devancé (M6). Ce que charge chaque poste (`Salon.entrer_en_manche`). Valide d'un lancement au
 ## suivant ; remis à 0 par `quitter()`.
 var niveau_manche := 0
-## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE ou PERTE_EXCLU), posé juste
-## avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
+## Chez un client : pourquoi l'hôte a été perdu la dernière fois (PERTE_HOTE, PERTE_EXCLU, PERTE_EXCLU_HOTE
+## ou PERTE_DECONNECTE), posé juste avant `hote_perdu` ; ce que montrent la scène de jeu et le salon.
 var raison_perte := PERTE_HOTE
 ## Chez un client, ou chez l'hôte dont la partie n'a pas pu être créée : pourquoi la dernière connexion a
 ## échoué, posé juste avant `connexion_echouee` : la raison du transport (Transport.ECHEC_*), ou vide (la
@@ -239,9 +264,9 @@ var _connexion_en_cours := false
 ## (WebRTC : la salle de la signalisation) ; un échec ou une fermeture pendant ce temps est un échec de
 ## connexion : la partie n'a jamais existé.
 var _creation_en_cours := false
-## Chez un client : vrai une fois son exclusion annoncée par l'hôte (`_recevoir_exclusion`), jusqu'à la
-## perte de l'hôte qui suit.
-var _exclu := false
+## Chez un client : la raison de son exclusion annoncée par l'hôte (`_recevoir_exclusion` : PERTE_EXCLU ou
+## PERTE_EXCLU_HOTE), jusqu'à la perte de l'hôte qui suit ; vide sinon.
+var _exclusion := ""
 ## Chez un client : la raison de l'échec du transport de la session (`Transport.echec`), jusqu'à l'échec
 ## de connexion qui suit (`raison_echec`).
 var _raison_transport := ""
@@ -253,6 +278,14 @@ var _entendus: Dictionary[int, int] = {}
 var _prochain_battement := 0
 ## L'instant (ms) de la dernière écoute des silences (`_ecouter`) : celui du verdict de la suivante.
 var _derniere_ecoute := 0
+## Chez l'hôte : le débit des demandes de salon de chaque client (DEMANDES_SALON_PAR_SECONDE), en secondes.
+var _limite_salon := LimiteDebit.new(DEMANDES_SALON_PAR_SECONDE, DEMANDES_SALON_PAR_SECONDE)
+## L'instant (ms) de la dernière image de ce poste (`_process`), en session ou non, et celui de la fin de son
+## dernier gel plus long que le silence toléré (0 : jamais) : voir `au_retour_d_un_gel`.
+var _derniere_image := 0
+var _fin_du_gel := 0
+## Vrai si la perte de l'hôte décidée (`_decider`) suit un gel de ce poste : PERTE_DECONNECTE.
+var _perte_apres_gel := false
 
 
 func _ready() -> void:
@@ -365,6 +398,7 @@ func quitter() -> void:
 	scenes_chargees.clear()
 	silence = SILENCE_SESSION
 	_entendus.clear()
+	_limite_salon.vider()
 	code_partie = ""
 	raison_salle_fermee = ""
 	_raison_transport = ""
@@ -375,7 +409,8 @@ func quitter() -> void:
 	places_reservees = 0
 	numero_table = 0
 	niveau_manche = 0
-	_exclu = false
+	_exclusion = ""
+	_perte_apres_gel = false
 	index_local = -1
 	couleur_locale = Color.TRANSPARENT
 	manche_en_cours = false
@@ -402,14 +437,18 @@ func _brancher(transport: Transport) -> void:
 	transport.salle_fermee.connect(_sur_transport_salle_fermee.bind(_generation))
 
 
-## En session, le transport, le battement et l'écoute des silences ; puis les départs en cours, oubliés
-## une fois leur transport fermé. Un transport de session qui se ferme de lui-même (`servir()` faux sans
-## `quitter()` ni `clore()`) : la session est perdue (`_sur_hote_perdu`), sans battement ni écoute.
+## La fin d'un gel de ce poste (`au_retour_d_un_gel`), puis, en session, le transport, le battement et
+## l'écoute des silences ; puis les départs en cours, oubliés une fois leur transport fermé. Un transport de
+## session qui se ferme de lui-même (`servir()` faux sans `quitter()` ni `clore()`) : la session est perdue
+## (`_sur_hote_perdu`), sans battement ni écoute.
 func _process(_delta: float) -> void:
+	var maintenant := Time.get_ticks_msec()
+	if _derniere_image > 0 and maintenant - _derniere_image > int(silence * 1000.0):
+		_fin_du_gel = maintenant
+	_derniere_image = maintenant
 	if _transport != null and not _transport.servir():
 		_sur_hote_perdu()
 	elif en_ligne():
-		var maintenant := Time.get_ticks_msec()
 		_battre(maintenant)
 		_ecouter(maintenant)
 	for partant: Transport in _partants.duplicate():
@@ -468,6 +507,16 @@ func _ecouter(maintenant: int) -> void:
 			_decider("hote_perdu")
 
 
+## Vrai si ce poste revient, à `maintenant` (ms), d'un gel plus long que le silence toléré : sans image
+## depuis plus que `silence` (la première image après un onglet caché ou un téléphone verrouillé n'est pas
+## encore passée : la fermeture de son pair par l'hôte arrive au relevé des paquets, avant elle), ou une
+## image qui a suivi un tel gel il y a RETOUR_DE_GEL secondes au plus. L'hôte l'a alors déclaré parti : son
+## silence a dépassé le même délai chez lui (spec §2 : 10 s pour tout le monde).
+func au_retour_d_un_gel(maintenant: int) -> bool:
+	return (_derniere_image > 0 and maintenant - _derniere_image > int(silence * 1000.0)) \
+		or (_fin_du_gel > 0 and maintenant - _fin_du_gel <= int(RETOUR_DE_GEL * 1000.0))
+
+
 ## Les identifiants de `entendus` (identifiant → instant, en ms, du dernier paquet reçu) dont le silence
 ## dépasse `silence_ms` à `maintenant`, dans l'ordre croissant.
 static func pairs_muets(entendus: Dictionary[int, int], maintenant: int, silence_ms: int) -> Array[int]:
@@ -515,16 +564,43 @@ func _recevoir_adieu() -> void:
 		_decider("hote_perdu")
 
 
-## Chez l'hôte : le joueur `id` n'a pas chargé sa scène de jeu à temps (la barrière de la manche,
-## `Manche._exclure`) : il apprend son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU, pas
-## « L'hôte a quitté la partie ») et s'en va de lui-même ; DELAI_EXCLUSION plus tard, l'hôte le libère
+## Chez l'hôte : exclut le joueur `id`, qui n'a pas chargé sa scène de jeu à temps (la barrière de la
+## manche, `Manche._exclure`), ou que l'hôte exclut du salon (`par_l_hote`, `exclure_du_salon`) : il apprend
+## son exclusion (`_recevoir_exclusion` : il verra PERTE_EXCLU ou PERTE_EXCLU_HOTE, pas « L'hôte a quitté la
+## partie ») et s'en va de lui-même ; DELAI_EXCLUSION (DELAI_EXCLUSION_SALON) plus tard, l'hôte le libère
 ## s'il est encore là (`_liberer` : figé, il n'a pas lu l'annonce) : son départ arrive par
 ## `joueur_parti`.
-func exclure(id: int) -> void:
+func exclure(id: int, par_l_hote := false) -> void:
 	if not multiplayer.is_server() or not multiplayer.get_peers().has(id):
 		return
-	_recevoir_exclusion.rpc_id(id)
-	get_tree().create_timer(DELAI_EXCLUSION, true).timeout.connect(_liberer.bind(id, _generation))
+	_recevoir_exclusion.rpc_id(id, par_l_hote)
+	var delai := DELAI_EXCLUSION_SALON if par_l_hote else DELAI_EXCLUSION
+	get_tree().create_timer(delai, true).timeout.connect(_liberer.bind(id, _generation))
+
+
+## Chez l'hôte, depuis le salon (la croix de sa carte, spec §8.2) : exclut le joueur arrivé `id`, qui lit
+## « L'hôte t'a exclu de la partie. » et s'en va (`exclure`). Faux, sans rien faire, chez un client, pendant
+## une manche, pour l'hôte lui-même, un inconnu, une place seulement réservée (pas de carte) ou un joueur
+## déjà exclu. Jusqu'à son départ (DELAI_EXCLUSION_SALON au plus), sa fiche reste, marquée `exclu` chez
+## l'hôte seulement (`table_de` ne la copie pas : ni le fil ni l'empreinte du protocole ne changent) et plus
+## prête : ni Prêt ni couleur ne la changent, sa croix est cachée (`est_exclu`), et la manche ne démarre pas
+## (`lancer_manche`). Sans compte, rien n'identifie durablement un joueur (spec §13) : un exclu peut revenir
+## avec le code, en nouvel arrivant, et l'hôte l'exclut de nouveau.
+func exclure_du_salon(id: int) -> bool:
+	var fiche: Dictionary = inscrits.get(id, {})
+	if not multiplayer.is_server() or manche_en_cours or id == multiplayer.get_unique_id() or fiche.is_empty() \
+			or not fiche.arrive or fiche.get("exclu", false) or not multiplayer.get_peers().has(id):
+		return false
+	fiche.exclu = true
+	fiche.pret = false
+	_diffuser_salon()
+	exclure(id, true)
+	return true
+
+
+## Chez l'hôte : vrai si le joueur `id` est exclu du salon et pas encore parti (`exclure_du_salon`).
+func est_exclu(id: int) -> bool:
+	return inscrits.get(id, {}).get("exclu", false)
 
 
 ## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la
@@ -539,13 +615,14 @@ func _liberer(id: int, generation: int) -> void:
 	_transport.liberer(id)
 
 
-## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps) ; ce poste s'en va
-## aussitôt, et la perte de l'hôte le dit (`raison_perte` : PERTE_EXCLU). L'annonce est fiable, la
-## libération par l'hôte qui suit ne l'est pas (`_liberer`).
+## Chez un client : l'hôte l'exclut de la manche (sa scène de jeu pas chargée à temps), ou du salon
+## (`par_l_hote` vrai) ; ce poste s'en va aussitôt, et la perte de l'hôte le dit (`raison_perte` :
+## PERTE_EXCLU, ou PERTE_EXCLU_HOTE). L'annonce est fiable, la libération par l'hôte qui suit ne l'est pas
+## (`_liberer`).
 @rpc("authority", "call_remote", "reliable")
-func _recevoir_exclusion() -> void:
+func _recevoir_exclusion(par_l_hote: Variant) -> void:
 	_entendre(multiplayer.get_remote_sender_id())
-	_exclu = true
+	_exclusion = PERTE_EXCLU_HOTE if par_l_hote is bool and par_l_hote else PERTE_EXCLU
 	_decider("hote_perdu")
 
 
@@ -625,26 +702,67 @@ static func premiere_couleur_libre(occupes: Dictionary[int, Dictionary]) -> Colo
 ## Vrai pour un point de code que l'étiquette du lion ne doit jamais afficher : les contrôles C0
 ## (`strip_escapes` ne va que jusqu'à U+001F) et C1, les caractères invisibles (espaces et joints de
 ## largeur nulle, U+FEFF) et les forçages de sens (RLO/LRO, isolats) qui casseraient la lecture ou
-## la mise en page d'un pseudo hostile.
+## la mise en page d'un pseudo hostile. Phase 7 du jeu en ligne (spec §8.2) : aussi tous les autres
+## caractères de mise en forme d'Unicode (catégorie Cf : trait d'union conditionnel U+00AD, marque de lettre
+## arabe U+061C, séparateur mongol U+180E, ancres d'annotation U+FFF9 à U+FFFB, étiquettes U+E0000 à
+## U+E007F…), le joint de graphèmes U+034F, les sélecteurs de variante mongols et ceux du plan 14, et les
+## lettres vides du coréen (U+115F, U+1160, U+3164, U+FFA0). Ce qui reste de blanc (espaces Unicode,
+## sélecteurs de variante, marques combinantes) est traité par `_est_discret` et `pseudo_valide`.
 static func _code_point_interdit(c: int) -> bool:
-	return c <= 0x1F or (c >= 0x7F and c <= 0x9F) \
-		or (c >= 0x200B and c <= 0x200F) or c == 0x2028 or c == 0x2029 \
-		or (c >= 0x202A and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) or c == 0xFEFF
+	return c <= 0x1F or (c >= 0x7F and c <= 0x9F) or c == 0xAD or c == 0x34F \
+		or (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x890 or c == 0x891 or c == 0x8E2 \
+		or c == 0x115F or c == 0x1160 or c == 0x17B4 or c == 0x17B5 or (c >= 0x180B and c <= 0x180F) \
+		or (c >= 0x200B and c <= 0x200F) or (c >= 0x2028 and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) \
+		or c == 0x3164 or c == 0xFEFF or c == 0xFFA0 or (c >= 0xFFF9 and c <= 0xFFFB) \
+		or c == 0x110BD or c == 0x110CD or (c >= 0x13430 and c <= 0x1343F) or (c >= 0x1BCA0 and c <= 0x1BCA3) \
+		or (c >= 0x1D173 and c <= 0x1D17A) or (c >= 0xE0000 and c <= 0xE0FFF)
+
+
+## Vrai pour un espace Unicode (catégorie Zs : U+0020, U+00A0, U+1680, U+2000 à U+200A, U+202F, U+205F,
+## U+3000) ou le carré braille vide U+2800, qui se rogne aux bords d'un pseudo.
+static func _est_espace(c: int) -> bool:
+	return c == 0x20 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x202F \
+		or c == 0x205F or c == 0x3000 or c == 0x2800
+
+
+## Vrai pour un point de code qui ne s'affiche pas seul : un espace, un sélecteur de variante (U+FE00 à
+## U+FE0F) ou une marque combinante (Mn/Me : accents seuls, U+0300 à U+036F, U+0483 à U+0489, U+1AB0 à
+## U+1AFF, U+1DC0 à U+1DFF, U+20D0 à U+20FF, U+FE20 à U+FE2F). Un pseudo qui n'en contient que est blanc.
+static func _est_discret(c: int) -> bool:
+	return _est_espace(c) or (c >= 0xFE00 and c <= 0xFE0F) or (c >= 0x300 and c <= 0x36F) \
+		or (c >= 0x483 and c <= 0x489) or (c >= 0x1AB0 and c <= 0x1AFF) or (c >= 0x1DC0 and c <= 0x1DFF) \
+		or (c >= 0x20D0 and c <= 0x20FF) or (c >= 0xFE20 and c <= 0xFE2F)
+
+
+## Retire les espaces Unicode (`_est_espace`) au début et à la fin du texte.
+static func _rogner(texte: String) -> String:
+	var debut := 0
+	var fin := texte.length()
+	while debut < fin and _est_espace(texte.unicode_at(debut)):
+		debut += 1
+	while fin > debut and _est_espace(texte.unicode_at(fin - 1)):
+		fin -= 1
+	return texte.substr(debut, fin - debut)
 
 
 ## Le pseudo tel que l'hôte l'inscrit : sans caractères de contrôle, invisibles ni forçages de sens
-## (voir `_code_point_interdit`), coupé à PSEUDO_MAX caractères puis sans espaces autour (pour ne
-## pas laisser d'espace finale à la coupe). Peut être vide : c'est `pseudo_ou_defaut` qui y met un
-## repli.
+## (voir `_code_point_interdit`), sans espaces Unicode autour, coupé à PSEUDO_MAX caractères puis de
+## nouveau sans espaces autour (pour ne pas laisser d'espace finale à la coupe). Vide si rien de visible
+## ne reste (que des espaces, des sélecteurs de variante ou des marques combinantes) : c'est
+## `pseudo_ou_defaut` qui y met un repli.
 static func pseudo_valide(texte: String) -> String:
 	var propre := ""
 	for i in texte.length():
 		var c := texte.unicode_at(i)
 		if not _code_point_interdit(c):
 			propre += texte.substr(i, 1)
-	# Un premier strip_edges avant la coupe ne gâche pas le quota sur des espaces qui l'entourent ;
+	# Un premier rognage avant la coupe ne gâche pas le quota sur des espaces qui l'entourent ;
 	# le second retire celle que la coupe peut exposer en fin de chaîne (spec M3).
-	return propre.strip_edges().left(PSEUDO_MAX).strip_edges()
+	propre = _rogner(_rogner(propre).left(PSEUDO_MAX))
+	for i in propre.length():
+		if not _est_discret(propre.unicode_at(i)):
+			return propre
+	return ""
 
 
 ## `pseudo_valide(texte)`, ou « Joueur N » (N = index + 1) si le nettoyage ne laisse rien : un
@@ -696,13 +814,13 @@ func demander_pret(pret: bool) -> void:
 
 ## Chez l'hôte : le joueur `id` prend la couleur libre voisine de la sienne dans le sens `sens`
 ## (`couleur_voisine_libre`). Refusé (faux, rien ne change) pour un inconnu, un joueur pas encore
-## arrivé ou déjà prêt (sa couleur est figée tant qu'il est prêt), un `sens` autre que 1 ou -1,
+## arrivé, déjà prêt (sa couleur est figée tant qu'il est prêt) ou exclu, un `sens` autre que 1 ou -1,
 ## pendant une manche, ou s'il n'y a aucune couleur libre. Les demandes sont traitées une à une :
 ## deux joueurs qui visent la même couleur ne peuvent pas l'obtenir tous les deux.
 func changer_couleur(id: int, sens: int) -> bool:
 	var fiche: Dictionary = inscrits.get(id, {})
 	if not multiplayer.is_server() or manche_en_cours or absi(sens) != 1 or fiche.is_empty() \
-			or not fiche.arrive or fiche.pret:
+			or not fiche.arrive or fiche.pret or fiche.get("exclu", false):
 		return false
 	var couleur := couleur_voisine_libre(inscrits, id, sens)
 	if couleur == fiche.couleur:
@@ -715,10 +833,11 @@ func changer_couleur(id: int, sens: int) -> bool:
 
 
 ## Chez l'hôte : le joueur `id` est prêt ou non. Refusé (faux) pour un inconnu, un joueur pas
-## encore arrivé, pendant une manche, ou si rien ne change.
+## encore arrivé ou exclu, pendant une manche, ou si rien ne change.
 func definir_pret(id: int, pret: bool) -> bool:
 	var fiche: Dictionary = inscrits.get(id, {})
-	if not multiplayer.is_server() or manche_en_cours or fiche.is_empty() or not fiche.arrive or fiche.pret == pret:
+	if not multiplayer.is_server() or manche_en_cours or fiche.is_empty() or not fiche.arrive or fiche.get("exclu", false) \
+			or fiche.pret == pret:
 		return false
 	fiche.pret = pret
 	_diffuser_salon()
@@ -736,9 +855,11 @@ func definir_pret(id: int, pret: bool) -> bool:
 ## M1 : les fiches de la manche sont aussi revérifiées avant tout engagement (défense en profondeur) :
 ## une table que `fiches_de_manche` refuse, une fois les index compactés (l'hôte n'y serait plus,
 ## par exemple), fait refuser le lancement, sans rien changer. Le chargement commence : le silence
-## toléré devient SILENCE_CHARGEMENT, et plus aucune scène n'est chargée.
+## toléré devient SILENCE_CHARGEMENT, et plus aucune scène n'est chargée. Refusé aussi tant qu'un exclu
+## n'est pas parti (`exclure_du_salon` : sa fiche est encore dans la table).
 func lancer_manche() -> bool:
-	if not multiplayer.is_server() or manche_en_cours or not salon_pret(inscrits):
+	if not multiplayer.is_server() or manche_en_cours or not salon_pret(inscrits) \
+			or inscrits.keys().any(func(id: int) -> bool: return est_exclu(id)):
 		return false
 	return _lancer()
 
@@ -911,17 +1032,30 @@ func _diffuser_salon() -> void:
 ## Chez l'hôte : un client demande une autre couleur.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_couleur(sens: Variant) -> void:
-	_entendre(multiplayer.get_remote_sender_id())
-	if sens is int:
-		changer_couleur(multiplayer.get_remote_sender_id(), sens)
+	var id := multiplayer.get_remote_sender_id()
+	_entendre(id)
+	if admettre_demande_salon(id) and sens is int:
+		changer_couleur(id, sens)
 
 
 ## Chez l'hôte : un client demande à être prêt, ou plus.
 @rpc("any_peer", "call_remote", "reliable")
 func _demande_pret(pret: Variant) -> void:
-	_entendre(multiplayer.get_remote_sender_id())
-	if pret is bool:
-		definir_pret(multiplayer.get_remote_sender_id(), pret)
+	var id := multiplayer.get_remote_sender_id()
+	_entendre(id)
+	if admettre_demande_salon(id) and pret is bool:
+		definir_pret(id, pret)
+
+
+## Chez l'hôte : vrai si la demande de salon du client `id` passe (DEMANDES_SALON_PAR_SECONDE par seconde
+## au plus, spec §8.2), mal formée ou non ; au-delà, elle est jetée sans réponse (un avertissement au
+## premier rejet de ce client, pas à chacun : un client qui inonde l'hôte n'inonde pas son journal).
+func admettre_demande_salon(id: int) -> bool:
+	if _limite_salon.admettre(id, Time.get_ticks_msec() / 1000.0):
+		return true
+	if _limite_salon.rejets[id] == 1:
+		push_warning("Reseau : plus de %d demandes de salon par seconde du client %d (une inondation, ou une rafale après un gel de l'hôte), l'excédent est jeté" % [DEMANDES_SALON_PAR_SECONDE, id])
+	return false
 
 
 ## Chez un client : la table du salon diffusée par l'hôte (ignorée si elle est illisible ou plus ancienne
@@ -1095,6 +1229,7 @@ func _sur_pair_connecte(id: int) -> void:
 ## Chez l'hôte : un arrivé est parti ; sa carte se libère chez tous (spec §4).
 func _sur_pair_deconnecte(id: int) -> void:
 	_entendus.erase(id)
+	_limite_salon.oublier(id)
 	if multiplayer.is_server() and inscrits.erase(id):
 		_diffuser_salon()
 		joueur_parti.emit(id)
@@ -1184,6 +1319,7 @@ func _decider(nom: StringName, arguments: Array = []) -> void:
 	if _issue_decidee:
 		return
 	_issue_decidee = true
+	_perte_apres_gel = nom == &"hote_perdu" and au_retour_d_un_gel(Time.get_ticks_msec())
 	_fermer_puis_emettre.call_deferred(nom, arguments, _generation)
 
 
@@ -1194,11 +1330,12 @@ func _decider(nom: StringName, arguments: Array = []) -> void:
 func _fermer_puis_emettre(nom: StringName, arguments: Array, generation: int) -> void:
 	if generation != _generation:
 		return
-	var exclu := _exclu
+	var exclusion := _exclusion
+	var apres_gel := _perte_apres_gel
 	var raison_transport := _raison_transport
 	quitter()
 	if nom == &"hote_perdu":
-		raison_perte = PERTE_EXCLU if exclu else PERTE_HOTE
+		raison_perte = exclusion if not exclusion.is_empty() else (PERTE_DECONNECTE if apres_gel else PERTE_HOTE)
 	elif nom == &"connexion_echouee":
 		raison_echec = raison_transport
 	callv("emit_signal", [nom] + arguments)
