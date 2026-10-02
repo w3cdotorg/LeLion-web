@@ -1596,7 +1596,10 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 		"le pseudo mémorisé est repris, la saisie bornée à %d caractères ; le champ du code montre « K7Q-2XM »" % reseau.PSEUDO_MAX)
 
 	# Un code mal formé est refusé à la saisie (spec §9), sans rien tenter, le focus sur le code
-	var refus := {"K7Q2X": "ENLIGNE_CODE_FORMAT", "K7Q-2XM9": "ENLIGNE_CODE_FORMAT", "": "ENLIGNE_CODE_FORMAT", "k7q-2o1": "ENLIGNE_CODE_CONFUSION"}
+	# L'adresse ip:port d'un hôte ENet n'est pas un code sur le Web : mal formée, pas une confusion (ses 0 et
+	# ses 1 ne sont pas ceux d'un code), et rien n'est tenté
+	var refus := {"K7Q2X": "ENLIGNE_CODE_FORMAT", "K7Q-2XM9": "ENLIGNE_CODE_FORMAT", "": "ENLIGNE_CODE_FORMAT", "k7q-2o1": "ENLIGNE_CODE_CONFUSION",
+		"192.168.1.20:7777": "ENLIGNE_CODE_FORMAT"}
 	var faux: Array[String] = []
 	for saisie: String in refus:
 		ecran.champ_code.text = saisie
@@ -1729,6 +1732,65 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	await process_frame
 	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text.is_empty(), "Échap (ou B) arrête d'héberger et revient à l'accueil")
 
+	# Créer une partie dont le transport ne donne son code qu'après coup (WebRTC : la salle de la
+	# signalisation, simulée par `TransportSalle`) : l'écran attend (CREATION), sans se fier à
+	# `en_ligne()` ; un échec avant le code a son message ; le salon s'ouvre au code, et dit la salle fermée
+	var transports: Array[TransportSalle] = []
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportSalle.new())
+		return transports[-1]
+	ecran.creer_partie()
+	_check(ecran.etat == ecran.Etat.CREATION and reseau.code_partie.is_empty() and ecran.message.text == "Création de la partie…"
+		and ecran.bouton_creer.disabled and ecran.bouton_rejoindre.disabled and ecran.bouton_retour.has_focus(),
+		"sans code du transport, Créer une partie attend : « Création de la partie… », tout grisé sauf Retour (%s)" % ecran.message.text)
+	reseau.salon_change.emit()
+	_check(ecran.etat == ecran.Etat.CREATION, "une table du salon sans code ne suffit pas")
+	transports[-1].echec.emit(Transport.ECHEC_QUOTA)
+	var fin_creation := Time.get_ticks_msec() + 1000
+	while ecran.etat != ecran.Etat.ACCUEIL and Time.get_ticks_msec() < fin_creation:
+		await process_frame
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.message.text == "Trop de parties en ce moment, réessaie plus tard."
+		and ecran.bouton_creer.has_focus(),
+		"la création échoue avant le code (quota) : son message, retour à l'accueil, Créer une partie au focus (%s)" % ecran.message.text)
+	# Pendant la création, une raison vide ou inconnue est la signalisation, pas l'hôte (il n'y en a pas)
+	var messages_creation: Array[String] = []
+	for raison: String in ["", "bizarre"]:
+		ecran.creer_partie()
+		transports[-1].echec.emit(raison)
+		var fin_echec := Time.get_ticks_msec() + 1000
+		while ecran.etat != ecran.Etat.ACCUEIL and Time.get_ticks_msec() < fin_echec:
+			await process_frame
+		messages_creation.append(ecran.message.text)
+	_check(messages_creation == [service, service] and ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne(),
+		"la création échoue sans raison, ou d'une raison inconnue : « %s », pas « Connexion impossible avec l'hôte » (%s)" % [service, messages_creation])
+	ecran.creer_partie()
+	ecran.retour(false)
+	_check(ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and transports[-1].pair() == null,
+		"Retour pendant la création l'annule : l'accueil, hors réseau, le transport quitté")
+	transports[-1].pret.emit("K7Q2XM")
+	await process_frame
+	_check(ecran.etat == ecran.Etat.ACCUEIL and reseau.code_partie.is_empty() and not reseau.en_ligne()
+		and (current_scene == null or current_scene.scene_file_path != "res://Scenes/Salon.tscn"),
+		"le pret d'une création annulée par Retour, arrivé après, est ignoré : l'accueil reste, pas de salon")
+	ecran.creer_partie()
+	transports[-1].pret.emit("K7Q2XM")
+	_check(ecran.etat == ecran.Etat.SALON and reseau.code_partie == "K7Q2XM", "le code arrive (pret) : en route vers le salon")
+	var salon_salle: Node = await _attendre_scene("res://Scenes/Salon.tscn")
+	_check(salon_salle != null and salon_salle.rangee_invitation.visible and salon_salle.etiquette_code.text == "Code de la partie : K7Q-2XM"
+		and salon_salle.bouton_copier.visible,
+		"le salon de l'hôte montre le code et Copier le lien")
+	if salon_salle != null:
+		transports[-1].salle_fermee.emit(Transport.ECHEC_EXPIREE)
+		_check(salon_salle.etiquette_code.text == "Salle expirée : crée une nouvelle partie pour inviter" and not salon_salle.bouton_copier.visible
+			and reseau.en_ligne() and root.multiplayer.is_server(),
+			"la salle expire : « Salle expirée : crée une nouvelle partie pour inviter », sans lien, la partie continue (%s)" % salon_salle.etiquette_code.text)
+		transports[-1].salle_fermee.emit(Transport.ECHEC_INJOIGNABLE)
+		_check(salon_salle.etiquette_code.text == "Invitations coupées : crée une nouvelle partie pour inviter" and not salon_salle.bouton_copier.visible,
+			"la signalisation coupée : « Invitations coupées : crée une nouvelle partie pour inviter » (%s)" % salon_salle.etiquette_code.text)
+		salon_salle.free()
+	ecran.retour(false)  # l'écran, resté en SALON (le salon a pris la suite), revient à l'accueil, hors réseau
+	reseau.fabrique_transport = Callable()
+
 	# Port occupé, autre erreur ; changer de langue retraduit le message
 	var occupant := ENetMultiplayerPeer.new()
 	_check(occupant.create_server(17798) == OK, "(pré-condition) un autre programme occupe le port 17798")
@@ -1767,7 +1829,7 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	root.remove_child(ecran)
 	_check(reseau.inscrit.get_connections().is_empty() and reseau.refuse.get_connections().is_empty()
 		and reseau.connexion_echouee.get_connections().is_empty() and reseau.hote_perdu.get_connections().is_empty()
-		and langue_pendant == connexions_langue + 1 and params.langue_changee.get_connections().size() == connexions_langue,
+		and reseau.salon_change.get_connections().is_empty() and langue_pendant == connexions_langue + 1 and params.langue_changee.get_connections().size() == connexions_langue,
 		"l'écran retiré de l'arbre ne laisse aucune connexion aux autoloads, Parametres.langue_changee compris (%d connexion(s) avant l'écran, %d pendant, %d après)"
 			% [connexions_langue, langue_pendant, params.langue_changee.get_connections().size()])
 	ecran.free()
@@ -2413,3 +2475,34 @@ func _tester_resultats_reseau() -> void:
 	GS.partie_en_cours = false
 	GS.pret = false
 	GS.niveau_courant = 0
+
+
+## Un transport simulé (`_tester_ecran_en_ligne`, phase 4) : héberge sans rien ouvrir ni rien dire (son pair,
+## un `WebRTCMultiplayerPeer` serveur, existe sur le desktop, sans connexion) ; le test émet lui-même `pret`,
+## `echec` et `salle_fermee`, comme `TransportWebRTC`.
+class TransportSalle extends Transport:
+	var _pair: WebRTCMultiplayerPeer
+
+	func heberger() -> Error:
+		_pair = WebRTCMultiplayerPeer.new()
+		return _pair.create_server()
+
+	func rejoindre(_code: String) -> Error:
+		return ERR_UNAVAILABLE
+
+	func quitter() -> void:
+		clore()
+
+	func clore() -> void:
+		if _pair != null:
+			_pair.close()
+			_pair = null
+
+	func pair() -> MultiplayerPeer:
+		return _pair
+
+	func liberer(_id: int) -> void:
+		pass
+
+	func servir() -> bool:
+		return _pair != null

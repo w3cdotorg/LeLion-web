@@ -1,0 +1,16 @@
+{
+	"name": "lelion-bout-en-bout",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Test de bout en bout de LeLion web : trois pages, WebRTC, la signalisation en local (wrangler dev).",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"test": "playwright test"
+	},
+	"devDependencies": {
+		"@playwright/test": "1.63.0"
+	}
+}

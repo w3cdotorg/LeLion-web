@@ -67,17 +67,20 @@ static func lire_saisie(texte: String) -> String:
 
 
 ## Pourquoi la saisie `texte` (`lire_saisie` : un code ou un lien collé) n'est pas un code :
-## ERREUR_CONFUSION si un code tapé a un 0, un O, un 1, un I ou un L (en minuscules aussi), ERREUR_FORMAT
-## pour tout le reste, un lien sans code valide compris (ses lettres ne sont pas un code) ; vide si c'en
-## est un.
+## ERREUR_CONFUSION si un code tapé, fait des seuls caractères de l'alphabet et de ceux qu'on confond, a
+## un 0, un O, un 1, un I ou un L (en minuscules aussi) ; ERREUR_FORMAT pour tout le reste : un autre
+## caractère (le « . » et le « : » de l'adresse `ip:port` d'un hôte ENet, dont les 0 et les 1 ne sont pas
+## ceux d'un code), un lien sans code valide (ses lettres ne sont pas un code) ; vide si c'en est un.
 static func erreur(texte: String) -> String:
 	var code := lire_saisie(texte)
 	if valide(code):
 		return ""
+	var confusion := false
 	for c in code:
-		if CONFUSIONS.contains(c):
-			return ERREUR_CONFUSION
-	return ERREUR_FORMAT
+		if not ALPHABET.contains(c) and not CONFUSIONS.contains(c):
+			return ERREUR_FORMAT  # un autre caractère (« . », « : » d'une adresse ip:port) : pas un code du tout
+		confusion = confusion or CONFUSIONS.contains(c)
+	return ERREUR_CONFUSION if confusion else ERREUR_FORMAT
 
 
 ## Le code tel qu'il s'affiche, « K7Q-2XM » ; un texte qui n'est pas un code reste tel quel (l'adresse

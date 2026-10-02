@@ -53,6 +53,8 @@ func _run() -> void:
 	_tester_transport_enet()
 	await _tester_battement()
 	await _tester_parties_en_ligne()
+	await _tester_transport_tardif()
+	_tester_transport_webrtc()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2285,6 +2287,10 @@ func _tester_code_salle() -> void:
 	_check(confusions.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_CONFUSION),
 		"un 0, un O, un 1, un I ou un L (minuscule comprise, même dans un code trop court) : refusé avec son message, jamais remplacé")
 	_check(not CodeSalle.valide("k7q2xm") and CodeSalle.valide("K7Q2XM"), "valide() attend un code déjà normalisé")
+	var adresses := ["192.168.1.20:7777", "127.0.0.1:7777", "10.0.0.1"]
+	_check(adresses.all(func(t: String) -> bool: return CodeSalle.erreur(t) == CodeSalle.ERREUR_FORMAT),
+		"l'adresse ip:port d'un hôte ENet n'est pas un code : mal formée, pas une confusion (ses 0 et ses 1 ne sont pas ceux d'un code) (%s)"
+		% [adresses.map(func(t: String) -> String: return CodeSalle.erreur(t))])
 
 	# L'affichage et le lien d'invitation
 	_check(CodeSalle.formater("K7Q2XM") == "K7Q-2XM" and CodeSalle.formater("127.0.0.1:7777") == "127.0.0.1:7777",
@@ -2630,6 +2636,377 @@ func _tester_parties_en_ligne() -> void:
 	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
 
 
+## Phase 4 du jeu en ligne : un transport dont la partie et le pair arrivent après coup, comme
+## `TransportWebRTC` (simulé : `TransportTardif`) : la création qui attend le `pret` du transport (et son
+## échec, routé comme un échec de connexion), la salle fermée après coup (la partie continue), le pair d'un
+## client posé à `pair_pret`.
+func _tester_transport_tardif() -> void:
+	print("-- Transport tardif (phase 4)")
+	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé (compilé avant lui)
+	var transports: Array[TransportTardif] = []
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		return transports[-1]
+	var changes := [0]
+	var sur_change := func() -> void: changes[0] += 1
+	reseau.salon_change.connect(sur_change)
+	var echecs: Array[String] = []
+	var sur_echec := func() -> void: echecs.append(reseau.raison_echec)
+	reseau.connexion_echouee.connect(sur_echec)
+	var pertes := [0]
+	var sur_perte := func() -> void: pertes[0] += 1
+	reseau.hote_perdu.connect(sur_perte)
+
+	# L'hôte : la partie a son code au `pret` du transport, qui ne vient pas pendant l'appel.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne() and root.multiplayer.is_server() and reseau.code_partie.is_empty()
+		and reseau.inscrits.size() == 1,
+		"créer une partie : ce poste héberge et s'inscrit, sans code tant que le transport ne l'a pas donné")
+	changes[0] = 0
+	transports[-1].pret.emit("K7Q2XM")
+	_check(reseau.code_partie == "K7Q2XM" and changes[0] == 1,
+		"le pret du transport donne son code à la partie, que le salon relit (un salon_change)")
+	transports[-1].echec.emit(Transport.ECHEC_QUOTA)
+	await process_frame
+	await process_frame
+	_check(echecs.is_empty() and reseau.en_ligne(), "un échec du transport après son pret ne défait pas une partie créée")
+	transports[-1].salle_fermee.emit(Transport.ECHEC_EXPIREE)
+	_check(reseau.raison_salle_fermee == Transport.ECHEC_EXPIREE and changes[0] == 2 and reseau.en_ligne() and reseau.code_partie == "K7Q2XM",
+		"la salle fermée après coup : la partie continue, le salon le sait (raison_salle_fermee, un salon_change)")
+	reseau.quitter()
+	_check(reseau.raison_salle_fermee.is_empty() and transports[-1].quitte, "quitter oublie la salle fermée et quitte le transport")
+
+	# L'hôte : la création échoue avant le pret.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne(), "(pré-condition) une nouvelle partie en création")
+	transports[-1].echec.emit(Transport.ECHEC_QUOTA)
+	_check(await _attendre(func() -> bool: return echecs.size() == 1, 1.0) and echecs == [Transport.ECHEC_QUOTA] and not reseau.en_ligne()
+		and pertes[0] == 0,
+		"un échec du transport avant son pret : connexion échouée chez l'hôte, sa raison dans raison_echec, hors réseau (%s)" % [echecs])
+	_check(reseau.creer_partie() == OK, "(pré-condition) une autre partie en création")
+	transports[-1].perdu = true  # le transport se ferme de lui-même, sans raison
+	_check(await _attendre(func() -> bool: return echecs.size() == 2, 1.0) and echecs[1].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
+		"un transport fermé de lui-même avant son pret : connexion échouée aussi, pas un hôte perdu (%s)" % [echecs])
+	transports[-1].salle_fermee.emit(Transport.ECHEC_EXPIREE)
+	_check(reseau.raison_salle_fermee.is_empty(), "le signal d'un transport quitté ne fait plus rien")
+
+	# Le client : son pair n'existe qu'à pair_pret (son identifiant vient de la signalisation).
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK and not reseau.en_ligne() and reseau._connexion_en_cours,
+		"rejoindre : en connexion, mais pas en ligne tant que le pair du transport n'existe pas")
+	transports[-1].donner_identifiant(123456789)
+	_check(reseau.en_ligne() and root.multiplayer.multiplayer_peer == transports[-1].pair()
+		and root.multiplayer.get_unique_id() == 123456789 and not root.multiplayer.is_server(),
+		"pair_pret : SceneMultiplayer prend le pair du transport, avec son identifiant (%d)" % root.multiplayer.get_unique_id())
+	transports[-1].echec.emit(Transport.ECHEC_DELAI)
+	_check(await _attendre(func() -> bool: return echecs.size() == 3, 1.0) and echecs[2] == Transport.ECHEC_DELAI and not reseau.en_ligne(),
+		"le canal ne s'ouvre pas : connexion échouée, raison delai (%s)" % [echecs])
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) une nouvelle connexion")
+	reseau.quitter()
+	transports[-1].donner_identifiant(42)
+	_check(not reseau.en_ligne(), "le pair_pret d'un transport quitté n'est pas posé")
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) encore une connexion")
+	transports[-1].perdu = true
+	_check(await _attendre(func() -> bool: return echecs.size() == 4, 1.0) and echecs[3].is_empty() and pertes[0] == 0 and not reseau.en_ligne(),
+		"un client dont le transport se ferme avant son pair : connexion échouée, pas un hôte perdu (%s)" % [echecs])
+
+	# Vague finale (T3) : sur le Web, un code ip:port est refusé proprement par Rejoindre, sans rien changer,
+	# pas même la partie hébergée en cours.
+	_check(reseau.creer_partie() == OK and reseau.en_ligne(), "(pré-condition) une partie hébergée")
+	var hote_en_cours := transports[-1]
+	reseau.fabrique_transport = func(_port: int) -> Transport: return TransportWebRTC.new()
+	_check(reseau.rejoindre_partie("192.168.1.20:7777") == ERR_INVALID_PARAMETER and reseau.en_ligne() and root.multiplayer.is_server()
+		and root.multiplayer.multiplayer_peer == hote_en_cours.pair() and not reseau._connexion_en_cours,
+		"sur le Web (TransportWebRTC), un code ip:port est refusé (ERR_INVALID_PARAMETER) : la partie hébergée continue, rien n'est tenté")
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		return transports[-1]
+	reseau.quitter()
+
+	# Vague finale (T1) : un pair_pret périmé, arrivé pendant une session neuve en cours, n'y touche pas.
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK, "(pré-condition) une connexion")
+	var perime := transports[-1]
+	_check(reseau.rejoindre_partie("K7Q2XM") == OK and transports[-1] != perime, "(pré-condition) une connexion neuve, l'autre quittée")
+	perime.donner_identifiant(42)
+	_check(not reseau.en_ligne() and root.multiplayer.multiplayer_peer != perime.pair() and reseau._connexion_en_cours,
+		"un pair_pret périmé arrivé pendant une session neuve en cours est ignoré : elle attend toujours le sien")
+	# Un pair_pret après l'échec décidé (la fermeture différée pas encore faite) n'est pas posé.
+	transports[-1].echec.emit(Transport.ECHEC_DELAI)
+	transports[-1].donner_identifiant(43)
+	_check(not reseau.en_ligne(), "un pair_pret après l'échec décidé n'est pas posé")
+	_check(await _attendre(func() -> bool: return echecs.size() == 5, 1.0) and echecs[4] == Transport.ECHEC_DELAI,
+		"(post-condition) l'échec décidé part une fois (%s)" % [echecs])
+	# La salle fermée pendant la création (avant pret) : la partie n'existera pas, un échec de connexion.
+	_check(reseau.creer_partie() == OK and reseau._creation_en_cours, "(pré-condition) une partie en création")
+	changes[0] = 0
+	transports[-1].salle_fermee.emit(Transport.ECHEC_DEBIT)
+	_check(await _attendre(func() -> bool: return echecs.size() == 6, 1.0) and echecs[5] == Transport.ECHEC_DEBIT
+		and not reseau.en_ligne() and reseau.raison_salle_fermee.is_empty() and pertes[0] == 0,
+		"la salle fermée avant le pret : connexion échouée chez l'hôte, sa raison dans raison_echec, pas une salle fermée (%s)" % [echecs])
+	# Un transport dont le pret part pendant heberger() (ENet) : le salon_change de ce pret ne part pas
+	# avant que le pair soit posé ; le salon relit la partie au salon_change de son inscription.
+	var en_ligne_vus: Array[bool] = []
+	var sur_change_en_ligne := func() -> void: en_ligne_vus.append(reseau.en_ligne())
+	reseau.salon_change.connect(sur_change_en_ligne)
+	reseau.fabrique_transport = func(_port: int) -> Transport:
+		transports.append(TransportTardif.new())
+		transports[-1].code_immediat = "192.168.1.20:7777"
+		return transports[-1]
+	_check(reseau.creer_partie() == OK and reseau.code_partie == "192.168.1.20:7777" and not reseau._creation_en_cours
+		and not en_ligne_vus.is_empty() and not en_ligne_vus.has(false),
+		"un pret pendant heberger() : la partie a son code, aucun salon_change avant que le pair soit posé (%s)" % [en_ligne_vus])
+	reseau.salon_change.disconnect(sur_change_en_ligne)
+	reseau.quitter()
+
+	reseau.salon_change.disconnect(sur_change)
+	reseau.connexion_echouee.disconnect(sur_echec)
+	reseau.hote_perdu.disconnect(sur_perte)
+	reseau.fabrique_transport = Callable()
+	await _attendre(func() -> bool: return reseau._partants.is_empty(), 2.0)
+
+
+## Phase 4 du jeu en ligne : `TransportWebRTC` sans navigateur. Ses aides pures (adresse du Worker,
+## `?relais=1`, configuration ICE, messages de la salle et leurs entiers), puis ses décisions, sur une
+## sous-classe qui remplace la socket et les connexions WebRTC (`TransportWebRTCSimule`) : l'hôte (salle,
+## arrivées, offre et candidats, `ouvert`, `depart`, délais, `ping`, salle fermée), le client
+## (`bienvenue` et son pair, réponse, fermeture `ouvert`, délai du canal), les échecs de la signalisation
+## (`erreur`, fermeture, silence), et la file cadencée.
+func _tester_transport_webrtc() -> void:
+	print("-- Transport WebRTC (phase 4, sans navigateur)")
+	var pilote: Node = root.get_node("PiloteWeb")  # autoload : jamais nommé
+	_check(not pilote.actif and not pilote.is_processing(), "le pilote du test de bout en bout est inerte hors de l'export Web pilote")
+	# Vague finale (T4) : une commande mal formée (nom, nombre ou types d'arguments) est rejetée, retirée de
+	# la file, sans bloquer celles qui suivent ; une commande bien formée qui ne peut pas encore s'exécuter
+	# (« pret » hors du salon) reste en tête.
+	var duree_avant: float = ReglesBataille.duree_manche
+	pilote._commandes = [["duree", "dix"], ["duree"], ["peindre"], ["peindre", 1, 2], ["peindre", 0], ["peindre", 0.0], ["duree", -3.0], ["creer", 7],
+		["rejoindre"], ["pret", true], 5, [], ["voler"], ["pret"], ["quitter"]]
+	pilote._vider_commandes()
+	_check(pilote._commandes == [["pret"], ["quitter"]] and ReglesBataille.duree_manche == duree_avant,
+		"le pilote rejette les commandes mal formées (nombre et types d'arguments), retirées de la file ; « pret » hors du salon attend (%s)" % [pilote._commandes])
+	ReglesBataille.duree_manche = duree_avant
+	pilote._commandes = []
+	# Les deux préréglages d'export : « Web » (publié) sans la fonctionnalité pilote, « Web pilote » avec,
+	# identiques par ailleurs (une option changée dans l'un l'est dans l'autre), et aucun n'emporte un export
+	# précédent (export/*).
+	var prereglages := ConfigFile.new()
+	_check(prereglages.load("res://export_presets.cfg") == OK, "(pré-condition) export_presets.cfg se lit")
+	var sections := {}
+	for section in prereglages.get_sections():
+		if section.count(".") == 1 and prereglages.has_section_key(section, "name"):
+			sections[prereglages.get_value(section, "name")] = section
+	_check(sections.has("Web") and sections.has("Web pilote"), "(pré-condition) les préréglages « Web » et « Web pilote » existent (%s)" % [sections.keys()])
+	if sections.has("Web") and sections.has("Web pilote"):
+		var web: String = sections["Web"]
+		var pilote_s: String = sections["Web pilote"]
+		var fonctions := func(section: String) -> PackedStringArray:
+			return str(prereglages.get_value(section, "custom_features", "")).replace(" ", "").split(",", false)
+		_check(not fonctions.call(web).has("pilote") and fonctions.call(pilote_s).has("pilote"),
+			"« Web » n'a pas la fonctionnalité pilote, « Web pilote » l'a (%s, %s)" % [fonctions.call(web), fonctions.call(pilote_s)])
+		var ecarts: Array[String] = []
+		for paire in [[web, pilote_s], [web + ".options", pilote_s + ".options"]]:
+			var cles := {}
+			for section: String in paire:
+				for cle in prereglages.get_section_keys(section) if prereglages.has_section(section) else PackedStringArray():
+					cles[cle] = true
+			for cle: String in cles:
+				if paire[0].ends_with(".options") or not ["name", "custom_features", "export_path", "runnable"].has(cle):
+					if prereglages.get_value(paire[0], cle, null) != prereglages.get_value(paire[1], cle, null):
+						ecarts.append(cle)
+		_check(ecarts.is_empty(), "les deux préréglages sont identiques option par option, hors name, custom_features, export_path, runnable (%s)" % [ecarts])
+		var exclus := func(section: String) -> PackedStringArray:
+			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
+		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
+			"aucun préréglage n'emporte un export précédent (export/* exclu) (%s, %s)" % [exclus.call(web), exclus.call(pilote_s)])
+	_check(TransportWebRTC.url_signalisation() == "ws://localhost:8787",
+		"l'adresse du Worker vient du réglage lelion/signalisation/url (wrangler dev en local) : %s" % TransportWebRTC.url_signalisation())
+	_check(TransportWebRTC.lire_relais("?salle=K7Q2XM&relais=1") and TransportWebRTC.lire_relais("relais=1")
+		and not TransportWebRTC.lire_relais("?relais=0") and not TransportWebRTC.lire_relais("?relaisx=1")
+		and not TransportWebRTC.lire_relais(""),
+		"?relais=1 force le relais TURN, rien d'autre ne le fait")
+	var ice := [{"urls": ["stun:stun.cloudflare.com:3478"]}, {"urls": ["turn:turn.cloudflare.com:3478"], "username": "u", "credential": "c"}]
+	_check(TransportWebRTC.configuration_ice(ice, false) == {"iceServers": ice}
+		and TransportWebRTC.configuration_ice(ice, true) == {"iceServers": ice, "iceTransportPolicy": "relay"},
+		"la configuration ICE : les serveurs de la salle tels quels, et iceTransportPolicy relay avec ?relais=1")
+
+	var bienvenue := TransportWebRTC.decoder('{"t":"bienvenue","id":123456789,"ice":[]}')
+	var candidat := TransportWebRTC.decoder('{"t":"candidat","de":2147483647,"media":"0","index":0,"nom":"candidate:1"}')
+	_check(typeof(bienvenue.get("id")) == TYPE_INT and bienvenue.id == 123456789 and typeof(candidat.get("de")) == TYPE_INT
+		and candidat.de == 2147483647 and typeof(candidat.get("index")) == TYPE_INT and candidat.index == 0,
+		"les identifiants et l'index d'un message deviennent des entiers (le JSON de Godot donne des flottants)")
+	var invalides := ['pas du JSON', '[1, 2]', '{"t":"inconnu"}', '{"id":5}', '{"t":"bienvenue","ice":[]}',
+		'{"t":"bienvenue","id":1.5,"ice":[]}', '{"t":"bienvenue","id":0,"ice":[]}', '{"t":"bienvenue","id":2147483648,"ice":[]}',
+		'{"t":"bienvenue","id":"5","ice":[]}', '{"t":"bienvenue","id":5,"ice":{}}', '{"t":"offre","de":1,"sdp":5}',
+		'{"t":"candidat","de":1,"media":"0","index":-1,"nom":"c"}', '{"t":"erreur"}']
+	_check(invalides.all(func(t: String) -> bool: return TransportWebRTC.decoder(t).is_empty()),
+		"un message mal formé (pas un objet, type inconnu, champ absent ou mal typé, identifiant hors de 1..2³¹-1) est vide")
+	_check(TransportWebRTC.decoder('{"t":"depart","id":7,"plus":true}').get("id") == 7, "un champ en plus est toléré")
+	_check(TransportWebRTC.new().rejoindre("127.0.0.1:7777") == ERR_INVALID_PARAMETER and TransportWebRTC.new().rejoindre("k7q2xm") == ERR_INVALID_PARAMETER,
+		"un code qui n'est pas un code de salle normalisé (l'adresse ip:port d'un hôte ENet comprise) est refusé sans rien tenter")
+
+	# L'hôte
+	var hote := TransportWebRTCSimule.new()
+	_check(hote.heberger() == OK and hote.url == "ws://localhost:8787/v1/creer" and hote.pair() is WebRTCMultiplayerPeer
+		and hote.pair().get_unique_id() == 1 and hote.signaux.is_empty(),
+		"héberger : le pair serveur existe (identifiant 1), /v1/creer s'ouvre, rien n'est dit pendant l'appel")
+	hote.recevoir('{"t":"salle","code":"K7Q2XM","id":1,"ice":[]}')
+	_check(hote.signaux == ["pret K7Q2XM"], "la salle existe : pret avec son code (%s)" % [hote.signaux])
+	hote.recevoir('{"t":"arrivee","id":5,"ice":[{"urls":["stun:neuf"]}]}')
+	_check(hote.appels == ["relier 5"] and hote._ice == [{"urls": ["stun:neuf"]}],
+		"une arrivée : sa connexion se crée avec les serveurs ICE neufs de l'arrivée (%s)" % [hote.appels])
+	hote._sur_description("offer", "SDP-O", 5)
+	hote._sur_candidat("0", 0, "candidate:1", 5)
+	_check(Array(hote._file) == ['{"sdp":"SDP-O","t":"offre","vers":5}', '{"index":0,"media":"0","nom":"candidate:1","t":"candidat","vers":5}'],
+		"son offre puis ses candidats partent par la salle, dans l'ordre, les entiers en entiers (%s)" % [hote._file])
+	hote.recevoir('{"t":"reponse","de":5,"sdp":"SDP-R"}')
+	hote.recevoir('{"t":"candidat","de":5,"media":"0","index":0,"nom":"candidate:2"}')
+	hote.recevoir('{"t":"reponse","de":9,"sdp":"SDP-X"}')
+	_check(hote.appels == ["relier 5", "description 5 answer SDP-R", "candidat 5 0 0 candidate:2"],
+		"sa réponse et ses candidats s'appliquent à sa connexion ; ceux d'un inconnu sont ignorés (%s)" % [hote.appels])
+	hote._file.clear()
+	hote._sur_pair_connecte(5)
+	_check(Array(hote._file) == ['{"id":5,"t":"ouvert"}'], "son canal ouvert : l'hôte dit ouvert à la salle (%s)" % [hote._file])
+	hote.recevoir('{"t":"depart","id":5}')
+	hote.recevoir('{"t":"arrivee","id":6,"ice":[]}')
+	hote.recevoir('{"t":"depart","id":6}')
+	hote.recevoir('{"t":"arrivee","id":7,"ice":[]}')
+	hote._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	_check(hote.appels.slice(3) == ["relier 6", "retirer 6", "relier 7", "retirer 7"],
+		"un depart après ouvert est ignoré ; un arrivant parti, ou au canal fermé 15 s après son arrivée, est retiré (%s)" % [hote.appels.slice(3)])
+	hote._file.clear()
+	hote._sur_candidat("0", 1, "candidate:5", 5)
+	hote._sur_candidat("0", 1, "candidate:6", 6)
+	hote._sur_description("offer", "SDP-7", 7)
+	_check(hote._file.is_empty(), "rien ne part plus pour un pair au canal ouvert, parti ou retiré (%s)" % [hote._file])
+	hote.offre_synchrone = true
+	hote.recevoir('{"t":"arrivee","id":8,"ice":[]}')
+	_check(Array(hote._file) == ['{"sdp":"SDP-S","t":"offre","vers":8}'],
+		"une offre prête pendant la création de la connexion part quand même (%s)" % [hote._file])
+	hote.offre_synchrone = false
+	hote._retirer(8)
+	hote._arrivees.erase(8)
+	hote._file.clear()
+	hote._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.PERIODE_PING * 1000.0) + 1)
+	_check(Array(hote._file) == ['{"t":"ping"}'], "toutes les 30 s, l'hôte envoie le ping, ce texte exact")
+	hote.recevoir('{"t":"pong"}')
+	hote.recevoir('{"t":"erreur","raison":"expiree"}')
+	hote._sur_socket_fermee(1000, "expiree")
+	_check(hote.signaux == ["pret K7Q2XM", "salle_fermee expiree"] and hote.servir(),
+		"la salle expire après pret : seulement salle_fermee (une fois), la session continue (%s)" % [hote.signaux])
+	var appels_avant := hote.appels.size()
+	hote.recevoir('{"t":"arrivee","id":9,"ice":[]}')
+	_check(hote.appels.size() == appels_avant, "la signalisation finie, plus rien de reçu ne compte (%s)" % [hote.appels.slice(appels_avant)])
+	hote.quitter()
+	_check(not hote.servir() and hote.pair() == null and hote.appels[-1] == "fermer socket",
+		"quitter sans pair connecté : la socket se ferme, le transport aussi")
+
+	# La création échoue avant pret
+	var refuse := TransportWebRTCSimule.new()
+	refuse.heberger()
+	refuse.recevoir('{"t":"erreur","raison":"quota"}')
+	refuse._sur_socket_fermee(1000, "quota")
+	var coupe := TransportWebRTCSimule.new()
+	coupe.heberger()
+	coupe._sur_socket_fermee(1006, "")
+	var muet := TransportWebRTCSimule.new()
+	muet.heberger()
+	muet._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_SIGNALISATION * 1000.0) + 1)
+	var motif := TransportWebRTCSimule.new()
+	motif.heberger()
+	motif._sur_socket_fermee(1000, "debit")
+	_check(refuse.signaux == ["echec quota"] and coupe.signaux == ["echec injoignable"] and muet.signaux == ["echec injoignable"]
+		and motif.signaux == ["echec debit"],
+		"avant pret, la création échoue (une fois) : l'erreur de la salle, une socket coupée, 5 s sans salle, ou le motif de la fermeture (%s, %s, %s, %s)"
+		% [refuse.signaux, coupe.signaux, muet.signaux, motif.signaux])
+
+	# Le client
+	var client := TransportWebRTCSimule.new()
+	_check(client.rejoindre("K7Q2XM") == OK and client.url == "ws://localhost:8787/v1/rejoindre/K7Q2XM" and client.pair() == null
+		and client.servir(),
+		"rejoindre : /v1/rejoindre/K7Q2XM s'ouvre, pas encore de pair (son identifiant vient de la salle)")
+	client.recevoir('{"t":"bienvenue","id":123456789,"ice":[]}')
+	_check(client.signaux == ["pair_pret"] and client.pair() != null and client.pair().get_unique_id() == 123456789
+		and client.appels == ["relier 1"],
+		"bienvenue : son pair naît avec son identifiant, relié à l'hôte (pair_pret) (%s)" % [client.signaux])
+	client.recevoir('{"t":"offre","de":1,"sdp":"SDP-O"}')
+	client.recevoir('{"t":"candidat","de":1,"media":"0","index":0,"nom":"candidate:3"}')
+	client.recevoir('{"t":"candidat","de":8,"media":"0","index":0,"nom":"candidate:4"}')
+	client._sur_description("answer", "SDP-R", 1)
+	_check(client.appels.slice(1) == ["description 1 offer SDP-O", "candidat 1 0 0 candidate:3"]
+		and Array(client._file) == ['{"sdp":"SDP-R","t":"reponse","vers":1}'],
+		"l'offre et les candidats de l'hôte s'appliquent (pas ceux d'un autre), sa réponse part (%s)" % [client.appels])
+	client._sur_socket_fermee(1000, "ouvert")
+	client._file.clear()
+	client._sur_candidat("0", 1, "candidate:7", 1)
+	client.recevoir('{"t":"candidat","de":1,"media":"0","index":1,"nom":"candidate:8"}')
+	_check(client._file.is_empty() and client.appels.size() == 3,
+		"la socket fermée (1000 ouvert), plus rien ne part ni ne s'applique par la salle (%s, %s)" % [client._file, client.appels])
+	client._sur_pair_connecte(1)
+	client._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	_check(client.signaux == ["pair_pret", "connecte"] and client.appels.count("fermer socket") == 0,
+		"la salle ferme la socket (1000 ouvert) sans échec, le canal s'ouvre : connecte ; le client n'a pas fermé sa socket (%s)" % [client.signaux])
+	var lent := TransportWebRTCSimule.new()
+	lent.rejoindre("K7Q2XM")
+	lent.recevoir('{"t":"bienvenue","id":42,"ice":[]}')
+	lent._sur_socket_fermee(1000, "ouvert")
+	lent._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	var retarde := TransportWebRTCSimule.new()
+	retarde.rejoindre("K7Q2XM")
+	retarde.recevoir('{"t":"bienvenue","id":43,"ice":[]}')
+	retarde.recevoir('{"t":"erreur","raison":"delai"}')
+	retarde._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)  # pas un second échec
+	var inconnu := TransportWebRTCSimule.new()
+	inconnu.rejoindre("K7Q2XM")
+	inconnu.recevoir('{"t":"erreur","raison":"inconnue"}')
+	inconnu._sur_socket_fermee(1000, "inconnue")
+	var perdu := TransportWebRTCSimule.new()
+	perdu.rejoindre("K7Q2XM")
+	perdu.recevoir('{"t":"bienvenue","id":44,"ice":[]}')
+	perdu._sur_socket_fermee(1006, "")
+	_check(lent.signaux == ["pair_pret", "echec delai"] and retarde.signaux == ["pair_pret", "echec delai"]
+		and inconnu.signaux == ["echec inconnue"] and perdu.signaux == ["pair_pret", "echec injoignable"],
+		"un client échoue : canal fermé 15 s après bienvenue, erreur delai de la salle, salle inconnue, socket coupée avant ouvert (%s, %s, %s, %s)"
+		% [lent.signaux, retarde.signaux, inconnu.signaux, perdu.signaux])
+	var expire := TransportWebRTCSimule.new()
+	expire.rejoindre("K7Q2XM")
+	expire.recevoir('{"t":"bienvenue","id":45,"ice":[]}')
+	expire._surveiller(Time.get_ticks_msec() + int(TransportWebRTC.DELAI_CANAL * 1000.0) + 1)
+	expire.recevoir('{"t":"offre","de":1,"sdp":"SDP-T"}')
+	expire._sur_description("answer", "SDP-U", 1)
+	expire._sur_socket_fermee(1006, "")
+	_check(expire.signaux == ["pair_pret", "echec delai"] and expire.appels == ["relier 1"] and expire._file.is_empty(),
+		"le délai de 15 s du client finit sa signalisation : rien de reçu ni d'envoyé ensuite, sa fermeture n'est pas un second échec (%s, %s)"
+		% [expire.signaux, expire.appels])
+
+	# La file cadencée
+	var file := TransportWebRTCSimule.new()
+	file.rejoindre("K7Q2XM")
+	for i in range(20):
+		file._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	file.ouverte = false
+	file._vider_file(100000)
+	var avant_ouverture := file.ecrits.size()
+	file.ouverte = true
+	for t in range(100000, 101000, 16):  # une seconde, une image toutes les 16 ms
+		file._vider_file(t)
+	var en_une_seconde := file.ecrits.size()
+	for t in range(101000, 103000, 16):
+		file._vider_file(t)
+	_check(avant_ouverture == 0 and en_une_seconde == TransportWebRTC.ENVOIS_PAR_SECONDE and file.ecrits.size() == 20
+		and file.ecrits == range(20).map(func(i: int) -> String: return JSON.stringify({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})),
+		"la file attend la socket ouverte, puis envoie 15 messages au plus par seconde, tous, dans l'ordre (%d, %d, %d)"
+		% [avant_ouverture, en_une_seconde, file.ecrits.size()])
+	var espacee := TransportWebRTCSimule.new()
+	espacee.rejoindre("K7Q2XM")
+	for i in range(5):
+		espacee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+	var instants: Array[int] = []
+	for t in range(200000, 200400, 10):  # une image toutes les 10 ms
+		var avant := espacee.ecrits.size()
+		espacee._vider_file(t)
+		for k in range(espacee.ecrits.size() - avant):
+			instants.append(t)
+	_check(instants == [200000, 200050, 200100, 200150, 200200],
+		"deux envois sont espacés de 50 ms au moins, en plus du plafond par seconde (une rafale retardée par TCP arriverait d'un coup à la salle) (%s)" % [instants])
+
+
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
 ## valeur.
 func _attendre(condition: Callable, delai: float) -> bool:
@@ -2712,3 +3089,107 @@ class TransportPerdu extends Transport:
 
 	func servir() -> bool:
 		return reel.servir() and not perdu
+
+
+## Un transport simulé (`_tester_transport_tardif`) : `heberger()` et `rejoindre()` réussissent sans
+## rien ouvrir ni rien dire ; le test émet lui-même `pret`, `echec` et `salle_fermee`, comme le ferait
+## `TransportWebRTC` (ou `pret` pendant `heberger()`, comme `TransportENet`, si `code_immediat` est donné).
+## Son pair est un `WebRTCMultiplayerPeer` (il existe sur le desktop, sans connexion) :
+## celui de l'hôte dès `heberger()`, celui d'un client à `donner_identifiant` (puis `pair_pret`).
+## `servir()` faux dès que `perdu` est vrai (fermé de lui-même), ou une fois quitté.
+class TransportTardif extends Transport:
+	var perdu := false
+	var quitte := false
+	## Non vide : `pret` part avec ce code pendant `heberger()`, comme en ENet.
+	var code_immediat := ""
+	var _pair: WebRTCMultiplayerPeer
+
+	func heberger() -> Error:
+		_pair = WebRTCMultiplayerPeer.new()
+		var erreur := _pair.create_server()
+		if erreur == OK and not code_immediat.is_empty():
+			pret.emit(code_immediat)
+		return erreur
+
+	func rejoindre(_code: String) -> Error:
+		return OK
+
+	## Chez un client : son identifiant arrive (`bienvenue`) ; son pair naît, puis `pair_pret`.
+	func donner_identifiant(id: int) -> void:
+		_pair = WebRTCMultiplayerPeer.new()
+		_pair.create_client(id)
+		pair_pret.emit()
+
+	func quitter() -> void:
+		quitte = true
+		clore()
+
+	func clore() -> void:
+		if _pair != null:
+			_pair.close()
+			_pair = null
+
+	func pair() -> MultiplayerPeer:
+		return _pair
+
+	func liberer(_id: int) -> void:
+		pass
+
+	func servir() -> bool:
+		return not perdu and not quitte
+
+
+## `TransportWebRTC` sans socket ni WebRTC (`_tester_transport_webrtc`) : la socket s'ouvre toujours
+## (`url` retenue), `ouverte` dit si elle est prête, ses écritures vont dans `ecrits` ; les connexions
+## WebRTC ne sont que notées dans `appels` (leur pair, un `WebRTCMultiplayerPeer`, est réel). Ses signaux
+## vont dans `signaux`.
+class TransportWebRTCSimule extends TransportWebRTC:
+	var url := ""
+	var ouverte := true
+	var ecrits: Array[String] = []
+	var appels: Array[String] = []
+	var signaux: Array[String] = []
+	## Vrai : l'offre de l'hôte est prête pendant `_relier` (avant son retour).
+	var offre_synchrone := false
+
+	func _init() -> void:
+		pret.connect(func(code: String) -> void: signaux.append("pret " + code))
+		pair_pret.connect(func() -> void: signaux.append("pair_pret"))
+		connecte.connect(func() -> void: signaux.append("connecte"))
+		echec.connect(func(raison: String) -> void: signaux.append("echec " + raison))
+		salle_fermee.connect(func(raison: String) -> void: signaux.append("salle_fermee " + raison))
+
+	func _ouvrir_socket(adresse: String) -> Error:
+		url = adresse
+		_ws = WebSocketPeer.new()  # jamais relevée (`_servir_socket` ne fait rien) : seulement « ouverte »
+		return OK
+
+	func _servir_socket() -> void:
+		pass
+
+	func _socket_prete() -> bool:
+		return ouverte
+
+	func _ecrire(texte: String) -> void:
+		ecrits.append(texte)
+
+	func _fermer_socket() -> void:
+		appels.append("fermer socket")
+		_ws = null
+
+	func _relier(id: int) -> Error:
+		_connexions[id] = null
+		appels.append("relier %d" % id)
+		if offre_synchrone and _hote:
+			_sur_description("offer", "SDP-S", id)
+		return OK
+
+	func _retirer(id: int) -> void:
+		appels.append("retirer %d" % id)
+		super._retirer(id)
+
+	func _appliquer_description(id: int, type: String, sdp: String) -> void:
+		appels.append("description %d %s %s" % [id, type, sdp])
+
+	func _appliquer_candidat(id: int, media: String, index: int, nom: String) -> void:
+		appels.append("candidat %d %s %d %s" % [id, media, index, nom])

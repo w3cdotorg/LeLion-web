@@ -11,7 +11,9 @@ extends Control
 ##
 ## L'hôte voit le code de la partie (`Reseau.code_partie`, relu à chaque affichage) : un code de salle
 ## (« K7Q-2XM ») et « Copier le lien », qui met le lien d'invitation dans le presse-papiers (spec §4.4) ;
-## sur le desktop de développement, l'adresse `ip:port` de l'hôte ENet, sans lien.
+## sur le desktop de développement, l'adresse `ip:port` de l'hôte ENet, sans lien. Une salle qui
+## n'accueille plus personne (`Reseau.raison_salle_fermee`) : son message à la place du code, sans lien
+## (spec §4.3 : « Salle expirée : crée une nouvelle partie pour inviter »).
 ##
 ## Retour (ou Échap, B à la manette) quitte le réseau et ramène à l'écran En ligne ; un hôte perdu y
 ## ramène avec « L'hôte a quitté la partie ». Aucun contrôle ne prend le focus (les boutons se
@@ -242,8 +244,13 @@ func _afficher() -> void:
 	titre_niveau.text = tr("SALON_NIVEAU") % tr(GameState.NIVEAUX[Reseau.niveau_salon].nom)
 	aide.text = tr("SALON_AIDE_HOTE" if hote else "SALON_AIDE")
 	rangee_invitation.visible = hote and not Reseau.code_partie.is_empty()
-	etiquette_code.text = tr("SALON_CODE") % CodeSalle.formater(Reseau.code_partie)
-	bouton_copier.visible = CodeSalle.valide(Reseau.code_partie)
+	if Reseau.raison_salle_fermee.is_empty():
+		etiquette_code.text = tr("SALON_CODE") % CodeSalle.formater(Reseau.code_partie)
+		bouton_copier.visible = CodeSalle.valide(Reseau.code_partie)
+	else:
+		var expiree := Reseau.raison_salle_fermee == Transport.ECHEC_EXPIREE
+		etiquette_code.text = tr("SALON_SALLE_EXPIREE" if expiree else "SALON_SALLE_FERMEE")
+		bouton_copier.visible = false
 	_afficher_etat()
 
 

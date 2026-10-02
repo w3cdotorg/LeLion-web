@@ -55,8 +55,8 @@ qui change est sous `Reseau` : le transport devient une unité à part, avec deu
 | Unité | Rôle | Dépend de |
 |---|---|---|
 | `Reseau` (autoload, allégé) | Poignée de main (authentification de `SceneMultiplayer`, inchangée), table du salon, barrière de chargement, relance de manche, départs. Ne nomme plus aucune classe ENet. Tient le **battement** : chaque poste envoie un battement par seconde (non fiable) ; tout paquet de `Reseau` reçu d'un pair, battement ou RPC, remet son silence à zéro (`SceneMultiplayer` ne donne ni l'heure de réception par pair ni un signal par RPC reçue : le trafic de la manche n'est pas compté, le battement y suffit) ; 10 s de silence (30 s au chargement) le déclarent parti. Départ volontaire : un adieu fiable, puis le transport ferme une fois l'adieu envoyé (§5). Un exclu part de lui-même à l'annonce, fiable ; l'hôte le libère ensuite. Ajoute l'**exclusion** par l'hôte (§8). | `Transport`, `GameState` |
-| `Transport` (interface `@abstract`, `RefCounted`) | `heberger() -> Error`, `rejoindre(code: String) -> Error`, `quitter()` (ferme une fois envoyé ce qui est en file, en arrière-plan), `clore()` (tout de suite), `pair() -> MultiplayerPeer`, `liberer(id)` (chez l'hôte : ferme sur-le-champ le canal d'un pair parti, muet ou exclu, sans attendre de réponse ; son `peer_disconnected` part pendant l'appel), `servir() -> bool` (à chaque image ; faux une fois fermé) ; signaux `pret(code)` (chez l'hôte : la salle existe), `connecte()` (chez le client : canal ouvert, la poignée de main peut partir), `echec(raison)`. Ne sait rien du salon ni du jeu. | rien |
-| `TransportWebRTC` | Le transport livré : la signalisation (§4), un `WebRTCPeerConnection` par client chez l'hôte, la configuration ICE reçue du Worker, les canaux (§5). | `Transport`, `WebSocketPeer` |
+| `Transport` (interface `@abstract`, `RefCounted`) | `heberger() -> Error`, `rejoindre(code: String) -> Error`, `quitter()` (ferme une fois envoyé ce qui est en file, en arrière-plan), `clore()` (tout de suite), `pair() -> MultiplayerPeer`, `liberer(id)` (chez l'hôte : ferme sur-le-champ le canal d'un pair parti, muet ou exclu, sans attendre de réponse ; son `peer_disconnected` part pendant l'appel), `servir() -> bool` (à chaque image ; faux une fois fermé) ; signaux `pret(code)` (chez l'hôte : la salle existe, pendant `heberger()` en ENet, plus tard en WebRTC), `connecte()` (chez le client : canal ouvert, la poignée de main peut partir), `pair_pret()` (chez le client WebRTC : son pair existe, son identifiant venu de `bienvenue` ; `SceneMultiplayer` refuse un `WebRTCMultiplayerPeer` avant `create_client`), `echec(raison)` (chez le client, ou chez l'hôte avant `pret` : routé en échec de connexion), `salle_fermee(raison)` (chez l'hôte après `pret` : plus d'arrivées, la partie continue). Ne sait rien du salon ni du jeu. | rien |
+| `TransportWebRTC` | Le transport livré : la signalisation (§4 ; envois en texte, cadencés à 15 par seconde, identifiants en entiers ; adresse du Worker dans le réglage `lelion/signalisation/url`, `ws://localhost:8787` en local), un `WebRTCPeerConnection` par client chez l'hôte, la configuration ICE reçue du Worker (`?relais=1` : `iceTransportPolicy: "relay"`, passée telle quelle au `RTCPeerConnection` du navigateur), les canaux (§5). Ses décisions se testent sans navigateur (`tests/unitaires.gd`, socket et connexions simulées). | `Transport`, `WebSocketPeer` |
 | `TransportENet` | Le transport ENet de LeLion-multi, extrait de `Reseau.gd`, gardé pour la **version desktop de développement et les tests headless** (le test réseau, le relais de latence). Jamais choisi dans l'export Web. Le « code » y est `ip:port`. | `Transport` |
 | `EcranEnLigne` (remplace `EcranReseau`) | Pseudo (mémorisé dans `Scores`), *Créer une partie* (absent sur mobile), *Rejoindre* avec un champ de code (pré-rempli par `?salle=`), messages d'erreur (§9). Le salon de l'hôte affiche le code et *Copier le lien*. Le code (`CodeSalle`) : un code de salle sur le Web ; l'adresse `ip:port` d'un hôte `TransportENet` sur le desktop de développement. Passe par `Reseau.creer_partie()` et `Reseau.rejoindre_partie(code)`, qui choisissent le transport. | `Reseau`, `CodeSalle` |
 | `signalisation/` (Worker + Durable Object `Salle`, JavaScript) | Crée les salles, relaie offres, réponses et candidats entre l'hôte et chaque arrivant, fournit les identifiants TURN, applique les plafonds (§8). Ne lit pas le contenu WebRTC. Six modules (`index`, `origine`, `code`, `protocole`, `ice`, `salle`, environ 440 lignes), avec ses tests `vitest` dans l'environnement local de Cloudflare (`@cloudflare/vitest-plugin`). | API TURN de Cloudflare |
@@ -246,6 +246,8 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 | Hôte muet 10 s | « L'hôte a quitté la partie » (retours du LAN) |
 | Client revenu d'un onglet caché, déclaré parti entre-temps (silence) | « Tu as été déconnecté » puis écran En ligne |
 | Salle expirée (4 h) | Chez l'hôte, dans le salon : « Salle expirée : crée une nouvelle partie pour inviter » |
+| Signalisation de l'hôte fermée autrement (débit, coupure) | Chez l'hôte, dans le salon : « Invitations coupées : crée une nouvelle partie pour inviter » ; la partie continue |
+| Création refusée ou sans réponse (avant le code) | Les messages ci-dessus (quota, service indisponible), l'écran En ligne revenu à l'accueil |
 
 ## 10. Tests
 
@@ -262,10 +264,14 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   sockets, 16 Ko, 20 msg/s), limites par IP (création, arrivée, /64), origine refusée, expiration à
   4 h, délai d'arrivée de 30 s, identifiants TURN (API Cloudflare simulée), réponses automatiques
   `ping`.
-- **De bout en bout WebRTC** (Playwright, Chromium et Firefox, en CI) : l'export Web servi en local,
-  le Worker en local (`wrangler dev`), 3 pages. Création, arrivée de deux pages par le lien, Prêt,
-  manche de 10 s, même empreinte sur les 3 pages (lue dans la console), exclusion d'un joueur, départ
-  de l'hôte vu par les autres. Le TURN ne se teste pas en local.
+- **De bout en bout WebRTC** (`tests/web/`, Playwright, Chromium et Firefox, en CI) : l'export « Web
+  pilote » (l'export Web plus la fonctionnalité `pilote`, qui active `Scripts/PiloteWeb.gd` : la page
+  mène le jeu par ses vrais écrans et relit son état, sans viser de pixels) servi sur
+  `http://localhost:8060`, le Worker en local (`wrangler dev`), 3 pages. Création, arrivée de deux pages
+  par le lien, Prêt, manche de 10 s où chacun peint, même empreinte sur les 3 pages (lue dans la
+  console), départ de l'hôte vu par les autres avant les 10 s de silence ; sous WebKit, *Copier le lien*
+  sous un vrai clic. L'exclusion d'un joueur s'y ajoute avec elle (phase 7). Le TURN ne se teste pas en
+  local.
 - **Essai réel** : `docs/essai-en-ligne.md` (hôte sur ordinateur, au moins un mobile en 4G, un joueur
   dans un autre foyer ; une manche avec le relais TURN forcé par `?relais=1`, paramètre de
   diagnostic qui pose `iceTransportPolicy: "relay"`). Ses réponses font la phase 6 bis.

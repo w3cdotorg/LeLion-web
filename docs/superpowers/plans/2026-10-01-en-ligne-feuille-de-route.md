@@ -48,7 +48,7 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 | 2 | **Signalisation** : Worker et Durable Object `Salle` (§4 et §8.1 du spec : messages, plafonds, origine, expiration, identifiants TURN, hibernation), tests `vitest` dans l'environnement local de Cloudflare ; job CI du Worker. Vérifier ici : limitation de débit sur l'offre gratuite. | ➕ `signalisation/package.json` ➕ `signalisation/wrangler.jsonc` ➕ `signalisation/src/index.js` ➕ `signalisation/test/salle.test.js` ✏️ `.github/workflows/ci.yml` | `npm test` vert en local et en CI, sans compte Cloudflare. Faite (PR #3). |
 | 3 | **Écran En ligne** : remplace l'écran Réseau (pseudo, *Créer une partie*, *Rejoindre* avec un code) ; code de salle (alphabet, format `K7Q-2XM`, validation), lecture de `?salle=` ; le salon affiche le code et *Copier le lien*. Sur desktop (dev), le code est `ip:port` pour `TransportENet`. ◉ | ➕ `Scripts/CodeSalle.gd` ➕ `Scenes/EcranEnLigne.tscn` ➕ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scenes/Salon.tscn` ✏️ `Scripts/Titre.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Transport.gd` ✏️ `Scripts/TransportENet.gd` ✏️ `project.godot` ✏️ `Assets/Traductions/traductions.csv` ✏️ tests (`unitaires`, `smoke_test`, `screenshots`, `deux_fenetres`, `reseau/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Parcours Titre → En ligne → Salon en ENet ; unitaires du code de salle. Faite (PR #4). |
 | 3 bis | **Retrait de la découverte** : `Decouverte.gd`, son autoload, l'écran Réseau, les scénarios de découverte et `DIFFUSION=1` ; tests adaptés à l'écran En ligne. | ➖ `Scripts/Decouverte.gd` ➖ `Scripts/EcranReseau.gd` ➖ `Scenes/EcranReseau.tscn` ✏️ `project.godot` ✏️ `Assets/Traductions/traductions.csv` ✏️ `Scripts/Salon.gd` ✏️ `Scripts/Titre.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Regles.gd` ✏️ tests (`smoke_test`, `screenshots`, `deux_fenetres`, `unitaires`, `reseau/`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Plus aucune référence à `Decouverte` ; captures à jour (compte de la CI ajusté en phase 3 : 38). Faite (PR #5). |
-| 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ✏️ `Scripts/Reseau.gd` (choix du transport) ➕ `tests/web/bout_en_bout.spec.js` ➕ `tests/web/playwright.config.js` ✏️ `.github/workflows/ci.yml` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. |
+| 4 | **WebRTC** : `TransportWebRTC` (signalisation en `WebSocketPeer`, `WebRTCMultiplayerPeer` en étoile, canaux §5, délai de 15 s, `?relais=1`) ; test de bout en bout Playwright (Chromium et Firefox, 3 pages, Worker en `wrangler dev`) en CI. | ➕ `Scripts/TransportWebRTC.gd` ➕ `Scripts/PiloteWeb.gd` ✏️ `Scripts/Transport.gd` ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `Scripts/CodeSalle.gd` ✏️ `project.godot` ✏️ `export_presets.cfg` ✏️ `Assets/Traductions/traductions.csv` ➕ `tests/web/` ✏️ tests (`unitaires`, `smoke_test`) ✏️ `.github/workflows/ci.yml` ✏️ spec ✏️ `README.md` | Une manche de 10 s à 3 pages, même empreinte, départ de l'hôte vu. Faite (PR #6). |
 | 5 | **Déploiement** (compte Cloudflare, application TURN et secrets prêts, avec l'utilisateur) : tag `vX.Y` → `wrangler deploy` puis GitHub Pages ; URL du Worker dans le réglage `lelion/signalisation/url`. Vérifier ici : TURN sans carte bancaire. | ✏️ `.github/workflows/ci.yml` ✏️ `project.godot` ✏️ `signalisation/wrangler.jsonc` ✏️ `README.md` | Première partie en ligne sur `https://w3cdotorg.github.io/LeLion-web/`. |
 | 6 | **Mobiles** (§6) : contrôles tactiles au salon et en manche, voile portrait, plein écran au premier toucher, son en `Stream`, *Créer une partie* absent sur mobile ; profil mobile (150/60/8) du banc de la prédiction. ◉ | ✏️ `Scripts/ControlesTactiles.gd` ✏️ `Scripts/EcranEnLigne.gd` ✏️ `Scripts/Salon.gd` ✏️ `project.godot` ✏️ `tests/prediction_test.gd` | Captures 360×640 et 844×390 ; banc vert sous le profil mobile. |
 | 7 | **Sécurité du jeu et documentation** (§8.2) : débit des RPC des clients, pseudos nettoyés, exclusion par l'hôte (croix sur la carte, message à l'exclu) ; README « Jouer en ligne » ; fiche `docs/essai-en-ligne.md`. ◉ | ✏️ `Scripts/Reseau.gd` ✏️ `Scripts/Salon.gd` ✏️ `tests/unitaires.gd` ✏️ `README.md` ➕ `docs/essai-en-ligne.md` | Unitaires des limites et de l'exclusion ; fiche prête pour l'essai. |
@@ -142,3 +142,39 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 - Le clavier virtuel couvre le champ du code et le message.
 - La rangée d'invitation du salon touche le bas de l'écran (zone sûre).
 - Coller dans un champ Godot sur mobile est peu fiable : le lien d'invitation est le chemin principal.
+
+### Notes de la revue de la phase 4 (pour les phases 5 à 7)
+
+**Phase 5** :
+
+- `lelion/signalisation/url` devient l'adresse `wss://` déployée ; `lelion/signalisation/url.pilote="ws://localhost:8787"`
+  pour que l'e2e reste local (l'unitaire qui vérifie l'URL change).
+- La CI vérifie que le pck publié ne contient ni `pilote` (`_custom_features`) ni une URL localhost ; un
+  contrôle de bout en bout sur l'artefact publié : `window.lelionPilote === undefined`, aucun « PILOTE PRET ».
+- Un échec synchrone de `connect_to_url` (URL mal formée, contenu mixte) affiche aujourd'hui « Impossible
+  d'héberger/rejoindre (erreur N) » : sur le Web, le rapporter en « Service de connexion indisponible ».
+- Trancher si les `ORIGINES` de production gardent `http://localhost:*`.
+- Les limites de 5 créations et 30 arrivées par minute et par IP touchent les réseaux d'école (une seule IP
+  pour tous).
+- Pages ne publie que `export/web`, construit depuis une extraction propre.
+
+**Phase 6** :
+
+- Toute option changée dans le préréglage « Web » doit l'être dans « Web pilote » (l'unitaire de la phase 4
+  le vérifie) ; `experimental_virtual_keyboard` pour taper le pseudo.
+- Envisager un client e2e en viewport mobile.
+- Un onglet caché arrête `_process` : battements et pings s'arrêtent avec lui.
+- iOS n'est couvert que par l'essai réel (WebKit ne relie pas deux pages dans le conteneur).
+- La CI montre qu'un appareil lent joue au ralenti, et qu'un hôte lent ralentit tout le monde.
+
+**Phase 7** :
+
+- L'étape d'exclusion dans l'e2e.
+- « Garde cet onglet au premier plan » et « Tu as été déconnecté ».
+- La formulation du §5 (« 1 seul envoi » contre maxPacketLifetime 100 ms).
+- Élargir l'e2e : capter les exceptions JS (`pageerror`) en plus de la console, et refaire se croiser les lions (étourdissements, chocs) dans la manche à trois pages.
+
+**Phase 6** (complément de la revue de la phase 4) :
+
+- Sur un appareil lent, `_vider_file` n'envoie qu'un message par image quand une image dure plus de 50 ms (≈ 2 messages/s à 2 i/s) : plusieurs arrivées simultanées sur un hôte très lent peuvent dépasser `DELAI_CANAL` (15 s).
+- Délai du test `@manche` : 180 s (Chromium bridé à 1,5 CPU : 150 s ; CI : 66 s) ; le relever à 300 s si un passage CI dépasse 120 s.

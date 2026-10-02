@@ -27,6 +27,7 @@ Scores="*res://Scripts/Scores.gd"
 Parametres="*res://Scripts/Parametres.gd"
 Audio="*res://Scripts/Audio.gd"
 Reseau="*res://Scripts/Reseau.gd"
+PiloteWeb="*res://Scripts/PiloteWeb.gd"
 
 [display]
 
@@ -98,6 +99,7 @@ demarrer={
 [lelion]
 
 page/url="https://w3cdotorg.github.io/LeLion-web/"
+signalisation/url="ws://localhost:8787"
 
 [rendering]
 
