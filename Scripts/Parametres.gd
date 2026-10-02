@@ -19,6 +19,9 @@ const CIBLE_TACTILE := 150
 ## Demandes de plein écran au plus, sur un mobile : Safari sur iPhone n'a pas de plein écran pour un canevas,
 ## et chaque demande refusée écrit une erreur ; sans plafond, une à chaque toucher.
 const TENTATIVES_PLEIN_ECRAN := 3
+## La demande de plein écran d'un mobile Web (`_input`) : la page entière, sauf si le champ de saisie de la
+## page (`SaisieWeb`) s'ouvre pour ce toucher, ou l'est déjà ; vrai si elle est faite.
+const DEMANDE_PLEIN_ECRAN_WEB := "(() => { const s = window.lelionSaisie; if (s?.surChamp() || document.activeElement === s?.entree) return false; document.documentElement.requestFullscreen?.()?.catch(() => {}); return true; })()"
 
 var musique := 0.7
 var effets := 1.0
@@ -65,17 +68,33 @@ func _process(_delta: float) -> void:
 		_taille_fenetre = taille
 		actualiser_voile(taille)
 	if tentatives_plein_ecran > 0 and not plein_ecran_obtenu:
-		suivre_plein_ecran(DisplayServer.window_get_mode())
+		suivre_plein_ecran(_mode_fenetre_mobile())
 
 
 ## Sur un mobile, le relâchement d'un toucher demande le plein écran (spec §6) : le navigateur ne l'accorde
 ## que pendant un geste de l'utilisateur, et `touchend` en est un (`touchstart` non). Redemandé au relâchement
 ## suivant tant qu'il n'est pas obtenu, TENTATIVES_PLEIN_ECRAN fois au plus. Pas mémorisé dans les préférences.
+## Dans l'export Web, la page entière passe en plein écran, pas le seul canevas (celui de
+## `DisplayServer.window_set_mode`) : le champ de saisie posé par-dessus le jeu (`SaisieWeb`) en est, et
+## reste visible ; et le toucher qui ouvre ce champ ne demande rien (le clavier qui s'ouvre et la
+## page qui change de taille se gêneraient), ni ne compte.
 func _input(event: InputEvent) -> void:
 	if mobile and not plein_ecran_obtenu and tentatives_plein_ecran < TENTATIVES_PLEIN_ECRAN \
 			and event is InputEventScreenTouch and not event.pressed:
-		tentatives_plein_ecran += 1
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		if not OS.has_feature("web"):
+			tentatives_plein_ecran += 1
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		elif JavaScriptBridge.eval(DEMANDE_PLEIN_ECRAN_WEB, true) == true:
+			tentatives_plein_ecran += 1
+
+
+## Le mode de la fenêtre d'un mobile : dans l'export Web, plein écran si la page l'est (`_input`).
+func _mode_fenetre_mobile() -> DisplayServer.WindowMode:
+	if OS.has_feature("web"):
+		# `!!` : sur iPhone, `fullscreenElement` n'existe pas (undefined).
+		var plein: Variant = JavaScriptBridge.eval("!!document.fullscreenElement", true)
+		return DisplayServer.WINDOW_MODE_FULLSCREEN if plein == true else DisplayServer.WINDOW_MODE_WINDOWED
+	return DisplayServer.window_get_mode()
 
 
 ## Le mode `mode` de la fenêtre, lu à chaque image après une demande (`_process`) : un mobile vu en plein

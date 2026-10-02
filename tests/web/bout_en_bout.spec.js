@@ -228,14 +228,39 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	const [x0, y0, x1, y1] = accueil.ecran.rejoindre;
 	expect(y1 - y0, `Rejoindre fait ${y1 - y0} px CSS de haut`).toBeGreaterThanOrEqual(44);
 	await commander(mobile, "duree", 12);
-	// Rejoindre au doigt, sans pseudo (l'hôte le nomme « Joueur 2 ») : ce premier toucher demande aussi le plein écran
-	await mobile.touchscreen.tap((x0 + x1) / 2, (y0 + y1) / 2);
-	await attendre(mobile, (e) => e.scene === "Salon", "le mobile arrive au salon (Rejoindre touché)");
+	// Le pseudo au doigt, dans le vrai champ de la page posé sur celui du jeu (SaisieWeb : le clavier d'un téléphone
+	// ne s'ouvre que pour lui) ; ce toucher d'un champ ne demande pas le plein écran (il gênerait le clavier)
+	const zones = await mobile.evaluate(() => window.lelionSaisie.zones());
+	expect(zones.map((z) => z.id).sort(), "les deux champs publiés à la page").toEqual(["Code", "Pseudo"]);
+	const pseudo = zones.find((z) => z.id === "Pseudo");
+	expect(pseudo.y + pseudo.h <= y0 || pseudo.y >= y1 || pseudo.x + pseudo.l <= x0 || pseudo.x >= x1, "le champ n'est pas sous Rejoindre").toBe(true);
+	await mobile.touchscreen.tap(pseudo.x + pseudo.l / 2, pseudo.y + pseudo.h / 2);
+	await expect
+		.poll(() => mobile.evaluate(() => document.activeElement === window.lelionSaisie.entree), { message: "le toucher active le champ de la page" })
+		.toBe(true);
+	const entree = await mobile.evaluate(() => {
+		const r = window.lelionSaisie.entree.getBoundingClientRect();
+		return { y: r.top, l: r.width, police: parseFloat(getComputedStyle(window.lelionSaisie.entree).fontSize) };
+	});
+	expect(entree.y, "le champ ouvert remonte vers le haut de l'écran, au-dessus du clavier").toBeLessThan(pseudo.y);
+	expect(entree.police, "16 px au moins : Safari n'agrandit pas la page").toBeGreaterThanOrEqual(16);
+	// La rangée du jeu remonte sous le champ de la page : les deux au même endroit
+	await expect
+		.poll(async () => {
+			const z = (await mobile.evaluate(() => window.lelionSaisie.zones())).find((z) => z.id === "Pseudo");
+			return Math.abs(z.y - entree.y) < 2 && Math.abs(z.l - entree.l) < 2 && z.ouvert;
+		}, { message: "le champ du jeu, remonté, est sous celui de la page" })
+		.toBe(true);
+	await mobile.keyboard.type("Pouce");
+	// Entrée dans le pseudo : Rejoindre (le code du lien attend), comme au clavier d'un ordinateur
+	await mobile.keyboard.press("Enter");
+	await attendre(mobile, (e) => e.scene === "Salon", "le mobile arrive au salon (Entrée dans le pseudo)");
 	for (const page of [hote, mobile]) {
-		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Joueur 2", "la même table du salon partout");
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Pouce", "la même table du salon partout, le pseudo tapé au doigt");
 	}
-	// Le plein écran, demandé par ce premier toucher (Chromium l'accorde : le toucher est le geste qu'il exige)
-	await expect.poll(() => mobile.evaluate(() => document.fullscreenElement !== null), { message: "le premier toucher met le mobile en plein écran" }).toBe(true);
+	expect(await mobile.evaluate(() => window.lelionSaisie.zones()), "au salon, plus aucun champ pour la page").toEqual([]);
+	expect(await mobile.evaluate(() => getComputedStyle(window.lelionSaisie.entree).display)).toBe("none");
+	expect(await mobile.evaluate(() => document.fullscreenElement), "le toucher du champ n'a pas demandé le plein écran").toBeNull();
 
 	// Au salon, au doigt : la flèche droite change la couleur, PRÊT rend prêt (vu chez l'hôte)
 	const salon = (await etat(mobile)).salon;
@@ -245,6 +270,10 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	const couleur = salon.table[1].couleur;
 	await mobile.touchscreen.tap(dx, dy);
 	await attendre(hote, (e) => e.salon?.table[1].couleur !== couleur, "la flèche touchée change la couleur du mobile, chez l'hôte");
+	// Le plein écran, demandé par ce premier toucher hors d'un champ (Chromium l'accorde : le toucher est le geste qu'il exige)
+	await expect
+		.poll(() => mobile.evaluate(() => document.fullscreenElement !== null), { message: "le premier toucher hors d'un champ met le mobile en plein écran" })
+		.toBe(true);
 	await mobile.touchscreen.tap(salon.tactile.pret[0], salon.tactile.pret[1]);
 	await attendre(hote, (e) => e.salon?.table[1].pret === true, "PRÊT touché : le mobile est prêt, chez l'hôte");
 

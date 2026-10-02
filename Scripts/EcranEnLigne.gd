@@ -22,7 +22,9 @@ extends Control
 ## doigt, textes lisibles à l'échelle d'un téléphone ; le focus va au premier contrôle visible
 ## (`_donner_focus`). Un champ en édition remonte à MARGE_CLAVIER px du haut de l'écran, au-dessus du
 ## clavier virtuel du navigateur, le message sous le code, et redescend ensuite ; Rejoindre agit à l'appui
-## (au relâchement, il aurait déjà redescendu sous le doigt).
+## (au relâchement, il aurait déjà redescendu sous le doigt). Dans l'export Web, les deux champs se
+## saisissent dans un vrai champ de la page posé par-dessus (`SaisieWeb`, `saisie_web`) : le clavier du
+## téléphone ne s'ouvre que pour lui.
 
 enum Etat { ACCUEIL, CREATION, CONNEXION, SALON }
 
@@ -79,6 +81,8 @@ static var code_a_l_arrivee := ""
 
 ## Le message affiché, gardé en clé et arguments pour être retraduit au changement de langue.
 var _message := {"cle": "", "arguments": [], "erreur": false}
+## Sur un mobile dans l'export Web (`SaisieWeb.disponible`), la saisie des deux champs ; null ailleurs.
+var saisie_web: SaisieWeb
 ## Vrai pendant une tentative lancée par Rejoindre : un refus ou un échec rend le focus au code (sinon à
 ## Créer une partie).
 var _par_le_code := false
@@ -101,6 +105,12 @@ func _ready() -> void:
 	champ_code.editing_toggled.connect(_sur_edition.bind(champ_code))
 	if Parametres.mobile:
 		_mettre_en_page_mobile()
+	if SaisieWeb.disponible(Parametres.mobile):
+		saisie_web = SaisieWeb.new()
+		add_child(saisie_web)
+		saisie_web.brancher(champ_pseudo, _deplacement_edition)
+		saisie_web.brancher(champ_code, _deplacement_edition, true, "go")
+		saisie_web.edition.connect(func(champ: LineEdit, actif: bool) -> void: _sur_edition(actif, champ))
 	_changer_etat(Etat.ACCUEIL)
 	if not code_a_l_arrivee.is_empty():
 		champ_code.text = CodeSalle.formater(code_a_l_arrivee)
@@ -253,8 +263,11 @@ func _appliquer_pseudo() -> void:
 func _changer_etat(nouvel_etat: Etat) -> void:
 	etat = nouvel_etat
 	var accueil := etat == Etat.ACCUEIL
-	champ_pseudo.editable = accueil
-	champ_code.editable = accueil
+	# Les champs d'une saisie de la page ne s'éditent jamais eux-mêmes (`SaisieWeb`).
+	champ_pseudo.editable = accueil and saisie_web == null
+	champ_code.editable = accueil and saisie_web == null
+	if saisie_web != null:
+		saisie_web.actif = accueil
 	bouton_creer.disabled = not accueil
 	bouton_rejoindre.disabled = not accueil
 	if accueil:
@@ -293,9 +306,18 @@ func _mettre_en_page_mobile() -> void:
 func _sur_edition(actif: bool, champ: LineEdit) -> void:
 	if not Parametres.mobile:
 		return
-	centre.position.y = 0.0
-	if actif:
-		centre.position.y = minf(0.0, MARGE_CLAVIER - champ.get_parent().get_global_rect().position.y)
+	centre.position.y = _hauteur_edition(champ) if actif else 0.0
+
+
+## La place verticale de `centre` quand `champ` est en édition : sa rangée à MARGE_CLAVIER px du haut de
+## l'écran (0 si elle y est déjà au-dessus), quelle que soit la place du moment.
+func _hauteur_edition(champ: LineEdit) -> float:
+	return minf(0.0, MARGE_CLAVIER - (champ.get_parent().get_global_rect().position.y - centre.position.y))
+
+
+## De combien `champ` bougera en édition depuis sa place du moment (pour `SaisieWeb`) ; 0 hors d'un mobile.
+func _deplacement_edition(champ: LineEdit) -> float:
+	return _hauteur_edition(champ) - centre.position.y if Parametres.mobile else 0.0
 
 
 func _afficher_message(cle: String, arguments: Array, erreur: bool) -> void:

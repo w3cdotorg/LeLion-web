@@ -181,8 +181,20 @@ retour au titre ne rouvre pas l'écran En ligne).
   (`Parametres.CIBLE_TACTILE` : 44 px CSS à l'échelle 0,30 d'un iPhone en paysage sous les barres de
   Safari) ; les boutons tactiles restent à 60 px des bords (zone sûre). Écran En ligne d'un mobile : le
   focus au premier contrôle visible, un champ en édition remonte en haut de l'écran au-dessus du
-  clavier virtuel (`html/experimental_virtual_keyboard`, dans les deux préréglages Web), Rejoindre agit à
-  l'appui ; le lien reste le chemin principal (coller y est peu fiable). Au salon, les flèches de la
+  clavier virtuel, Rejoindre agit à l'appui ; le lien reste le chemin principal (coller y est peu fiable).
+  La saisie (version 0.22, après le premier essai : sur iPhone, le clavier ne s'ouvrait pas) : un vrai
+  champ `<input>` de la page, posé par-dessus le LineEdit touché (`SaisieWeb`). La page l'active au
+  `touchend`, dans le geste, seule façon d'ouvrir le clavier d'un téléphone (le clavier virtuel de Godot,
+  `html/experimental_virtual_keyboard`, n'active pas le sien dans le geste : il est coupé). Godot traite le
+  relâchement d'un toucher dans le `touchend` même, avant la page : celle-ci note dès le `touchstart` si le
+  doigt est sur un champ (`surChamp`), ce que lit la demande de plein écran. Godot publie la
+  place des champs visibles de l'accueil (celle du toucher, celle de l'édition) ; la page lui rend chaque
+  frappe, Entrée (le `text_submitted` du LineEdit) et la sortie (un toucher ailleurs). Les LineEdit d'un
+  mobile Web ne s'éditent jamais eux-mêmes. Le plein écran d'un mobile Web est celui de la page entière
+  (pas du seul canevas), pour que le champ de la page y reste visible ; le toucher qui ouvre ce champ ne le
+  demande pas (le clavier qui s'ouvre et la page qui change de taille se gêneraient) et ne compte pas parmi
+  les trois demandes. Hors de l'écran En ligne, la page n'a
+  aucun champ : la manche n'en a jamais. Au salon, les flèches de la
   couleur et PRÊT poussent leurs actions comme des touches : une action par appui (phase 18). Le voile
   suit la taille de la fenêtre à chaque image ; il couvre l'écran du jeu, pas les bandes noires autour.
   Le plein écran se demande au relâchement d'un toucher (`touchend` est un geste pour le navigateur,
