@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Les passages d'un tag à la file, jamais annulés (deux déploiements ne se croisent pas, un déploiement n'est
+# jamais coupé en route) ; les autres passages, chacun son groupe : rien ne les retient ni ne les annule.
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'deploiement' || github.run_id }}
+  cancel-in-progress: false
+
 env:
   GODOT_VERSION: 4.7.2
 
@@ -241,9 +247,6 @@ jobs:
     needs: [verifier-tag, test-et-export, signalisation, bout-en-bout]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: deploiement
-      cancel-in-progress: false
     defaults:
       run:
         working-directory: signalisation
@@ -283,9 +286,6 @@ jobs:
     needs: [deploiement-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    concurrency:
-      group: deploiement
-      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
