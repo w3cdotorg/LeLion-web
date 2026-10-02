@@ -2772,6 +2772,49 @@ func _tester_transport_webrtc() -> void:
 	print("-- Transport WebRTC (phase 4, sans navigateur)")
 	var pilote: Node = root.get_node("PiloteWeb")  # autoload : jamais nommé
 	_check(not pilote.actif and not pilote.is_processing(), "le pilote du test de bout en bout est inerte hors de l'export Web pilote")
+	# Vague finale (T4) : une commande mal formée (nom, nombre ou types d'arguments) est rejetée, retirée de
+	# la file, sans bloquer celles qui suivent ; une commande bien formée qui ne peut pas encore s'exécuter
+	# (« pret » hors du salon) reste en tête.
+	var duree_avant: float = ReglesBataille.duree_manche
+	pilote._commandes = [["duree", "dix"], ["duree"], ["peindre"], ["peindre", 1, 2], ["peindre", 0], ["peindre", 0.0], ["duree", -3.0], ["creer", 7],
+		["rejoindre"], ["pret", true], 5, [], ["voler"], ["pret"], ["quitter"]]
+	pilote._vider_commandes()
+	_check(pilote._commandes == [["pret"], ["quitter"]] and ReglesBataille.duree_manche == duree_avant,
+		"le pilote rejette les commandes mal formées (nombre et types d'arguments), retirées de la file ; « pret » hors du salon attend (%s)" % [pilote._commandes])
+	ReglesBataille.duree_manche = duree_avant
+	pilote._commandes = []
+	# Les deux préréglages d'export : « Web » (publié) sans la fonctionnalité pilote, « Web pilote » avec,
+	# identiques par ailleurs (une option changée dans l'un l'est dans l'autre), et aucun n'emporte un export
+	# précédent (export/*).
+	var prereglages := ConfigFile.new()
+	_check(prereglages.load("res://export_presets.cfg") == OK, "(pré-condition) export_presets.cfg se lit")
+	var sections := {}
+	for section in prereglages.get_sections():
+		if section.count(".") == 1 and prereglages.has_section_key(section, "name"):
+			sections[prereglages.get_value(section, "name")] = section
+	_check(sections.has("Web") and sections.has("Web pilote"), "(pré-condition) les préréglages « Web » et « Web pilote » existent (%s)" % [sections.keys()])
+	if sections.has("Web") and sections.has("Web pilote"):
+		var web: String = sections["Web"]
+		var pilote_s: String = sections["Web pilote"]
+		var fonctions := func(section: String) -> PackedStringArray:
+			return str(prereglages.get_value(section, "custom_features", "")).replace(" ", "").split(",", false)
+		_check(not fonctions.call(web).has("pilote") and fonctions.call(pilote_s).has("pilote"),
+			"« Web » n'a pas la fonctionnalité pilote, « Web pilote » l'a (%s, %s)" % [fonctions.call(web), fonctions.call(pilote_s)])
+		var ecarts: Array[String] = []
+		for paire in [[web, pilote_s], [web + ".options", pilote_s + ".options"]]:
+			var cles := {}
+			for section: String in paire:
+				for cle in prereglages.get_section_keys(section) if prereglages.has_section(section) else PackedStringArray():
+					cles[cle] = true
+			for cle: String in cles:
+				if paire[0].ends_with(".options") or not ["name", "custom_features", "export_path", "runnable"].has(cle):
+					if prereglages.get_value(paire[0], cle, null) != prereglages.get_value(paire[1], cle, null):
+						ecarts.append(cle)
+		_check(ecarts.is_empty(), "les deux préréglages sont identiques option par option, hors name, custom_features, export_path, runnable (%s)" % [ecarts])
+		var exclus := func(section: String) -> PackedStringArray:
+			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
+		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
+			"aucun préréglage n'emporte un export précédent (export/* exclu) (%s, %s)" % [exclus.call(web), exclus.call(pilote_s)])
 	_check(TransportWebRTC.url_signalisation() == "ws://localhost:8787",
 		"l'adresse du Worker vient du réglage lelion/signalisation/url (wrangler dev en local) : %s" % TransportWebRTC.url_signalisation())
 	_check(TransportWebRTC.lire_relais("?salle=K7Q2XM&relais=1") and TransportWebRTC.lire_relais("relais=1")

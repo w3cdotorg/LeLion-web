@@ -18,6 +18,8 @@ extends Node
 ##   dans le sens `sens` (1 : à droite, -1 : à gauche) TICKS_PASSE ticks physiques (la passe du test
 ##   réseau, comptée en temps de jeu) ;
 ## - `["quitter"]` : retour au titre (qui quitte le réseau : l'adieu, spec §5).
+## Une commande mal formée (nom inconnu, nombre ou types d'arguments, `erreur_commande`) est rejetée
+## (`push_warning`) et retirée de la file, sans bloquer celles qui la suivent.
 ## État : `window.lelionPilote.etat`, un texte JSON réécrit à chaque image (`etat()`), que la page relit.
 ##
 ## Autoload : les tests `--script` ne le nomment pas.
@@ -29,6 +31,11 @@ const SCENE_TITRE := "res://Scenes/Titre.tscn"
 ## une passe minutée en millisecondes s'y arrêtait avant que le lion n'atteigne la ville.
 const HAUTEUR_PEINTURE := 233.0
 const TICKS_PASSE := 150
+## Les arguments de chaque commande, leurs types dans l'ordre (les nombres arrivent du JSON en flottants),
+## et combien sont facultatifs à la fin (le code de `rejoindre`).
+const ARGUMENTS := {"duree": [TYPE_FLOAT], "creer": [TYPE_STRING], "rejoindre": [TYPE_STRING, TYPE_STRING],
+	"pret": [], "demarrer": [], "peindre": [TYPE_FLOAT], "quitter": []}
+const FACULTATIFS := {"rejoindre": 1}
 
 ## Vrai dans l'export « Web pilote » seulement.
 var actif := OS.has_feature("web") and OS.has_feature("pilote")
@@ -63,14 +70,19 @@ func _process(_delta: float) -> void:
 	var recues: Variant = JSON.parse_string(str(JavaScriptBridge.eval("JSON.stringify(window.lelionPilote.commandes.splice(0))", true)))
 	if recues is Array:
 		_commandes.append_array(recues)
-	while not _commandes.is_empty() and _executer(_commandes[0]):
-		_commandes.pop_front()
+	_vider_commandes()
 	var scene := get_tree().current_scene
 	if _empreinte.is_empty() and scene != null and scene.name == "Main" and scene.get_node("Manche").finie:
 		_empreinte = empreinte_manche(scene)
 		_scores = Array(scene.get_node("Ville").territoire.scores())
 		print("EMPREINTE %s" % _empreinte)  # lue dans la console par le test de bout en bout
 	JavaScriptBridge.eval("window.lelionPilote.etat = %s;" % JSON.stringify(JSON.stringify(etat())), true)
+
+
+## Exécute les commandes en attente, dans l'ordre, jusqu'à la première qui ne le peut pas encore.
+func _vider_commandes() -> void:
+	while not _commandes.is_empty() and _executer(_commandes[0]):
+		_commandes.pop_front()
 
 
 ## L'état de ce poste, pour la page : l'écran, le réseau, l'écran En ligne, le salon, la manche.
@@ -120,9 +132,33 @@ func _ma_fiche() -> Dictionary:
 	return {}
 
 
-## Exécute la commande `commande` (`[nom, arguments…]`) ; faux si elle ne le peut pas encore.
+## Pourquoi `commande` n'est pas une commande du pilote (`[nom, arguments…]`, ARGUMENTS) : vide si elle
+## en est une. `duree` est un nombre de secondes positif, `peindre` un sens, 1 ou -1.
+static func erreur_commande(commande: Variant) -> String:
+	if not (commande is Array) or commande.is_empty() or not (commande[0] is String):
+		return "pas une liste [nom, arguments…]"
+	if not ARGUMENTS.has(commande[0]):
+		return "commande inconnue"
+	var types: Array = ARGUMENTS[commande[0]]
+	var nb: int = commande.size() - 1
+	if nb > types.size() or nb < types.size() - int(FACULTATIFS.get(commande[0], 0)):
+		return "%d argument(s) au lieu de %d" % [nb, types.size()]
+	for i in range(nb):
+		if typeof(commande[i + 1]) != types[i]:
+			return "argument %d de type %s" % [i + 1, type_string(typeof(commande[i + 1]))]
+	if commande[0] == "duree" and not (commande[1] > 0.0):
+		return "durée non positive"
+	if commande[0] == "peindre" and absf(commande[1]) != 1.0:
+		return "sens ni 1 ni -1"
+	return ""
+
+
+## Exécute la commande `commande` (`[nom, arguments…]`) ; faux si elle ne le peut pas encore. Mal formée,
+## elle est rejetée (un avertissement), donc retirée de la file.
 func _executer(commande: Variant) -> bool:
-	if not (commande is Array) or commande.is_empty():
+	var erreur := erreur_commande(commande)
+	if not erreur.is_empty():
+		push_warning("PiloteWeb : commande rejetée %s (%s)" % [commande, erreur])
 		return true
 	var scene := get_tree().current_scene
 	var nom := "" if scene == null else str(scene.name)
@@ -162,8 +198,6 @@ func _executer(commande: Variant) -> bool:
 			_peindre(scene, int(commande[1]))
 		"quitter":
 			get_tree().change_scene_to_file(SCENE_TITRE)
-		_:
-			push_warning("PiloteWeb : commande inconnue %s" % [commande])
 	return true
 
 
