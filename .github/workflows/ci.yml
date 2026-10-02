@@ -252,6 +252,8 @@ jobs:
         working-directory: signalisation
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false  # le jeton de GitHub hors de .git/config : npm ci et wrangler n'en ont pas besoin
 
       - name: Installer Node
         uses: actions/setup-node@v6
@@ -287,6 +289,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      contents: read  # des permissions au job remplacent celles du workflow : l'extraction en a besoin
       pages: write
       id-token: write
     environment:
@@ -294,6 +297,8 @@ jobs:
       url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false  # npm ci (Playwright) n'a pas à lire le jeton de GitHub
 
       - name: Reprendre l'export Web de ce passage (artefact LeLion-web, gardé par test-et-export)
         uses: actions/download-artifact@v4
