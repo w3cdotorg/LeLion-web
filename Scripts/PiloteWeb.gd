@@ -17,13 +17,17 @@ extends Node
 ## - `["peindre", sens]` : en manche, le lion de ce poste descend vers la ville, puis la peint TICKS_PASSE
 ##   ticks physiques (comptés en temps de jeu), un aller dans le sens `sens` (1 : à droite, -1 : à gauche)
 ##   puis le retour ;
+## - `["rencontrer"]` : en manche, une fois la passe de ce poste finie, son lion va au milieu de l'écran en
+##   vomissant, TICKS_RENCONTRE ticks : les lions des pages s'y croisent (chocs, gerbes qui étourdissent) ;
 ## - `["quitter"]` : retour au titre (qui quitte le réseau : l'adieu, spec §5).
 ## Une commande mal formée (nom inconnu, nombre ou types d'arguments, `erreur_commande`) est rejetée
 ## (`push_warning`) et retirée de la file, sans bloquer celles qui la suivent.
 ## État : `window.lelionPilote.etat`, un texte JSON réécrit à chaque image (`etat()`), que la page relit.
 ## Pour un client mobile (phase 6), qui joue au doigt (de vrais touchers de la page, jamais des commandes),
 ## l'état donne aussi, en px CSS de la page, ce qu'un toucher vise : Rejoindre, les boutons tactiles du
-## salon et de la manche, le stick ; et la hauteur où peindre.
+## salon et de la manche, le stick ; et la hauteur où peindre. Phase 7 : chez l'hôte, la croix d'exclusion de
+## chaque carte (ce qu'un clic vise) ; sur chaque poste en session, la durée de vie (ms) des deux canaux non
+## fiables de sa première connexion WebRTC ; une manche finie, les étourdissements et les chocs de son bilan.
 ##
 ## Autoload : les tests `--script` ne le nomment pas.
 
@@ -35,10 +39,19 @@ const SCENE_TITRE := "res://Scenes/Titre.tscn"
 const HAUTEUR_PEINTURE := 233.0
 const TICKS_PASSE := 150
 const TICKS_ALLER := 75
+## La rencontre, en ticks physiques (2,5 s de jeu), et la demi-largeur du milieu de l'écran où le lion
+## s'arrête, en px : partis espacés d'un tiers de l'écran, les lions des côtés y arrivent en 90 ticks environ.
+## Elle se fait HAUTEUR_RENCONTRE px au-dessus de la hauteur de peinture : la gerbe, qui tombe de 190 px, n'y
+## atteint plus les toits, et la rencontre ne repeint rien (les cellules de la passe de chacun restent à
+## chacun) ; la tolérance de cette hauteur, en px.
+const TICKS_RENCONTRE := 150
+const ZONE_MILIEU := 20.0
+const HAUTEUR_RENCONTRE := 200.0
+const ZONE_HAUTEUR := 10.0
 ## Les arguments de chaque commande, leurs types dans l'ordre (les nombres arrivent du JSON en flottants),
 ## et combien sont facultatifs à la fin (le code de `rejoindre`).
 const ARGUMENTS := {"duree": [TYPE_FLOAT], "creer": [TYPE_STRING], "rejoindre": [TYPE_STRING, TYPE_STRING],
-	"pret": [], "demarrer": [], "peindre": [TYPE_FLOAT], "quitter": []}
+	"pret": [], "demarrer": [], "peindre": [TYPE_FLOAT], "rencontrer": [], "quitter": []}
 const FACULTATIFS := {"rejoindre": 1}
 
 ## Vrai dans l'export « Web pilote » seulement.
@@ -55,8 +68,11 @@ var _vers_en_ligne := false
 var _empreinte := ""
 var _scores: Array = []
 ## La passe de ce poste (`_peindre`), pour la page et ses messages d'échec : ticks physiques de la
-## descente, puis de la peinture, comptés pendant qu'elle se fait ; vide avant.
+## descente, puis de la peinture, puis de la rencontre (`_rencontrer`), comptés pendant qu'elles se font ;
+## vide avant.
 var _passe := {}
+## Vrai pendant une passe ou une rencontre : la suivante attend.
+var _en_passe := false
 
 
 func _ready() -> void:
@@ -96,14 +112,16 @@ func etat() -> Dictionary:
 	var e := {"scene": nom, "en_ligne": Reseau.en_ligne(), "hote": Reseau.en_ligne() and multiplayer.is_server(),
 		"code": Reseau.code_partie, "pertes": _pertes, "echecs": _echecs, "empreinte": _empreinte, "scores": _scores,
 		"fps": Engine.get_frames_per_second(), "passe": _passe, "mobile": Parametres.mobile, "voile": Parametres.voile.visible,
-		"images": Engine.get_process_frames()}
+		"images": Engine.get_process_frames(), "canaux": _durees_canaux()}
 	if nom == "EcranEnLigne":
 		var rejoindre: Rect2 = scene.bouton_rejoindre.get_global_rect()
 		e["ecran"] = {"etat": scene.etat, "code": scene.champ_code.text, "message": scene.message.text,
 			"creer": scene.bouton_creer.visible, "rejoindre": _css(rejoindre.position) + _css(rejoindre.end)}
 	elif nom == "Salon":
 		var table: Array = Reseau.table_salon.map(func(f: Dictionary) -> Dictionary:
-			return {"pseudo": f.pseudo, "pret": f.pret, "couleur": f.couleur.to_html(false)})
+			var croix: Button = scene.cartes[f.index].croix
+			return {"pseudo": f.pseudo, "pret": f.pret, "couleur": f.couleur.to_html(false),
+				"croix": _css(croix.get_global_rect().get_center()) if croix.is_visible_in_tree() else []})
 		var bouton: Button = scene.bouton_copier
 		var tactile: CanvasLayer = scene.controles_tactiles
 		e["salon"] = {"table": table, "attente": Reseau.raison_attente(Reseau.fiches_attente()),
@@ -115,13 +133,30 @@ func etat() -> Dictionary:
 		var manche: Node = scene.get_node("Manche")
 		var tactile: CanvasLayer = scene.get_node("ControlesTactiles")
 		var stick: Control = tactile.joystick
+		var bilan: BilanManche = manche.bilan
 		e["manche"] = {"barriere": manche.barriere, "en_cours": GameState.pret and GameState.partie_en_cours, "finie": manche.finie,
+			"bilan": {} if bilan == null else {"etourdissements": Array(bilan.etourdissements), "chocs": Array(bilan.chocs)},
 			"temps": GameState.temps_ecoule, "lion": [] if scene.lion == null else [scene.lion.position.x, scene.lion.position.y],
 			"cible": _hauteur_peinture(scene),
 			"tactile": {"visible": tactile.visible, "vomir": _css_bouton(tactile.bouton_vomir),
 				"stick": _css(Vector2(stick.rayon * 3.0, stick.get_viewport_rect().size.y - stick.rayon * 3.0)),
 				"rayon": _css(Vector2(stick.rayon, 0))[0] - _css(Vector2.ZERO)[0]}}
 	return e
+
+
+## La durée de vie (ms) des deux canaux non fiables (le 2 et le 3 de `WebRTCMultiplayerPeer`) de la première
+## connexion WebRTC de ce poste en session, telle que le navigateur la donne (`maxPacketLifeTime` : 0 quand il
+## n'en a pas, le canal fiable) ; vide hors d'une session WebRTC.
+func _durees_canaux() -> Array:
+	var pair := multiplayer.multiplayer_peer as WebRTCMultiplayerPeer
+	if pair == null:
+		return []
+	for id in multiplayer.get_peers():
+		if pair.has_peer(id):
+			var canaux: Array = pair.get_peer(id).get("channels", [])
+			if canaux.size() >= 3:
+				return [(canaux[1] as WebRTCDataChannel).get_max_packet_life_time(), (canaux[2] as WebRTCDataChannel).get_max_packet_life_time()]
+	return []
 
 
 ## Le point `point` de l'écran du jeu, en px CSS de la page (ce que vise un clic ou un toucher de la page).
@@ -228,10 +263,13 @@ func _executer(commande: Variant) -> bool:
 			if nom != "Salon" or not Reseau.raison_attente(Reseau.fiches_attente()).is_empty():
 				return false
 			scene.demarrer()
-		"peindre":
-			if nom != "Main" or not GameState.pret or scene.lion == null:
+		"peindre", "rencontrer":
+			if nom != "Main" or not GameState.pret or scene.lion == null or _en_passe:
 				return false
-			_peindre(scene, int(commande[1]))
+			if commande[0] == "peindre":
+				_peindre(scene, int(commande[1]))
+			else:
+				_rencontrer(scene)
 		"quitter":
 			get_tree().change_scene_to_file(SCENE_TITRE)
 	return true
@@ -245,6 +283,7 @@ func _executer(commande: Variant) -> bool:
 ## lion près de son départ : des lions qui partent dans le même sens ne se rattrapent pas, et celui qu'un
 ## bord arrête (sa gerbe, qui tombe devant lui, y sort de la ville) peint au retour.
 func _peindre(main: Node, sens: int) -> void:
+	_en_passe = true
 	var cible := _hauteur_peinture(main)
 	_passe = {"descente": 0}
 	Input.action_press("deplacer_bas")
@@ -271,6 +310,38 @@ func _peindre(main: Node, sens: int) -> void:
 		Input.action_release(etape[0])
 	Input.action_release("deplacer_bas")
 	Input.action_release("vomir")
+	_en_passe = false
+
+
+## La rencontre du lion de ce poste dans la scène de jeu `main`, en ticks physiques (phase 7) : il va au milieu
+## de l'écran (à ZONE_MILIEU px près), HAUTEUR_RENCONTRE px au-dessus de la hauteur de peinture (à ZONE_HAUTEUR
+## px près), en vomissant, TICKS_RENCONTRE ticks ; la fin de la manche l'arrête. Les lions des autres pages y
+## vont aussi : ils s'y heurtent, et leurs gerbes, face à face, les étourdissent.
+func _rencontrer(main: Node) -> void:
+	_en_passe = true
+	var cible := _hauteur_peinture(main) - HAUTEUR_RENCONTRE
+	var milieu: float = main.get_viewport().get_visible_rect().size.x / 2.0 - Lion.CENTRE.x
+	_passe["rencontre"] = 0
+	Input.action_press("vomir")
+	while _en_manche(main) and _passe["rencontre"] < TICKS_RENCONTRE:
+		var ici: Vector2 = main.lion.position
+		_tenir("deplacer_droite", ici.x < milieu - ZONE_MILIEU)
+		_tenir("deplacer_gauche", ici.x > milieu + ZONE_MILIEU)
+		_tenir("deplacer_haut", ici.y > cible + ZONE_HAUTEUR)
+		_tenir("deplacer_bas", ici.y < cible - ZONE_HAUTEUR)
+		await get_tree().physics_frame
+		_passe["rencontre"] += 1
+	for action: String in ["deplacer_droite", "deplacer_gauche", "deplacer_haut", "deplacer_bas", "vomir"]:
+		Input.action_release(action)
+	_en_passe = false
+
+
+## L'action `action` tenue (`tenue`) ou relâchée, comme une touche.
+static func _tenir(action: String, tenue: bool) -> void:
+	if tenue:
+		Input.action_press(action)
+	else:
+		Input.action_release(action)
 
 
 ## Vrai tant que la manche de la scène de jeu `main` se joue sur ce poste, son lion là.

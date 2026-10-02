@@ -3096,7 +3096,7 @@ func _tester_transport_webrtc() -> void:
 	# (« pret » hors du salon) reste en tête.
 	var duree_avant: float = ReglesBataille.duree_manche
 	pilote._commandes = [["duree", "dix"], ["duree"], ["peindre"], ["peindre", 1, 2], ["peindre", 0], ["peindre", 0.0], ["duree", -3.0], ["creer", 7],
-		["rejoindre"], ["pret", true], 5, [], ["voler"], ["pret"], ["quitter"]]
+		["rejoindre"], ["pret", true], ["rencontrer", 1.0], 5, [], ["voler"], ["pret"], ["quitter"]]
 	pilote._vider_commandes()
 	_check(pilote._commandes == [["pret"], ["quitter"]] and ReglesBataille.duree_manche == duree_avant,
 		"le pilote rejette les commandes mal formées (nombre et types d'arguments), retirées de la file ; « pret » hors du salon attend (%s)" % [pilote._commandes])

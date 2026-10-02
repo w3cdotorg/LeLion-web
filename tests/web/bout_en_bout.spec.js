@@ -2,24 +2,34 @@
 // signalisation en local. Chaque page est menée par le pilote de l'export « Web pilote »
 // (Scripts/PiloteWeb.gd) : des commandes poussées dans window.lelionPilote.commandes, son état relu
 // dans window.lelionPilote.etat, par les vrais écrans du jeu (titre, En ligne, salon, manche). Le mobile,
-// lui, joue au doigt : de vrais touchers de la page, aux places que l'état du pilote donne.
+// lui, joue au doigt : de vrais touchers de la page, aux places que l'état du pilote donne ; l'hôte exclut un
+// joueur d'un vrai clic sur la croix de sa carte (phase 7).
 import { devices, expect, test } from "@playwright/test";
 
 const ALPHABET = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
 const HOTE_PARTI = "L'hôte a quitté la partie";
+const EXCLU = "L'hôte t'a exclu de la partie.";
+const DECONNECTE = "Tu as été déconnecté";
 
 /**
  * Le bruit connu des consoles des pages : des lignes d'erreur qui ne disent rien du jeu (aucune pour
  * l'instant). Toute autre ligne qui contient « SCRIPT ERROR » ou « ERROR: » (une erreur de script, un
- * push_error, une erreur du moteur) fait échouer le test.
+ * push_error, une erreur du moteur), une exception JavaScript de la page (« PAGEERROR », phase 7) ou un client
+ * que l'hôte limite (« l'excédent est jeté » : un joueur ne doit jamais l'être) fait échouer le test.
  */
 const BRUIT_CONNU = [];
 
 /** Les erreurs des consoles `consoles` (une liste de lignes par page) hors du bruit connu, par page. */
 function erreurs(consoles) {
 	return consoles.map((lignes) =>
-		lignes.filter((ligne) => /SCRIPT ERROR|ERROR:/.test(ligne) && !BRUIT_CONNU.some((bruit) => bruit.test(ligne))),
+		lignes.filter((ligne) => /SCRIPT ERROR|ERROR:|PAGEERROR|l'excédent est jeté/.test(ligne) && !BRUIT_CONNU.some((bruit) => bruit.test(ligne))),
 	);
+}
+
+/** Note dans `lignes` la console de `page` et ses exceptions JavaScript (une erreur que la console ne dit pas). */
+function ecouter(page, lignes) {
+	page.on("console", (message) => lignes.push(message.text()));
+	page.on("pageerror", (erreur) => lignes.push(`PAGEERROR ${erreur.message}`));
 }
 
 /**
@@ -33,7 +43,7 @@ async function ouvrir(navigateur, chemin, consoles, rang = 0) {
 	const page = await contexte.newPage();
 	const lignes = [];
 	consoles?.push(lignes);
-	page.on("console", (message) => lignes.push(message.text()));
+	ecouter(page, lignes);
 	await page.goto(chemin);
 	await page.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	return page;
@@ -62,10 +72,10 @@ async function attendre(page, condition, message, delai = 30_000) {
 	return dernier;
 }
 
-test("une manche à trois pages par le lien d'invitation : même empreinte partout, départ de l'hôte vu @manche", async ({ browser }) => {
+test("une manche à trois pages par le lien d'invitation, un joueur exclu qui revient, les lions qui se croisent : même empreinte partout, départ de l'hôte vu @manche", async ({ browser }) => {
 	const consoles = [];
 	const hote = await ouvrir(browser, "/", consoles);
-	await commander(hote, "duree", 10);
+	await commander(hote, "duree", 14);
 	await commander(hote, "creer", "Hote");
 	const salle = await attendre(hote, (e) => e.scene === "Salon" && ALPHABET.test(e.code), "l'hôte a sa salle");
 	const code = salle.code;
@@ -78,7 +88,7 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 		const accueil = await attendre(page, (e) => e.scene === "EcranEnLigne", `${pseudo} : le lien ouvre l'écran En ligne`);
 		expect(accueil.ecran.code).toBe(`${code.slice(0, 3)}-${code.slice(3)}`);
 		expect(accueil.en_ligne).toBe(false);
-		await commander(page, "duree", 10);
+		await commander(page, "duree", 14);
 		await commander(page, "rejoindre", pseudo);
 		await attendre(page, (e) => e.scene === "Salon", `${pseudo} arrive au salon (canal WebRTC ouvert, poignée de main faite)`);
 		invites.push(page);
@@ -86,6 +96,33 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	const pages = [hote, ...invites];
 	for (const page of pages) {
 		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna,Bruno", "la même table du salon partout");
+	}
+	// Spec §5 : les canaux non fiables gardent un paquet 100 ms au plus (le correctif de TransportWebRTC : sans lui,
+	// le navigateur ignore l'option de Godot et ces canaux sont fiables)
+	for (const page of pages) expect((await etat(page)).canaux, "les canaux non fiables, 100 ms").toEqual([100, 100]);
+
+	// L'exclusion (spec §8.2), d'un vrai clic de l'hôte sur la croix de la carte de Bruno : Bruno lit « L'hôte t'a
+	// exclu de la partie. » sur l'écran En ligne, sa carte se libère partout ; il revient avec le code, en nouvel
+	// arrivant (rien ne l'identifie)
+	const bruno = invites[1];
+	const salon = (await etat(hote)).salon;
+	expect(salon.table[0].croix, "pas de croix sur la carte de l'hôte").toEqual([]);
+	expect(salon.table[2].croix.length, "la croix de la carte de Bruno, chez l'hôte").toBe(2);
+	expect((await etat(invites[0])).salon.table.every((f) => f.croix.length === 0), "aucune croix chez un client").toBe(true);
+	await hote.mouse.click(salon.table[2].croix[0], salon.table[2].croix[1]);
+	// Sous Xvfb, sans gestionnaire de fenêtres, le clic monte la fenêtre de l'hôte au-dessus des autres : Firefox
+	// ne dessine plus celle d'Anna, entièrement couverte, et son jeu s'y fige (mesuré : 2 images en 3 s). Les
+	// fenêtres des invités remontent, dans leur ordre.
+	for (const page of invites) await page.bringToFront();
+	const exclu = await attendre(bruno, (e) => e.scene === "EcranEnLigne" && e.pertes.includes(EXCLU), "Bruno, exclu, revient à l'écran En ligne");
+	expect(exclu.ecran.message).toBe(EXCLU);
+	for (const page of [hote, invites[0]]) {
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna", "la carte de Bruno se libère partout");
+	}
+	await commander(bruno, "rejoindre", "Bruno", code);
+	await attendre(bruno, (e) => e.scene === "Salon", "Bruno revient avec le code");
+	for (const page of pages) {
+		await attendre(page, (e) => e.salon?.table.map((f) => f.pseudo).join(",") === "Hote,Anna,Bruno", "de nouveau la même table partout");
 	}
 
 	for (const page of pages) await commander(page, "pret");
@@ -97,10 +134,13 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	// peine) ; Bruno, le plus à droite, que le bord arrête à l'aller (sa gerbe y tombe hors de la ville :
 	// mesuré, 1 à 7 cellules sans retour), peint au retour.
 	for (const page of pages) await commander(page, "peindre", 1);
+	// Puis la rencontre (phase 7, la note de la revue de la phase 4) : chaque lion va au milieu de l'écran en
+	// vomissant ; ils s'y heurtent et leurs gerbes les étourdissent, ce que l'hôte décide et que chaque page suit
+	for (const page of pages) await commander(page, "rencontrer");
 	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 60_000);
 
 	const fins = [];
-	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 10 s finit partout", 60_000));
+	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 14 s finit partout", 60_000));
 	const empreintes = consoles.map((lignes) => lignes.find((l) => l.startsWith("EMPREINTE ")));
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
@@ -111,6 +151,13 @@ test("une manche à trois pages par le lien d'invitation : même empreinte parto
 	console.log(`Fin de manche : scores ${fins[0].scores} ; ${cadences}`);
 	// Les scores du territoire : à l'index 0 les cellules de personne, puis un par joueur (l'hôte, Anna, Bruno).
 	for (const fin of fins) expect(fin.scores.slice(1, 4).every((cellules) => cellules > 0), `chacun a peint : ${fin.scores} (${cadences})`).toBe(true);
+	// La rencontre : des chocs (et des étourdissements, comptés), le bilan de l'hôte le même sur chaque page
+	const bilans = fins.map((fin) => fin.manche.bilan);
+	const somme = (valeurs) => valeurs.reduce((a, b) => a + b, 0);
+	console.log(`Rencontre : étourdissements ${bilans[0].etourdissements}, chocs ${bilans[0].chocs}`);
+	expect(bilans[1]).toEqual(bilans[0]);
+	expect(bilans[2]).toEqual(bilans[0]);
+	expect(somme(bilans[0].chocs), `les lions se sont heurtés : ${JSON.stringify(bilans[0])}`).toBeGreaterThan(0);
 
 	const depart = Date.now();
 	await commander(hote, "quitter");
@@ -140,7 +187,7 @@ test("Copier le lien, sous un vrai clic, met le lien d'invitation dans le presse
 	});
 	const page = await contexte.newPage();
 	const lignes = [];
-	page.on("console", (message) => lignes.push(message.text()));
+	ecouter(page, lignes);
 	await page.goto("/");
 	await page.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	await commander(page, "creer", "Hote");
@@ -164,7 +211,7 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	const mobile = await contexte.newPage();
 	const lignes = [];
 	consoles.push(lignes);
-	mobile.on("console", (message) => lignes.push(message.text()));
+	ecouter(mobile, lignes);
 	await mobile.goto(`/?salle=${salle.code}`);
 	await mobile.waitForFunction(() => window.lelionPilote !== undefined, null, { timeout: 60_000 });
 	// Un mobile : pas de Créer une partie, Rejoindre à la taille d'un doigt (44 px CSS au moins)
@@ -238,5 +285,16 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	console.log(`Fin de manche : scores ${fins[0].scores} ; hôte ${fins[0].fps} i/s, mobile ${fins[1].fps} i/s`);
 	// Les scores du territoire : à l'index 0 les cellules de personne, puis l'hôte, puis le mobile
 	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores}`).toBeGreaterThan(0);
+
+	// Un téléphone verrouillé (ou un onglet caché, spec §5) : la page ne rend plus la main, plus aucune image ; 10 s
+	// plus tard, l'hôte déclare le mobile parti. À son retour, « Tu as été déconnecté », puis l'écran En ligne
+	await mobile.evaluate(() => {
+		const fin = Date.now() + 12_000;
+		while (Date.now() < fin);
+	});
+	await attendre(mobile, (e) => e.pertes.includes(DECONNECTE), "au retour, « Tu as été déconnecté »", 15_000);
+	const retour = await attendre(mobile, (e) => e.scene === "EcranEnLigne", "puis l'écran En ligne", 15_000);
+	expect(retour.ecran.message).toBe(DECONNECTE);
+	expect(retour.pertes, "pas « L'hôte a quitté la partie »").not.toContain(HOTE_PARTI);
 	expect(erreurs(consoles), "aucune erreur dans les consoles des deux pages").toEqual([[], []]);
 });
