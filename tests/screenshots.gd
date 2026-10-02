@@ -1,6 +1,6 @@
 extends SceneTree
 ## Captures pilotées, avec le vrai rendu (pas headless en local ; la CI les déroule sans rendu (pas « Captures »)) :
-##   godot --path . --rendering-driver opengl3 --script tests/screenshots.gd -- --dossier=<dossier> [--parties=solo,reseau,salon,bataille,resultats]
+##   godot --path . --rendering-driver opengl3 --script tests/screenshots.gd -- --dossier=<dossier> [--parties=solo,reseau,salon,bataille,resultats,mobile]
 ## Écrit ses PNG dans <dossier> (défaut : user://), par partie (toutes par défaut) :
 ##   solo       le titre, une partie solo (gerbe à 3 puis 7 couleurs, ennemis, pause, défaite), une
 ##              victoire avec record, le peintre du Village ;
@@ -14,7 +14,12 @@ extends SceneTree
 ##   bataille   la manche à 6 couleurs (départ, en jeu : parts, rangs, couronnes, crans, gerbe XXL,
 ##              étourdi, parti ; les dix dernières secondes), une égalité à 2 en anglais (phase 17) ;
 ##   resultats  l'écran Résultats d'une bataille à 6 (animation, hôte local, client, hôte en réseau,
-##              hôte resté seul), une égalité à 2 en anglais (phase 18).
+##              hôte resté seul), une égalité à 2 en anglais (phase 18) ;
+##   mobile     ce que montre un téléphone (phase 6 du jeu en ligne, `Parametres.mobile`), le jeu à l'échelle
+##              de l'écran du téléphone, bandes comprises : en paysage (844×390) l'écran En ligne (le lien,
+##              puis un code refusé, sa rangée remontée au-dessus du clavier), le salon d'un client (les
+##              flèches et PRÊT), la bataille (HUD, stick, VOMIR, pause), l'écran Résultats d'un client ; en
+##              portrait (360×640) la bataille et l'écran Résultats sous le voile « Tourne ton téléphone ».
 ## La partie à deux vraies fenêtres (un hôte et un client) est dans `tests/deux_fenetres.gd`, une vraie
 ## manche à 4 capturée dans `tests/bataille_test.gd -- --captures=<dossier>`.
 ## N'utilise ni le port 7777 d'une vraie partie, ni les records et réglages du joueur
@@ -22,7 +27,10 @@ extends SceneTree
 ## scores, crans, statistiques et départs sont posés à la main. Compilé avant les autoloads : les lit
 ## par `root.get_node`, charge les scènes à l'exécution.
 
-const PARTIES := ["solo", "reseau", "salon", "bataille", "resultats"]
+const PARTIES := ["solo", "reseau", "salon", "bataille", "resultats", "mobile"]
+## Les écrans de téléphone des captures `mobile` (px CSS) : en paysage, en portrait.
+const PAYSAGE := Vector2i(844, 390)
+const PORTRAIT := Vector2i(360, 640)
 const PORT_JEU := 17890
 const PORT_SANS_HOTE := 17891
 
@@ -55,6 +63,25 @@ func _shot(nom: String) -> void:
 	print("📸 %s (%dx%d)" % [chemin, image.get_width(), image.get_height()])
 
 
+## Une capture de ce que montre un téléphone dont l'écran fait `ecran` : l'écran du jeu mis à son échelle,
+## centré, les bandes noires autour (comme l'export Web, `canvas_resize_policy` adaptatif, l'aspect gardé).
+func _shot_telephone(nom: String, ecran: Vector2i) -> void:
+	if DisplayServer.get_name() == "headless":
+		print("📸 %s (headless : rien d'écrit)" % nom)
+		return
+	await RenderingServer.frame_post_draw
+	var jeu := root.get_texture().get_image()
+	var echelle := minf(float(ecran.x) / jeu.get_width(), float(ecran.y) / jeu.get_height())
+	var taille := Vector2i(roundi(jeu.get_width() * echelle), roundi(jeu.get_height() * echelle))
+	jeu.resize(taille.x, taille.y, Image.INTERPOLATE_LANCZOS)
+	var image := Image.create(ecran.x, ecran.y, false, jeu.get_format())
+	image.fill(Color.BLACK)
+	image.blit_rect(jeu, Rect2i(Vector2i.ZERO, taille), (ecran - taille) / 2)
+	var chemin := dossier.path_join(nom + ".png")
+	image.save_png(chemin)
+	print("📸 %s (%dx%d, le jeu à l'échelle %.3f)" % [chemin, image.get_width(), image.get_height(), echelle])
+
+
 func _run() -> void:
 	for partie in parties:
 		if not PARTIES.has(partie):
@@ -80,6 +107,8 @@ func _run() -> void:
 		await _bataille()
 	if parties.has("resultats"):
 		await _resultats()
+	if parties.has("mobile"):
+		await _mobile()
 	root.get_node("Parametres").definir_langue("fr")
 	GS.configurer_solo()
 	scores.effacer()
@@ -514,3 +543,77 @@ func _resultats() -> void:
 	await _shot("resultats_06_egalite_a_2_anglais")
 	params.definir_langue("fr")
 	_quitter_la_bataille()
+
+
+# --- Mobiles (phase 6 du jeu en ligne) ---------------------------------------------------------------
+
+
+## La fenêtre à la taille d'un écran de téléphone `ecran` (le voile suit son format) ; le voile relu tout
+## de suite (sans fenêtre, en headless, rien ne change de taille).
+func _tenir(ecran: Vector2i) -> void:
+	DisplayServer.window_set_size(ecran)
+	root.get_node("Parametres").actualiser_voile(ecran)
+	await _attendre(0.2)
+
+
+func _mobile() -> void:
+	var params: Node = root.get_node("Parametres")
+	var scores: Node = root.get_node("Scores")
+	var reseau: Node = root.get_node("Reseau")
+	var palette: Array[Color] = EtatPartie.PALETTE_BATAILLE
+	params.mobile = true
+	await _tenir(PAYSAGE)
+
+	# L'écran En ligne ouvert par un lien, le pseudo mémorisé : Rejoindre au focus, sans Créer une partie ;
+	# puis un code refusé : le code en édition, sa rangée en haut, le message dessous (le clavier couvre le bas)
+	scores.definir_preference("pseudo", "Léa")
+	var ecran: Control = load("res://Scenes/EcranEnLigne.tscn").instantiate()
+	ecran.codes_de_salle = true
+	ecran.code_a_l_arrivee = "K7Q2XM"
+	root.add_child(ecran)
+	await _attendre(0.3)
+	await _shot_telephone("mobile_00_en_ligne", PAYSAGE)
+	ecran.champ_code.text = "K7Q2X"
+	ecran.rejoindre()
+	await _attendre(0.2)
+	await _shot_telephone("mobile_01_en_ligne_clavier", PAYSAGE)
+	ecran.free()
+	scores.definir_preference("pseudo", "")
+
+	# Le salon d'un client : les flèches de la couleur et PRÊT, l'aide du tactile, Retour agrandi
+	reseau.rejoindre("127.0.0.1", PORT_SANS_HOTE)
+	var id_local: int = root.multiplayer.get_unique_id()
+	reseau.table_salon.assign([
+		{"id": 1, "index": 0, "couleur": palette[0], "pseudo": "Hôte", "pret": true},
+		{"id": id_local, "index": 1, "couleur": palette[3], "pseudo": "Léa", "pret": false},
+		{"id": 12, "index": 2, "couleur": palette[5], "pseudo": "Tom", "pret": true}])
+	reseau.niveau_salon = 0
+	var salon: Control = load("res://Scenes/Salon.tscn").instantiate()
+	root.add_child(salon)
+	await _attendre(0.4)
+	await _shot_telephone("mobile_02_salon", PAYSAGE)
+	salon.free()
+	reseau.quitter()
+
+	# La bataille (le HUD, le stick, VOMIR, la pause), puis l'écran Résultats d'un client
+	var main := await _charger(4, ["Hôte", "Léa", "Tom", "WWWWWWWWWWWW"], 1)
+	_poser_lions(main, [Vector2(300, 520), Vector2(800, 600), Vector2(1250, 450), Vector2(1600, 300)])
+	_poser_scores(main.ville.territoire, [260, 410, 180, 90])
+	GS.temps_ecoule = 41.2
+	await _attendre(0.4)
+	await _shot_telephone("mobile_03_bataille", PAYSAGE)
+	await _tenir(PORTRAIT)
+	await _shot_telephone("mobile_04_portrait_bataille", PORTRAIT)
+	await _tenir(PAYSAGE)
+	GS.temps_ecoule = 89.5
+	while GS.partie_en_cours:
+		await process_frame
+	var vue := _revoir(main, false, true)
+	await _attendre(0.3)
+	await _shot_telephone("mobile_05_resultats", PAYSAGE)
+	await _tenir(PORTRAIT)
+	await _shot_telephone("mobile_06_portrait_resultats", PORTRAIT)
+	vue.free()
+	_quitter_la_bataille()
+	params.mobile = false
+	await _tenir(Vector2i(1400, 788))
