@@ -227,7 +227,8 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   limites des Workers ne la réservent à une offre, sans dire en toutes lettres qu'elle existe sur
   l'offre gratuite ; le premier `wrangler deploy` (phase 5) le tranche. Repli s'il refusait le binding :
   retirer le bloc `ratelimits` (sans binding, le Worker admet tout sans journaliser, les plafonds de
-  chaque salle restent), puis, si les abus l'exigent, un Durable Object compteur (une migration `v2`).
+  chaque salle restent) et, avec lui, la phrase de « Vie privée » du README qui dit que le Worker se sert
+  de l'IP pour limiter ; puis, si les abus l'exigent, un Durable Object compteur (une migration `v2`).
 - **Validation** : type de message connu, `vers` membre de la salle, champs attendus seulement ; un
   message invalide est ignoré, sans fermer la socket (un relais vers un client parti à l'instant est
   une course normale) ; le contenu SDP n'est ni lu ni journalisé.
@@ -264,9 +265,9 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   solo : `Scores.gd`). GitHub Pages voit l'IP au chargement de la page. Le Worker voit l'IP de chaque
   joueur le temps de sa signalisation, et celle de l'hôte toute la vie de la salle (sa socket reste
   ouverte, 4 h au plus), et ne l'écrit pas dans ses journaux (`signalisation/src/protocole.js`) ; les
-  serveurs STUN (Cloudflare et Google) la voient aussi. Hôte et client voient l'IP l'un de l'autre, sauf
-  connexion par le TURN : Cloudflare relaie alors le trafic (chiffré) de toute la partie. Le README le
-  dit.
+  serveurs STUN (Cloudflare et Google) la voient aussi. Hôte et client voient l'IP l'un de l'autre :
+  sans TURN depuis la phase 5, aucun relais (un TURN, s'il vient, §13, relaierait le trafic chiffré des
+  parties qui passent par lui). Le README le dit.
 - Tel que construit (phase 7) : un seau de jetons par client chez l'hôte (`LimiteDebit`), à l'horloge
   de l'hôte (pas à ses ticks physiques : un hôte lent jetterait les paquets d'un client qui joue, vu
   sous Firefox en CI) : 2 paquets de commandes par tick (120 par seconde), 120 d'un coup (deux secondes
@@ -337,29 +338,45 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   publiée, une partie de deux pages menées au clavier (une salle, une arrivée, le canal ouvert, STUN
   seul).
 - **Essai réel** : `docs/essai-en-ligne.md` (hôte sur ordinateur, au moins un mobile en 4G, un joueur
-  dans un autre foyer ; une manche avec le relais TURN forcé par `?relais=1`, paramètre de
-  diagnostic qui pose `iceTransportPolicy: "relay"`). Ses réponses font la phase 7 bis (feuille de
-  route).
+  dans un autre foyer ; sans TURN, pas de manche par le relais : `?relais=1`, qui pose
+  `iceTransportPolicy: "relay"`, y bloquerait toute connexion). Ses réponses font la phase 7 bis (feuille
+  de route).
 
 ## 11. Build, déploiement et prérequis
 
 - **CI sur `main` et les PR** : tests Godot, tests du Worker, export Web gardé (`tests/export_publie.gd`,
   le contrôle Chromium de l'export publié), test Playwright ; l'export en artefact. Rien n'est mis en
   ligne.
-- **Tag `vX.Y`** (= `application/config/version`, vérifié) : les mêmes jobs, puis, tous verts, le
-  Worker (`wrangler deploy`, nom `lelion-web`, puis la sonde `signalisation/outils/sonder.mjs`), puis la
-  page : l'artefact `LeLion-web` de ce passage (construit depuis l'extraction du tag, jamais
-  `web-pilote`), contrôlé face au Worker déployé, publié par `actions/deploy-pages`, puis une partie de
-  deux pages sur la page publiée. L'URL du Worker est écrite dans `project.godot` (réglage
-  `lelion/signalisation/url` = `wss://lelion-web.w3cdotorg.workers.dev`, sans chemin : les routes ont
-  `/v1`), donc dans l'export ; `lelion/signalisation/url.pilote` = `ws://localhost:8787` pour l'export
-  « Web pilote » (lu par `get_setting_with_override`). Retour en arrière : relancer le passage du tag
-  précédent ; le Worker seul : son tableau de bord ou `wrangler rollback`.
+- **Tag `vX.Y`**, posé sur un commit de `main` : six jobs. `verifier-tag` (le tag vaut
+  `application/config/version`, son commit est un ancêtre de `origin/main`) et les trois jobs de test ;
+  puis, tous verts, le Worker (`wrangler deploy`, nom `lelion-web`, puis la sonde
+  `signalisation/outils/sonder.mjs`), puis la page : l'artefact `LeLion-web` de ce passage (construit
+  depuis l'extraction du tag, jamais `web-pilote`), contrôlé face au Worker déployé, publié par
+  `actions/deploy-pages`, puis une partie de deux pages sur la page publiée. Les passages des tags font
+  la queue (un groupe de concurrence `deploiement`, jamais annulé). L'URL du Worker est écrite dans
+  `project.godot` (réglage `lelion/signalisation/url` = `wss://lelion-web.w3cdotorg.workers.dev`, sans
+  chemin : les routes ont `/v1`), donc dans l'export ; `lelion/signalisation/url.pilote` =
+  `ws://localhost:8787` pour l'export « Web pilote » (lu par `get_setting_with_override`).
+- **Un passage qui échoue** (le README, « Export and CI », en donne la conduite) : avant le Worker (le tag
+  ou un test), rien n'est en ligne : le tag supprimé, corrigé sur `main`, posé de nouveau ; le bloc
+  `ratelimits` refusé par l'offre gratuite : le repli du §8.1 ; **la demi-livraison** (le Worker neuf, la
+  page ancienne, ou aucune au premier tag : la sonde, le contrôle face au Worker ou Pages ont échoué
+  après `wrangler deploy`), sans danger tant que `/v1` ne change pas : corriger la cause et relancer les
+  jobs en échec (`gh run rerun --failed`, le même artefact), ou remettre le Worker précédent
+  (`wrangler rollback`, ou son tableau de bord) et corriger par un nouveau tag ; la page en ligne mais
+  cassée : le retour en arrière.
+- **Retour en arrière** : relancer le passage du tag précédent (il refait les tests, le Worker et la
+  page), dans les 30 jours de ce passage (GitHub ne relance pas au-delà ; l'artefact vit autant) ;
+  au-delà, un nouveau tag depuis un commit de `main` qui annule les commits fautifs (`git revert`) et
+  passe à une version neuve (un tag publié ne se déplace jamais). Le Worker seul : son tableau de bord ou
+  `wrangler rollback`.
 - **Prérequis côté utilisateur** (faits le 02/10/2026) : un compte Cloudflare (offre gratuite, sous-domaine
   `w3cdotorg.workers.dev`), un jeton d'API pour `wrangler` (modèle « Edit Cloudflare Workers »), les
   secrets du dépôt `CLOUDFLARE_API_TOKEN` et `CLOUDFLARE_ACCOUNT_ID`, Pages activé (source : GitHub
-  Actions) et l'environnement `github-pages` ouvert aux tags `v*`. Pas d'application TURN (STUN seul) :
-  `TURN_KEY_ID` et `TURN_KEY_API_TOKEN` n'existent pas. Rien n'est créé sans l'utilisateur.
+  Actions). Pas d'application TURN (STUN seul) : `TURN_KEY_ID` et `TURN_KEY_API_TOKEN` n'existent pas.
+  Rien n'est créé sans l'utilisateur. **À faire avant le premier tag** (procédure R1, plan de la phase 5) :
+  ouvrir l'environnement `github-pages` aux tags `v*` (il n'admet que `main` : sans la règle,
+  `deploy-pages` refuse le tag).
 - **Dépôt public** : GitHub Pages gratuit l'exige pour une organisation sur l'offre gratuite.
 - README : en anglais comme aujourd'hui, avec une section « Jouer en ligne » en français (créer,
   inviter, rejoindre, onglet au premier plan, mobiles, vie privée, dépannage message par message).

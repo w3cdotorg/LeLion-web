@@ -312,18 +312,43 @@ Worker's address, nothing but the page's files), and the third checks it in Chro
 (`tests/web/playwright.publie.config.js`: no driver, the deployed Worker's address, the unreliable
 channels' 100 ms lifetime).
 
-Nothing goes online from a pull request or a push to `main`. A tag `vX.Y`, equal to
-`application/config/version`, runs the same jobs and then, if they all pass, deploys the Worker
-(`wrangler deploy`, then `signalisation/outils/sonder.mjs`: a room from the published page's origin,
-STUN only, `localhost` refused) and the page (the `LeLion-web` artifact of that run, checked against the
-deployed Worker, then GitHub Pages, then a game between two Chromium pages on the published page,
-`tests/web/playwright.en_direct.config.js`). It needs the repository secrets `CLOUDFLARE_API_TOKEN`
-(template "Edit Cloudflare Workers") and `CLOUDFLARE_ACCOUNT_ID`, and the `github-pages` environment
-allowing `v*` tags. No TURN secret: the Worker hands out STUN servers only.
+Nothing goes online from a pull request or a push to `main`. A tag `vX.Y` runs six jobs: the tag check
+(`verifier-tag`: the tag equals `application/config/version`, and its commit is on `main`), the three
+test jobs above, then, if those four pass, the Worker (`wrangler deploy`, then
+`signalisation/outils/sonder.mjs`: a room from the published page's origin, STUN only, `localhost`
+refused), then the page (the `LeLion-web` artifact of that run, checked against the deployed Worker,
+then GitHub Pages, then a game between two Chromium pages on the published page,
+`tests/web/playwright.en_direct.config.js`). Tag runs wait for each other and are never cancelled (one
+`deploiement` concurrency group). It needs the repository secrets `CLOUDFLARE_API_TOKEN` (template
+"Edit Cloudflare Workers") and `CLOUDFLARE_ACCOUNT_ID`, and the `github-pages` environment allowing
+`v*` tags (to add before the first tag: by default it only allows `main`). No TURN secret: the Worker
+hands out STUN servers only.
 
 ```sh
-git tag v0.21 && git push origin v0.21   # deploy version 0.21 (after merging the version bump on main)
+git switch main && git pull              # the tag goes on main, once the version bump is merged
+git tag -a v0.21 -m "LeLion web 0.21" && git push origin v0.21   # deploy version 0.21
 ```
 
-To go back to an earlier version, re-run that tag's workflow (`gh run rerun <run id>`); the Worker
-alone can also be rolled back from Cloudflare's dashboard (Deployments) or with `npx wrangler rollback`.
+If a job fails, the run says how far it went:
+
+- **The tag check or a test**: nothing went online. Delete the tag (`git push --delete origin vX.Y &&
+  git tag -d vX.Y`), fix on `main`, tag again.
+- **`wrangler deploy` refuses the `ratelimits` block** (the free plan): nothing changed at Cloudflare. In
+  one pull request, remove the block from `signalisation/wrangler.jsonc` (without the binding the Worker
+  admits everything, the per-room caps remain) and update the « Vie privée » paragraph above, which says
+  the Worker uses the IP address to limit creations and arrivals per minute; once merged, move the tag
+  onto that commit (delete it, tag again).
+- **Half delivered: a new Worker, the old page** (the probe, the check against the deployed Worker, or
+  GitHub Pages failed after `wrangler deploy`): the page online is still the previous one (or none,
+  for the first tag), talking to the new Worker, which is harmless while the signalling protocol
+  (`/v1`) is unchanged. Either fix the cause (a Cloudflare setting, the environment rule) and re-run the
+  failed jobs (`gh run rerun <run id> --failed`, which deploys the same artifact), or put the previous
+  Worker back (Cloudflare's dashboard, Deployments, or `npx wrangler rollback`) and fix with a new tag.
+- **The page is online, but broken**: go back (below), then fix with a new tag.
+
+To go back to an earlier version, re-run that tag's workflow (`gh run rerun <run id>`): it redoes the
+tests, the Worker and the page from that tag. GitHub re-runs a workflow only within 30 days of its run
+(the artifact is kept as long); after that, revert the faulty commits on `main`, bump
+`application/config/version` past the broken one and tag that commit (a published tag is never moved).
+The Worker alone can also be rolled back from Cloudflare's dashboard (Deployments) or with
+`npx wrangler rollback`.

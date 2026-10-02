@@ -23,7 +23,8 @@
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Salle"] }],
 	// Limitation de débit des Workers, par point de présence : 5 créations et 30 arrivées par minute et par IP.
 	// namespace_id : entier unique sur le compte. Si le premier déploiement refuse ce bloc, le retirer : sans
-	// binding, le Worker admet tout (`admis`), les plafonds de chaque salle restent.
+	// binding, le Worker admet tout (`admis`), les plafonds de chaque salle restent ; et, dans la même PR, la
+	// phrase de « Vie privée » du README qui dit que le Worker se sert de l'IP pour limiter.
 	"ratelimits": [
 		{
 			"name": "LIMITE_CREATION",
