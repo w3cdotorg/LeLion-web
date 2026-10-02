@@ -19,7 +19,8 @@ extends SceneTree
 ##              de l'écran du téléphone, bandes comprises : en paysage (844×390) l'écran En ligne (le lien,
 ##              puis un code refusé, sa rangée remontée au-dessus du clavier), le salon d'un client (les
 ##              flèches et PRÊT), la bataille (HUD, stick, VOMIR, pause), l'écran Résultats d'un client ; en
-##              portrait (360×640) la bataille et l'écran Résultats sous le voile « Tourne ton téléphone ».
+##              portrait (360×640) la bataille et l'écran Résultats sous le voile « Tourne ton téléphone » ;
+##              en paysage, le menu pause d'un mobile en ligne (ses boutons à la taille d'un doigt).
 ## La partie à deux vraies fenêtres (un hôte et un client) est dans `tests/deux_fenetres.gd`, une vraie
 ## manche à 4 capturée dans `tests/bataille_test.gd -- --captures=<dossier>`.
 ## N'utilise ni le port 7777 d'une vraie partie, ni les records et réglages du joueur
@@ -602,6 +603,16 @@ func _mobile() -> void:
 	GS.temps_ecoule = 41.2
 	await _attendre(0.4)
 	await _shot_telephone("mobile_03_bataille", PAYSAGE)
+	# Le menu pause d'un mobile en ligne (ce poste héberge le temps de la capture ; le menu, ouvert sur la
+	# bataille, ne la met pas en pause) : ses boutons à la taille d'un doigt, sans « Échap pour reprendre »
+	reseau.heberger(PORT_JEU)
+	var pause: CanvasLayer = load("res://Scenes/PauseMenu.tscn").instantiate()
+	main.add_child(pause)
+	pause.ouvrir()
+	await _attendre(0.2)
+	await _shot_telephone("mobile_07_pause", PAYSAGE)
+	pause.free()
+	reseau.quitter()
 	await _tenir(PORTRAIT)
 	await _shot_telephone("mobile_04_portrait_bataille", PORTRAIT)
 	await _tenir(PAYSAGE)

@@ -84,7 +84,7 @@ jobs:
             echo "::error::tests/deux_fenetres.gd a échoué (hôte $statut_hote, client $statut_client)"; exit 1
           fi
           if grep -nE "SCRIPT ERROR|SHADER ERROR|❌" captures.log deux_fenetres_hote.log deux_fenetres_client.log; then echo "::error::erreur dans un script de captures"; exit 1; fi
-          [ "$(grep -c "📸" captures.log)" -eq 45 ] || { echo "::error::tests/screenshots.gd n'a pas déroulé ses 45 captures"; exit 1; }
+          [ "$(grep -c "📸" captures.log)" -eq 46 ] || { echo "::error::tests/screenshots.gd n'a pas déroulé ses 46 captures"; exit 1; }
           [ "$(grep -c "📸" deux_fenetres_hote.log)" -eq 5 ] && [ "$(grep -c "📸" deux_fenetres_client.log)" -eq 6 ] \
             || { echo "::error::tests/deux_fenetres.gd n'a pas déroulé ses captures (5 pour l'hôte, 6 pour le client)"; exit 1; }
 

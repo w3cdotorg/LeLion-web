@@ -2216,6 +2216,7 @@ func _tester_mobile(params: Node) -> void:
 	await _tester_tactile_mobile(params)
 	await _tester_en_ligne_mobile(params)
 	await _tester_resultats_mobile(params)
+	await _tester_pause_mobile(params)
 	params.mobile = false
 	params.tentatives_plein_ecran = 0
 	params.plein_ecran_obtenu = false
@@ -2469,6 +2470,38 @@ func _tester_resultats_mobile(params: Node) -> void:
 	GS.nouvelle_partie()
 	GS.partie_en_cours = false
 	GS.pret = false
+
+
+## Phase 6 (revue finale) : le menu pause d'un téléphone en ligne (l'écran 16:9) : Continuer, Réglages et
+## Quitter la partie à la taille d'un doigt, sans « Échap pour reprendre » ; en solo (2000×648, trois
+## boutons de 150 px déborderaient) et sur ordinateur, rien ne change.
+func _tester_pause_mobile(params: Node) -> void:
+	var reseau: Node = root.get_node("Reseau")
+	var cible: int = params.CIBLE_TACTILE
+	var vues := {}
+	for cas: Array in [["mobile en ligne", true, true], ["mobile en solo", true, false], ["ordinateur en ligne", false, true]]:
+		params.mobile = cas[1]
+		if cas[2]:
+			_check(reseau.heberger(17797) == OK, "(pré-condition, %s) ce poste héberge" % cas[0])
+		root.content_scale_size = Vector2i(2000, 1125) if cas[2] else Vector2i(2000, 648)
+		var menu: CanvasLayer = load("res://Scenes/PauseMenu.tscn").instantiate()
+		root.add_child(menu)
+		menu.ouvrir()
+		await process_frame
+		var colonne: Rect2 = menu.get_node("Centre/Colonne").get_global_rect()
+		vues[cas[0]] = {"hauts": ["Continuer", "Reglages", "Menu"].map(func(n: String) -> int: return int(menu.get_node("Centre/Colonne/" + n).size.y)),
+			"aide": menu.get_node("Centre/Colonne/Aide").visible, "dans l'écran": Rect2(Vector2.ZERO, Vector2(root.content_scale_size)).encloses(colonne)}
+		menu.reprendre()
+		menu.free()
+		if cas[2]:
+			reseau.quitter()
+	params.mobile = true
+	root.content_scale_size = Vector2i(2000, 1125)
+	_check(vues["mobile en ligne"].hauts.all(func(h: int) -> bool: return h >= cible) and not vues["mobile en ligne"].aide and vues["mobile en ligne"]["dans l'écran"],
+		"sur un téléphone en ligne, le menu pause a Continuer, Réglages et Quitter la partie de %d px de haut au moins, sans « Échap pour reprendre » (%s)" % [cible, vues["mobile en ligne"]])
+	var inchange := {"hauts": [64, 64, 64], "aide": true, "dans l'écran": true}
+	_check(vues["mobile en solo"] == inchange and vues["ordinateur en ligne"] == inchange and not paused,
+		"en solo (2000×648) et sur ordinateur, le menu pause ne change pas (%s, %s)" % [vues["mobile en solo"], vues["ordinateur en ligne"]])
 
 
 ## Le rectangle (px de l'écran) du texte d'une étiquette centrée sur une ligne, plus étroit qu'elle.
