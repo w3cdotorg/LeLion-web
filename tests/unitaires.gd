@@ -2196,7 +2196,7 @@ func _tester_manches_enchainees() -> void:
 func _tester_mobile() -> void:
 	print("-- Mobiles (phase 6)")
 	var params: Node = root.get_node("Parametres")  # autoload : jamais nommé
-	_check(not params.mobile and not params.plein_ecran_demande and params.CIBLE_TACTILE == 150,
+	_check(not params.mobile and params.tentatives_plein_ecran == 0 and not params.plein_ecran_obtenu and params.CIBLE_TACTILE == 150,
 		"le desktop n'est pas un mobile (ni web_android ni web_ios) ; une cible au doigt fait 150 px (44 px CSS à l'échelle 0,30 d'un iPhone en paysage sous les barres de Safari)")
 	# L'énumération du réglage : 0 Stream, 1 Sample (pas celle d'AudioServer.PlaybackType).
 	_check(ProjectSettings.get_setting("audio/general/default_playback_type.web") == 0,

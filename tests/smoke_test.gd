@@ -2149,15 +2149,39 @@ func _tester_salon(params: Node) -> void:
 func _tester_mobile(params: Node) -> void:
 	print("-- Mobiles (phase 6)")
 	var scores: Node = root.get_node("Scores")
-	# Le plein écran au premier toucher d'un mobile, une seule fois par page ; jamais sur ordinateur
+	# Le plein écran d'un mobile : demandé au relâchement d'un toucher (`touchend` est un geste pour le
+	# navigateur, `touchstart` non), redemandé au relâchement suivant tant qu'il n'est pas obtenu,
+	# TENTATIVES_PLEIN_ECRAN fois au plus (Safari sur iPhone n'en a pas pour un canevas) ; plus rien une fois
+	# obtenu, même sorti du plein écran ; jamais sur ordinateur ; jamais mémorisé
+	var demandes := {}
 	await _toucher(Vector2(1000, 500), true)
 	await _toucher(Vector2(1000, 500), false)
-	var sur_ordinateur: bool = params.plein_ecran_demande
+	demandes["ordinateur"] = params.tentatives_plein_ecran
 	params.mobile = true
 	await _toucher(Vector2(1000, 500), true)
+	demandes["appui"] = params.tentatives_plein_ecran
 	await _toucher(Vector2(1000, 500), false)
-	_check(not sur_ordinateur and params.plein_ecran_demande and not bool(scores.preference("plein_ecran", false)),
-		"un mobile demande le plein écran à son premier toucher (le geste que le navigateur exige), sans le mémoriser ; un ordinateur non")
+	demandes["relâchement"] = params.tentatives_plein_ecran
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	demandes["relâchement suivant"] = params.tentatives_plein_ecran
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_WINDOWED)
+	var refuse: bool = params.plein_ecran_obtenu
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_FULLSCREEN)  # ce que `_process` lit de la fenêtre
+	var obtenu: bool = params.plein_ecran_obtenu
+	params.suivre_plein_ecran(DisplayServer.WINDOW_MODE_WINDOWED)  # le joueur en sort
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	demandes["obtenu, puis quitté"] = params.tentatives_plein_ecran
+	params.plein_ecran_obtenu = false
+	for i in range(3):
+		await _toucher(Vector2(1000, 500), true)
+		await _toucher(Vector2(1000, 500), false)
+	demandes["3 refus"] = params.tentatives_plein_ecran
+	_check(demandes == {"ordinateur": 0, "appui": 0, "relâchement": 1, "relâchement suivant": 2, "obtenu, puis quitté": 2, "3 refus": params.TENTATIVES_PLEIN_ECRAN}
+		and params.TENTATIVES_PLEIN_ECRAN == 3 and not refuse and obtenu and params.plein_ecran_obtenu == false
+		and not bool(scores.preference("plein_ecran", false)),
+		"un mobile demande le plein écran au relâchement d'un toucher (pas à l'appui), réessaie au suivant, 3 fois au plus, plus rien une fois obtenu (même quitté) ; un ordinateur jamais ; rien de mémorisé (%s)" % [demandes])
 	# Le bouton Plein écran d'un ordinateur bascule d'après la fenêtre (fenêtrée ici) : il la met en plein écran
 	params.basculer_plein_ecran()
 	_check(params.plein_ecran and bool(scores.preference("plein_ecran", false)), "Plein écran, depuis une fenêtre : le plein écran, mémorisé")
@@ -2192,7 +2216,8 @@ func _tester_mobile(params: Node) -> void:
 	await _tester_tactile_mobile(params)
 	await _tester_en_ligne_mobile(params)
 	params.mobile = false
-	params.plein_ecran_demande = false
+	params.tentatives_plein_ecran = 0
+	params.plein_ecran_obtenu = false
 
 
 ## Phase 6 : les contrôles tactiles d'un mobile, en jeu (sur l'écran du solo et sur celui de la bataille)

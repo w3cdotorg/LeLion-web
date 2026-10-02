@@ -2,8 +2,9 @@ extends Node
 ## Réglages persistants : volumes, plein écran, langue. Appliqués au démarrage et à chaque
 ## changement ; sauvegardés via Scores (ConfigFile dans user://, IndexedDB sur le Web).
 ## Et la plateforme du jeu en ligne (spec §6) : un mobile (`mobile`) n'a pas Créer une partie, a les
-## contrôles tactiles et des cibles agrandies pour le doigt (`agrandir`), passe en plein écran à son
-## premier toucher ; un ordinateur a le bouton Plein écran du salon (`basculer_plein_ecran`). Tenu en
+## contrôles tactiles et des cibles agrandies pour le doigt (`agrandir`), demande le plein écran au
+## relâchement d'un toucher tant qu'il ne l'a pas (TENTATIVES_PLEIN_ECRAN fois au plus) ; un ordinateur a le
+## bouton Plein écran du salon (`basculer_plein_ecran`). Tenu en
 ## portrait, un mobile montre le voile « Tourne ton téléphone » (`voile`) par-dessus le jeu, qui continue.
 
 signal volumes_changes()
@@ -15,6 +16,9 @@ const SHADER_CRT := preload("res://Shaders/Crt.gdshader")
 ## conseillés pour une cible tactile à l'échelle 0,30 d'un iPhone en paysage sous les barres de Safari
 ## (340 px CSS de haut : 340 / 1125) ; 52 px CSS sur un 844×390.
 const CIBLE_TACTILE := 150
+## Demandes de plein écran au plus, sur un mobile : Safari sur iPhone n'a pas de plein écran pour un canevas,
+## et chaque demande refusée écrit une erreur ; sans plafond, une à chaque toucher.
+const TENTATIVES_PLEIN_ECRAN := 3
 
 var musique := 0.7
 var effets := 1.0
@@ -26,9 +30,12 @@ var couche_crt: CanvasLayer
 ## l'agent utilisateur du navigateur) ; faux ailleurs. Lu par les écrans à leur ouverture ; modifiable par
 ## les tests (le desktop n'a ni l'un ni l'autre).
 var mobile := OS.has_feature("web_android") or OS.has_feature("web_ios")
-## Vrai une fois le plein écran demandé par un premier toucher (une seule fois par page : un joueur qui
-## en sort n'y est pas ramené au toucher suivant).
-var plein_ecran_demande := false
+## Les demandes de plein écran faites sur ce mobile (au relâchement d'un toucher), TENTATIVES_PLEIN_ECRAN au
+## plus ; jamais mémorisées.
+var tentatives_plein_ecran := 0
+## Vrai une fois la fenêtre vue en plein écran (`suivre_plein_ecran`) : plus aucune demande ensuite, pour
+## toute la page (un joueur qui en sort n'y est pas ramené au toucher suivant).
+var plein_ecran_obtenu := false
 ## Le voile du portrait (spec §6), au-dessus de tous les écrans et sous le filtre CRT : visible sur un mobile
 ## tenu en portrait (`actualiser_voile`), sans rien arrêter ni rien intercepter (le jeu continue derrière).
 var voile: CanvasLayer
@@ -57,14 +64,26 @@ func _process(_delta: float) -> void:
 	if taille != _taille_fenetre:
 		_taille_fenetre = taille
 		actualiser_voile(taille)
+	if tentatives_plein_ecran > 0 and not plein_ecran_obtenu:
+		suivre_plein_ecran(DisplayServer.window_get_mode())
 
 
-## Sur un mobile, le premier toucher demande le plein écran (spec §6) : le navigateur ne l'accorde que
-## pendant un geste de l'utilisateur, et ce toucher en est un. Pas mémorisé dans les préférences.
+## Sur un mobile, le relâchement d'un toucher demande le plein écran (spec §6) : le navigateur ne l'accorde
+## que pendant un geste de l'utilisateur, et `touchend` en est un (`touchstart` non). Redemandé au relâchement
+## suivant tant qu'il n'est pas obtenu, TENTATIVES_PLEIN_ECRAN fois au plus. Pas mémorisé dans les préférences.
 func _input(event: InputEvent) -> void:
-	if mobile and not plein_ecran_demande and event is InputEventScreenTouch and event.pressed:
-		plein_ecran_demande = true
+	if mobile and not plein_ecran_obtenu and tentatives_plein_ecran < TENTATIVES_PLEIN_ECRAN \
+			and event is InputEventScreenTouch and not event.pressed:
+		tentatives_plein_ecran += 1
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+
+## Le mode `mode` de la fenêtre, lu à chaque image après une demande (`_process`) : un mobile vu en plein
+## écran l'a obtenu, et n'en demande plus (le toucher qui l'a demandé ne le dit pas : le navigateur l'accorde
+## plus tard, ou jamais).
+func suivre_plein_ecran(mode: DisplayServer.WindowMode) -> void:
+	if mobile and mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
+		plein_ecran_obtenu = true
 
 
 func _langue_systeme() -> String:
