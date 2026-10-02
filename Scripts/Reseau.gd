@@ -695,7 +695,8 @@ static func premiere_couleur_libre(occupes: Dictionary[int, Dictionary]) -> Colo
 ## caractères de mise en forme d'Unicode (catégorie Cf : trait d'union conditionnel U+00AD, marque de lettre
 ## arabe U+061C, séparateur mongol U+180E, ancres d'annotation U+FFF9 à U+FFFB, étiquettes U+E0000 à
 ## U+E007F…), le joint de graphèmes U+034F, les sélecteurs de variante mongols et ceux du plan 14, et les
-## lettres vides du coréen (U+115F, U+1160, U+3164, U+FFA0) : de quoi faire un pseudo invisible.
+## lettres vides du coréen (U+115F, U+1160, U+3164, U+FFA0). Ce qui reste de blanc (espaces Unicode,
+## sélecteurs de variante, marques combinantes) est traité par `_est_discret` et `pseudo_valide`.
 static func _code_point_interdit(c: int) -> bool:
 	return c <= 0x1F or (c >= 0x7F and c <= 0x9F) or c == 0xAD or c == 0x34F \
 		or (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x890 or c == 0x891 or c == 0x8E2 \
@@ -706,19 +707,51 @@ static func _code_point_interdit(c: int) -> bool:
 		or (c >= 0x1D173 and c <= 0x1D17A) or (c >= 0xE0000 and c <= 0xE0FFF)
 
 
+## Vrai pour un espace Unicode (catégorie Zs : U+0020, U+00A0, U+1680, U+2000 à U+200A, U+202F, U+205F,
+## U+3000) ou le carré braille vide U+2800, qui se rogne aux bords d'un pseudo.
+static func _est_espace(c: int) -> bool:
+	return c == 0x20 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x202F \
+		or c == 0x205F or c == 0x3000 or c == 0x2800
+
+
+## Vrai pour un point de code qui ne s'affiche pas seul : un espace, un sélecteur de variante (U+FE00 à
+## U+FE0F) ou une marque combinante (Mn/Me : accents seuls, U+0300 à U+036F, U+0483 à U+0489, U+1AB0 à
+## U+1AFF, U+1DC0 à U+1DFF, U+20D0 à U+20FF, U+FE20 à U+FE2F). Un pseudo qui n'en contient que est blanc.
+static func _est_discret(c: int) -> bool:
+	return _est_espace(c) or (c >= 0xFE00 and c <= 0xFE0F) or (c >= 0x300 and c <= 0x36F) \
+		or (c >= 0x483 and c <= 0x489) or (c >= 0x1AB0 and c <= 0x1AFF) or (c >= 0x1DC0 and c <= 0x1DFF) \
+		or (c >= 0x20D0 and c <= 0x20FF) or (c >= 0xFE20 and c <= 0xFE2F)
+
+
+## Retire les espaces Unicode (`_est_espace`) au début et à la fin du texte.
+static func _rogner(texte: String) -> String:
+	var debut := 0
+	var fin := texte.length()
+	while debut < fin and _est_espace(texte.unicode_at(debut)):
+		debut += 1
+	while fin > debut and _est_espace(texte.unicode_at(fin - 1)):
+		fin -= 1
+	return texte.substr(debut, fin - debut)
+
+
 ## Le pseudo tel que l'hôte l'inscrit : sans caractères de contrôle, invisibles ni forçages de sens
-## (voir `_code_point_interdit`), coupé à PSEUDO_MAX caractères puis sans espaces autour (pour ne
-## pas laisser d'espace finale à la coupe). Peut être vide : c'est `pseudo_ou_defaut` qui y met un
-## repli.
+## (voir `_code_point_interdit`), sans espaces Unicode autour, coupé à PSEUDO_MAX caractères puis de
+## nouveau sans espaces autour (pour ne pas laisser d'espace finale à la coupe). Vide si rien de visible
+## ne reste (que des espaces, des sélecteurs de variante ou des marques combinantes) : c'est
+## `pseudo_ou_defaut` qui y met un repli.
 static func pseudo_valide(texte: String) -> String:
 	var propre := ""
 	for i in texte.length():
 		var c := texte.unicode_at(i)
 		if not _code_point_interdit(c):
 			propre += texte.substr(i, 1)
-	# Un premier strip_edges avant la coupe ne gâche pas le quota sur des espaces qui l'entourent ;
+	# Un premier rognage avant la coupe ne gâche pas le quota sur des espaces qui l'entourent ;
 	# le second retire celle que la coupe peut exposer en fin de chaîne (spec M3).
-	return propre.strip_edges().left(PSEUDO_MAX).strip_edges()
+	propre = _rogner(_rogner(propre).left(PSEUDO_MAX))
+	for i in propre.length():
+		if not _est_discret(propre.unicode_at(i)):
+			return propre
+	return ""
 
 
 ## `pseudo_valide(texte)`, ou « Joueur N » (N = index + 1) si le nettoyage ne laisse rien : un

@@ -830,14 +830,27 @@ func _tester_reseau() -> void:
 		"le pseudo est aussi nettoyé du DEL, des contrôles C1, des forçages de sens et des caractères invisibles")
 	# Phase 7 du jeu en ligne (spec §8.2) : tous les caractères de mise en forme (catégorie Cf), et ce qui fait
 	# un pseudo invisible ; le nettoyage passe avant la coupe à 12 caractères
-	var formats := ""
+	# chaque point de code est vérifié seul (entrelacés, ceux qui suivent la coupe à 12 ne le seraient pas)
+	var oublies: Array[String] = []
 	for c: int in [0x00AD, 0x034F, 0x0600, 0x061C, 0x06DD, 0x070F, 0x0891, 0x08E2, 0x115F, 0x1160, 0x17B4, 0x180B, 0x180E, 0x2066,
 			0x2069, 0x3164, 0xFFA0, 0xFFF9, 0xFFFB, 0x110BD, 0x13430, 0x1BCA0, 0x1D173, 0xE0001, 0xE0041, 0xE007F, 0xE0100]:
-		formats += char(c) + "x"
+		if reseau.pseudo_valide("a" + char(c) + "b") != "ab":
+			oublies.append("U+%04X" % c)
+	_check(oublies.is_empty(), "phase 7 : chaque caractère de mise en forme d'Unicode de la liste (trait d'union conditionnel, marque arabe, étiquettes…) et chaque lettre vide est retiré (oubliés : %s)" % [oublies])
 	var masques := (char(0x200B) + "W" + char(0x2066)).repeat(20)
-	_check(reseau.pseudo_valide(formats) == "xxxxxxxxxxxx" and reseau.pseudo_valide(masques) == "WWWWWWWWWWWW"
+	_check(reseau.pseudo_valide(masques) == "WWWWWWWWWWWW"
 		and reseau.pseudo_valide("Zoé" + char(0x2003) + "Léa " + char(0x1F600)) == "Zoé" + char(0x2003) + "Léa " + char(0x1F600),
-		"phase 7 : nettoyé aussi des caractères de mise en forme d'Unicode (trait d'union conditionnel, marque arabe, étiquettes…) et des lettres vides, avant la coupe à 12 ; espaces, accents et emoji restent")
+		"phase 7 : le nettoyage passe avant la coupe à 12 ; espaces, accents et emoji restent")
+	# Les pseudos blancs (espaces Unicode, sélecteurs de variante, marques combinantes) retombent sur « Joueur N »
+	var blancs: Array[String] = []
+	for c: int in [0x3000, 0x00A0, 0x2007, 0x205F, 0x1680, 0x202F, 0xFE0F, 0x2800, 0x0301, 0x2003]:
+		if reseau.pseudo_ou_defaut(char(c).repeat(12), 1) != "Joueur 2":
+			blancs.append("U+%04X" % c)
+	_check(blancs.is_empty(), "phase 7 : 12 espaces Unicode, sélecteurs de variante ou marques combinantes retombent sur « Joueur N » (échecs : %s)" % [blancs])
+	var coeur := char(0x2764) + char(0xFE0F)
+	_check(reseau.pseudo_valide(coeur) == coeur and reseau.pseudo_valide("Bob " + coeur) == "Bob " + coeur
+		and reseau.pseudo_valide(char(0xA0) + "Bob" + char(0x3000)) == "Bob" and reseau.pseudo_valide("Bob" + char(0xA0).repeat(12) + "x") == "Bob",
+		"phase 7 : un cœur avec son sélecteur de variante survit, une espace insécable ou idéographique au bord est rognée (avant et après la coupe)")
 	_check(reseau.pseudo_ou_defaut(char(0x3164).repeat(5) + char(0xE0041), 2) == "Joueur 3",
 		"un pseudo fait seulement de lettres vides et d'étiquettes retombe sur « Joueur N »")
 	_check(reseau.pseudo_valide("abcdefghijk lmn") == "abcdefghijk",
@@ -2283,10 +2296,10 @@ func _tester_pseudos_affiches() -> void:
 	print("-- Pseudos affichés (phase 7)")
 	var interpretes: Array[String] = []
 	for dossier: String in ["res://Scripts", "res://Scenes"]:
-		for fichier in _fichiers_du_dossier(dossier, ".gd" if dossier.ends_with("Scripts") else ".tscn"):
-			var texte := FileAccess.get_file_as_string(dossier.path_join(fichier))
+		for chemin in _fichiers_recursifs(dossier, ".gd" if dossier.ends_with("Scripts") else ".tscn"):
+			var texte := FileAccess.get_file_as_string(chemin)
 			if texte.contains("RichTextLabel") or texte.contains("bbcode"):
-				interpretes.append(fichier)
+				interpretes.append(chemin)
 	_check(interpretes.is_empty(), "aucun RichTextLabel ni BBCode dans les scripts et les scènes du jeu : un pseudo s'affiche en texte brut (%s)" % [interpretes])
 	var etat := (load("res://Scenes/Lion.tscn") as PackedScene).get_state()
 	var etiquette := {}
@@ -3430,6 +3443,18 @@ func _fichiers_du_dossier(dossier: String, suffixe: String) -> PackedStringArray
 			fichiers.append(f)
 	fichiers.sort()
 	return fichiers
+
+
+## Les chemins des fichiers de suffixe `suffixe` sous `dossier`, sous-dossiers compris.
+func _fichiers_recursifs(dossier: String, suffixe: String) -> PackedStringArray:
+	var chemins := PackedStringArray()
+	for f in _fichiers_du_dossier(dossier, suffixe):
+		chemins.append(dossier.path_join(f))
+	var sous_dossiers := DirAccess.get_directories_at(dossier)
+	sous_dossiers.sort()
+	for d in sous_dossiers:
+		chemins.append_array(_fichiers_recursifs(dossier.path_join(d), suffixe))
+	return chemins
 
 
 ## Sert l'hôte (`Reseau`) et le pair `autre` jusqu'à ce que la connexion d'ENet soit établie des deux

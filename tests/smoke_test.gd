@@ -2772,6 +2772,9 @@ func _tester_manche_reseau() -> void:
 		_check(resultats != null and resultats.lignes.size() == 2
 			and resultats.lignes.all(func(l: Dictionary) -> bool: return l.pseudo is Label and l.pseudo.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED),
 			"phase 7 (spec §8.2) : les pseudos de l'écran Résultats, des Label jamais traduits d'eux-mêmes")
+		_check(resultats.cartes_titres.all(func(c: Dictionary) -> bool: return c.nom is Label and c.nom.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED)
+			and resultats.gagnant.auto_translate_mode == Node.AUTO_TRANSLATE_MODE_DISABLED,
+			"phase 7 (spec §8.2) : les noms des lauréats des titres et celui du gagnant, des Label jamais traduits d'eux-mêmes")
 		# Un hôte perdu (chez un client) : message, tout se fige ; M5 (revue finale phase 17) : la boucle du
 		# vomi d'un joueur qui tenait Espace s'arrête
 		var audio: Node = root.get_node("Audio")
