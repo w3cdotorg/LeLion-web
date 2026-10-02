@@ -83,9 +83,13 @@ picks **Rematch**, **Next level** or **Back to lobby** for everyone; anyone can 
 quitting ends the game for everyone (it asks first). Each player uses their own PC's keyboard or
 gamepad, with the solo controls; Esc opens a local menu that does not pause the round.
 
-Until online play lands (in the browser, by room code or invitation link), run the game from the
-editor (`godot .`) on each computer: **Multiplayer** opens the Online screen, where one player
-creates a game and the others join it with the host's address as the code: the host's local IP
+Online play runs in the browser (WebRTC, the host's browser being authoritative): **Create a game**
+gives a room code (`K7Q-2XM`) and **Copy link**; the others open the link, pick a name and join. It
+needs the signalling Worker (`signalisation/`, deployed with the page in a later phase); locally,
+`npm --prefix signalisation run dev` serves it on `ws://localhost:8787` (the `lelion/signalisation/url`
+project setting), and the Web export must be served from `http://localhost:<port>` (not `127.0.0.1`).
+From the editor (`godot .`), desktop builds play over ENet instead: **Multiplayer** opens the Online
+screen, where one player creates a game and the others join it with the host's address as the code: the host's local IP
 address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
 followed by `:7777` (`192.168.1.20:7777`). The host's lobby shows `127.0.0.1:7777`, which only works
 on the host's own computer.
@@ -109,8 +113,9 @@ Scenes/     Titre (title), Main (a game), Intro (READY? VOMIT!), Lion, Ville (to
             CoeurPickup, Soucoupe, Coccinelle, Boss
 Scripts/    one script per scene; the autoloads GameState (game, players, levels, difficulties, arcade), Scores
             (records, preferences), Parametres (settings, CRT layer), Audio (sounds, layered music) and Reseau
-            (handshake, lobby table, heartbeat); Transport and TransportENet (the network channels); CodeSalle
-            (room codes, invitation link); Manche (a networked round);
+            (handshake, lobby table, heartbeat); Transport, TransportENet and TransportWebRTC (the network
+            channels: ENet on the desktop, WebRTC in the browser); CodeSalle (room codes, invitation link); Manche
+            (a networked round); PiloteWeb (the end-to-end test driver, inert outside the "Web pilote" export);
             pure logic: Joueur (a player), Commandes (inputs), Regles / ReglesSolo / ReglesBataille (rules of each
             mode), Territoire (cell ownership), Peinture (deterministic stamps), EtatLion, InterpolationLion and
             PredictionLocale (lions over the network), BilanManche (end of a round), PlacementPseudos; the lion's
@@ -118,7 +123,8 @@ Scripts/    one script per scene; the autoloads GameState (game, players, levels
 Shaders/    Ville.gdshader (paint mask on the skyline), Lion.gdshader (mane tint), Crt.gdshader (optional CRT filter)
 Assets/     Sprites (used), Sons (generated), Traductions (CSV → .translation), src (reference material, ignored by Godot)
 tests/      unitaires, smoke_test, bataille_test, prediction_test, trace_lions (headless), reseau/ (multi-process
-            network test, latency relay), screenshots and deux_fenetres (captures)
+            network test, latency relay), screenshots and deux_fenetres (captures), web/ (end-to-end WebRTC test,
+            Playwright)
 tools/      generer_sons.py (effects), generer_musique.py (layered chiptune, town + boss themes), generer_skylines.py (skylines, sprites)
 docs/       screenshots, the design specs (LAN, then online) and the phase plans (superpowers/)
 ```
@@ -149,6 +155,26 @@ godot --headless --fixed-fps 60 --script tests/trace_lions.gd      # the lions' 
 The network test needs GNU `timeout` (coreutils) and takes about three minutes; run one suite at
 a time (they share local ports).
 
+The end-to-end test plays a real online round in three browser pages (Chromium and Firefox; WebKit
+checks **Copy link**), on the "Web pilote" export and a local Worker that it starts itself
+(`python3` serves the export on port 8060, `wrangler dev` listens on 8787):
+
+```sh
+godot --headless --export-release "Web pilote" export/web-pilote/index.html
+(cd signalisation && npm ci) && cd tests/web && npm ci && npx playwright install chromium firefox webkit
+xvfb-run -a npx playwright test   # Linux; Firefox needs a display for WebGL 2
+```
+
+On a Mac whose firewall blocks incoming connections to Playwright's browsers (WebRTC between two
+pages then never connects), run it in the Playwright image instead (Docker or OrbStack), from the
+repository root, after the export:
+
+```sh
+docker run --rm --init -v "$PWD":/depot -v lelion-modules-signalisation:/depot/signalisation/node_modules \
+  -v lelion-modules-web:/depot/tests/web/node_modules -w /depot/tests/web mcr.microsoft.com/playwright:v1.63.0-noble \
+  bash -c '(cd ../../signalisation && npm ci) && npm ci && xvfb-run -a npx playwright test'
+```
+
 Screenshots, with a real renderer (windows open while the scripts run):
 
 ```sh
@@ -167,8 +193,9 @@ Sounds are regenerated with `python3 tools/generer_sons.py`, the music with
 
 ## Export and CI
 
-`export_presets.cfg` defines a single Web preset (single-threaded, so it needs no cross-origin
-isolation headers). With the export templates installed:
+`export_presets.cfg` defines the Web preset (single-threaded, so it needs no cross-origin isolation
+headers), and "Web pilote", the same plus the `pilote` feature for the end-to-end test (never
+published). With the export templates installed:
 
 ```sh
 godot --headless --export-release Web export/web/index.html
@@ -176,6 +203,7 @@ godot --headless --export-release Web export/web/index.html
 
 The workflow in `.github/workflows/ci.yml` runs on every pull request and every push to `main`: it
 installs Godot 4.7.2 and its export templates, runs the unit tests, the smoke test, the local
-battle test, the prediction bench, the network test (real broadcast included) and the two capture
-scripts without a renderer, then exports the Web build and publishes it as the `LeLion-web`
-artifact (kept 30 days). Deployment to GitHub Pages comes with online play.
+battle test, the prediction bench, the network test and the two capture scripts without a
+renderer, then exports the Web build and publishes it as the `LeLion-web` artifact (kept 30 days).
+A second job tests the signalling Worker; a third exports "Web pilote" and runs the end-to-end test.
+Deployment to GitHub Pages comes with the Worker's (a later phase).
