@@ -2215,6 +2215,7 @@ func _tester_mobile(params: Node) -> void:
 	params.actualiser_voile(Vector2i(844, 390))
 	await _tester_tactile_mobile(params)
 	await _tester_en_ligne_mobile(params)
+	await _tester_resultats_mobile(params)
 	params.mobile = false
 	params.tentatives_plein_ecran = 0
 	params.plein_ecran_obtenu = false
@@ -2422,6 +2423,52 @@ func _tester_en_ligne_mobile(params: Node) -> void:
 	bureau.free()
 	params.mobile = true
 	scores.definir_preference("pseudo", "")
+
+
+## Phase 6 (revue finale) : l'écran Résultats d'un téléphone : Revanche, Niveau suivant, Salon, Quitter, Oui et
+## Non à la taille d'un doigt, sans les aides du clavier ; à 6 joueurs, tout tient dans l'écran (2000×1125) ;
+## sur ordinateur, rien ne change.
+func _tester_resultats_mobile(params: Node) -> void:
+	var cible: int = params.CIBLE_TACTILE
+	root.content_scale_size = Vector2i(2000, 1125)
+	GS.configurer_bataille(6)
+	var stats := [[3, 120, 9], [5, 340, 4], [0, 60, 12], [1, 0, 2], [2, 280, 4], [0, 10, 1]]  # un lauréat par titre
+	for i in range(6):
+		GS.joueurs[i].pseudo = "WWWWWWWWWWWW"
+		GS.joueurs[i].etourdissements_infliges = stats[i][0]
+		GS.joueurs[i].cellules_volees = stats[i][1]
+		GS.joueurs[i].chocs = stats[i][2]
+	var bilan := BilanManche.relever(GS.joueurs, [260, 410, 180, 90, 380, 30] as Array[int], [5] as Array[int],
+		{} as Dictionary[int, PackedByteArray], 89.5)
+	var ecran := Rect2(0, 0, 2000, 1125)
+	var vues := {}
+	var colonnes := {}  # la hauteur de la colonne, Oui et Non affichés
+	for mobile: bool in [true, false]:
+		params.mobile = mobile
+		var r: CanvasLayer = load("res://Scenes/Resultats.tscn").instantiate()
+		root.add_child(r)
+		r.afficher(bilan, true, true)
+		r.terminer_animation()
+		await process_frame
+		var hauts: Array = [r.bouton_revanche, r.bouton_suivant, r.bouton_salon, r.bouton_quitter].map(func(b: Button) -> int: return int(b.size.y))
+		var dedans: bool = ecran.encloses(r.get_node("Centre/Colonne").get_global_rect())
+		var aide: bool = r.aide.visible
+		r.choisir(&"quitter")  # l'hôte : la confirmation, Oui et Non à la place des choix
+		await process_frame
+		hauts.append_array([r.bouton_oui, r.bouton_non].map(func(b: Button) -> int: return int(b.size.y)))
+		dedans = dedans and ecran.encloses(r.get_node("Centre/Colonne").get_global_rect())
+		colonnes[mobile] = int(r.get_node("Centre/Colonne").size.y)
+		vues[mobile] = {"hauts": hauts, "dans l'écran": dedans, "aide": aide and r.aide.visible, "police": r.bouton_quitter.get_theme_font_size("font_size")}
+		r.free()
+	params.mobile = true
+	_check(vues[true].hauts.all(func(h: int) -> bool: return h >= cible) and vues[true]["dans l'écran"] and not vues[true].aide,
+		"sur un téléphone, l'écran Résultats a Revanche, Niveau suivant, Salon, Quitter, Oui et Non de %d px de haut au moins, sans les aides du clavier ; à 6 joueurs, tout tient dans l'écran (%s, la colonne %d px de haut, %d sur ordinateur)" % [cible, vues[true], colonnes[true], colonnes[false]])
+	_check(vues[false] == {"hauts": [68, 68, 68, 68, 68, 68], "dans l'écran": true, "aide": true, "police": 30},
+		"sur ordinateur, l'écran Résultats ne change pas : des boutons de 68 px, la police à 30 px, les aides du clavier (%s)" % [vues[false]])
+	GS.configurer_solo()
+	GS.nouvelle_partie()
+	GS.partie_en_cours = false
+	GS.pret = false
 
 
 ## Le rectangle (px de l'écran) du texte d'une étiquette centrée sur une ligne, plus étroit qu'elle.
