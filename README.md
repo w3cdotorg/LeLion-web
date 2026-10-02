@@ -139,14 +139,18 @@ couvre le jeu, qui continue) ; le plein écran se demande au premier doigt levé
 choisissent ta couleur et **PRÊT** te dit prêt ; en manche, le stick (pose le pouce sur la moitié gauche) et
 **VOMIR**. Coller un code dans un champ marche mal sur un téléphone : ouvre plutôt le lien.
 
-**Vie privée** : aucun compte, aucun serveur de jeu ; seuls ton pseudo et tes réglages sont gardés, dans
-ton navigateur. Cloudflare, qui fait tourner le service de connexion (un Worker), voit l'adresse IP de
-chaque joueur le temps d'entrer dans la partie : le service s'en sert pour limiter les créations et les
-arrivées par minute, sans l'écrire dans ses journaux. Ensuite les navigateurs se parlent directement
-(WebRTC) : l'hôte et chaque joueur voient l'adresse IP l'un de l'autre, sauf quand la
+**Vie privée** : aucun compte, aucun serveur de jeu ; seuls ton pseudo, tes réglages et tes meilleurs
+temps (en solo) sont gardés, dans ton navigateur. GitHub Pages, qui sert la page, voit ton adresse IP quand
+elle se charge. Le service de connexion (un Worker, chez Cloudflare) voit l'adresse IP de chaque joueur le
+temps d'entrer dans la partie, et celle de l'hôte toute la vie de la salle (sa connexion au service reste
+ouverte pour les arrivées, 4 h au plus) : il s'en sert pour limiter les créations et les arrivées par
+minute, et le Worker ne l'écrit pas dans ses journaux. Les serveurs STUN (de Cloudflare et de Google), qui
+disent à chaque navigateur son adresse publique, la voient aussi. Ensuite les navigateurs se parlent
+directement (WebRTC) : l'hôte et chaque joueur voient l'adresse IP l'un de l'autre, sauf quand la
 connexion passe par le relais de Cloudflare (TURN : les réseaux trop fermés, ou `?relais=1` ajouté au
-lien, un réglage de diagnostic qui l'impose). Le pseudo des autres ne s'affiche que comme du texte : ni
-mise en forme, ni caractères invisibles.
+lien, un réglage de diagnostic qui l'impose) ; Cloudflare relaie alors tout le trafic de la partie,
+chiffré. Le pseudo des autres ne s'affiche que comme du texte : ni mise en forme, ni caractères
+invisibles.
 
 **Dépannage**, message par message :
 
@@ -159,7 +163,8 @@ mise en forme, ni caractères invisibles.
 | « Trop de parties en ce moment, réessaie plus tard. » | Le quota gratuit du service de connexion est atteint pour aujourd'hui. | Réessaie plus tard (le lendemain au pire). |
 | « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Les deux navigateurs n'ont pas pu se relier en 15 s. | Réessaie ; sinon change de réseau (la 4G plutôt qu'un Wi-Fi d'entreprise ou d'école), ou ajoute `&relais=1` au lien. |
 | « Version différente de l'hôte (…) » | L'hôte et toi n'avez pas la même version du jeu. | Recharge la page (l'un des deux a une ancienne version en cache). |
-| « La partie est complète. » | Six joueurs au plus (ou les places que l'hôte a choisies). | Attends qu'une place se libère. |
+| « Réponse incomprise : est-ce bien une partie de LeLion ? » | La réponse reçue n'est pas celle d'une partie de LeLion (un autre programme, ou une version trop différente pour se comprendre). | Vérifie le code ou le lien ; sinon, l'hôte et toi, rechargez la page. |
+| « La partie est complète. » | Six joueurs au plus. | Attends qu'une place se libère. |
 | « Une manche est en cours : réessaie à la fin. » | On n'arrive pas en pleine manche. | Rejoins quand l'hôte revient au salon. |
 | « L'hôte t'a exclu de la partie. » | L'hôte t'a retiré du salon. | Vois avec lui. |
 | « Exclu : ta partie a mis trop de temps à charger. » | Ta manche n'a pas fini de charger à temps (20 s) : la partie est partie sans toi. | Rejoins au salon suivant ; ferme les autres onglets sur un appareil lent. |

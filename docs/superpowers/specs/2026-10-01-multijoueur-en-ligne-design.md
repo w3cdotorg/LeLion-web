@@ -254,8 +254,13 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 - **Exclusion** : l'hôte exclut un joueur du salon (croix sur sa carte) ; l'exclu reçoit « L'hôte
   t'a exclu de la partie. » puis l'hôte ferme son pair. Sans compte, rien n'identifie durablement
   un joueur : un exclu peut revenir avec le code, et l'hôte l'exclut à nouveau (§13).
-- Vie privée : aucun compte, rien de stocké. Cloudflare voit les IP le temps de la signalisation ;
-  hôte et client voient l'IP l'un de l'autre, sauf connexion par le TURN. Le README le dit.
+- Vie privée : aucun compte ; rien de stocké hors du navigateur (pseudo, réglages, meilleurs temps du
+  solo : `Scores.gd`). GitHub Pages voit l'IP au chargement de la page. Le Worker voit l'IP de chaque
+  joueur le temps de sa signalisation, et celle de l'hôte toute la vie de la salle (sa socket reste
+  ouverte, 4 h au plus), et ne l'écrit pas dans ses journaux (`signalisation/src/protocole.js`) ; les
+  serveurs STUN (Cloudflare et Google) la voient aussi. Hôte et client voient l'IP l'un de l'autre, sauf
+  connexion par le TURN : Cloudflare relaie alors le trafic (chiffré) de toute la partie. Le README le
+  dit.
 - Tel que construit (phase 7) : un seau de jetons par client chez l'hôte (`LimiteDebit`), à l'horloge
   de l'hôte (pas à ses ticks physiques : un hôte lent jetterait les paquets d'un client qui joue, vu
   sous Firefox en CI) : 2 paquets de commandes par tick (120 par seconde), 120 d'un coup (deux secondes
