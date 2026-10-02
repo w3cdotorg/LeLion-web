@@ -128,3 +128,59 @@ jobs:
 
       - name: Configuration de déploiement valide (sans compte)
         run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/signalisation"
+
+  bout-en-bout:
+    name: Bout en bout WebRTC (Playwright, trois pages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Installer Godot et les templates d'export
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -sSLO "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -sSLO "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -d /tmp/templates
+          mv /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          godot --version
+
+      - name: Importer les ressources
+        run: godot --headless --import . || true
+
+      - name: Exporter en Web, avec le pilote du test (préréglage « Web pilote »)
+        shell: bash
+        run: |
+          mkdir -p export/web-pilote
+          timeout 600 godot --headless --export-release "Web pilote" export/web-pilote/index.html
+          test -f export/web-pilote/index.html
+
+      - name: Installer Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            signalisation/package-lock.json
+            tests/web/package-lock.json
+
+      - name: Installer la signalisation, Playwright et ses navigateurs (package-lock.json)
+        run: |
+          (cd signalisation && npm ci)
+          (cd tests/web && npm ci && npx playwright install --with-deps chromium firefox webkit)
+
+      - name: Test de bout en bout (Chromium et Firefox, une manche à trois pages ; WebKit, Copier le lien)
+        working-directory: tests/web
+        run: xvfb-run -a npx playwright test
+
+      - name: Publier le rapport Playwright (en cas d'échec)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-playwright
+          path: tests/web/playwright-report
+          retention-days: 7
