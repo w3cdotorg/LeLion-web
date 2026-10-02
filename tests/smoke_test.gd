@@ -159,6 +159,7 @@ func _run() -> void:
 	await _tester_ecran_en_ligne(scores, params)
 	await _tester_titre_reseau(scores)
 	await _tester_salon(params)
+	await _tester_mobile(params)
 
 	# Scores
 	_check(scores.enregistrer("skyline/facile", 50.0) == 0 and scores.meilleur_temps("metropole/facile") < 0.0
@@ -2141,6 +2142,46 @@ func _tester_salon(params: Node) -> void:
 
 	reseau.pseudo = ""
 	GS.niveau_courant = 0
+
+
+## Phase 6 du jeu en ligne (spec §6) : ce que fait un mobile (`Parametres.mobile`, forcé ici : le desktop
+## n'en est pas un), et le plein écran sur ordinateur ; `mobile` revient à faux à la fin.
+func _tester_mobile(params: Node) -> void:
+	print("-- Mobiles (phase 6)")
+	var scores: Node = root.get_node("Scores")
+	# Le plein écran au premier toucher d'un mobile, une seule fois par page ; jamais sur ordinateur
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	var sur_ordinateur: bool = params.plein_ecran_demande
+	params.mobile = true
+	await _toucher(Vector2(1000, 500), true)
+	await _toucher(Vector2(1000, 500), false)
+	_check(not sur_ordinateur and params.plein_ecran_demande and not bool(scores.preference("plein_ecran", false)),
+		"un mobile demande le plein écran à son premier toucher (le geste que le navigateur exige), sans le mémoriser ; un ordinateur non")
+	# Le bouton Plein écran d'un ordinateur bascule d'après la fenêtre (fenêtrée ici) : il la met en plein écran
+	params.basculer_plein_ecran()
+	_check(params.plein_ecran and bool(scores.preference("plein_ecran", false)), "Plein écran, depuis une fenêtre : le plein écran, mémorisé")
+	params.definir_plein_ecran(false)
+	# Une cible au doigt : 150 px de haut au moins, sa police agrandie
+	var bouton := Button.new()
+	bouton.custom_minimum_size = Vector2(260, 72)
+	params.agrandir(bouton, 44)
+	_check(bouton.custom_minimum_size == Vector2(260, params.CIBLE_TACTILE) and bouton.get_theme_font_size("font_size") == 44,
+		"agrandir : %d px de haut au moins, la police à 44 px" % params.CIBLE_TACTILE)
+	bouton.free()
+	params.mobile = false
+	params.plein_ecran_demande = false
+
+
+## Un toucher (ou son relâchement) du doigt `index` en `position` (px de l'écran du jeu), comme un écran
+## tactile l'envoie.
+func _toucher(position: Vector2, appui: bool, index := 0) -> void:
+	var toucher := InputEventScreenTouch.new()
+	toucher.index = index
+	toucher.position = position
+	toucher.pressed = appui
+	root.push_input(toucher, true)  # coordonnées du viewport, pas de la fenêtre
+	await process_frame
 
 
 ## Un appui (ou un relâchement) de `action`, comme le clavier ou la manette l'envoient au jeu.

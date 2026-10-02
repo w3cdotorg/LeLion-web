@@ -55,6 +55,7 @@ func _run() -> void:
 	await _tester_parties_en_ligne()
 	await _tester_transport_tardif()
 	_tester_transport_webrtc()
+	_tester_mobile()
 	_tester_protocole()
 	print("== %d échec(s) ==" % _echecs)
 	quit(1 if _echecs > 0 else 0)
@@ -2189,6 +2190,19 @@ func _tester_manches_enchainees() -> void:
 	gs.partie_en_cours = false
 
 
+## Phase 6 du jeu en ligne (spec §6) : un mobile se reconnaît aux fonctionnalités `web_android` et
+## `web_ios` de l'export Web, que le desktop n'a pas ; le son du Web se lit en Stream (Safari iOS plante en
+## lecture Sample après 10 à 30 min).
+func _tester_mobile() -> void:
+	print("-- Mobiles (phase 6)")
+	var params: Node = root.get_node("Parametres")  # autoload : jamais nommé
+	_check(not params.mobile and not params.plein_ecran_demande and params.CIBLE_TACTILE == 150,
+		"le desktop n'est pas un mobile (ni web_android ni web_ios) ; une cible au doigt fait 150 px (44 px CSS à l'échelle 0,30 d'un iPhone en paysage sous les barres de Safari)")
+	# L'énumération du réglage : 0 Stream, 1 Sample (pas celle d'AudioServer.PlaybackType).
+	_check(ProjectSettings.get_setting("audio/general/default_playback_type.web") == 0,
+		"le son du Web se lit en Stream (audio/general/default_playback_type.web = 0), pas en Sample")
+
+
 ## Phase 19 (M7 de la revue de la phase 11) : `application/config/version` est aussi la version du
 ## protocole, présentée à la poignée de main ; deux postes de versions différentes se
 ## refusent (« Version différente de l'hôte »), deux postes de la même version doivent donc parler le même
@@ -2811,6 +2825,8 @@ func _tester_transport_webrtc() -> void:
 					if prereglages.get_value(paire[0], cle, null) != prereglages.get_value(paire[1], cle, null):
 						ecarts.append(cle)
 		_check(ecarts.is_empty(), "les deux préréglages sont identiques option par option, hors name, custom_features, export_path, runnable (%s)" % [ecarts])
+		_check(prereglages.get_value(web + ".options", "html/experimental_virtual_keyboard", false) == true,
+			"phase 6 : le clavier virtuel du navigateur s'ouvre sur un mobile pour taper le pseudo (html/experimental_virtual_keyboard)")
 		var exclus := func(section: String) -> PackedStringArray:
 			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
 		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
