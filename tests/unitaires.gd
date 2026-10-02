@@ -3035,7 +3035,7 @@ func _tester_transport_webrtc() -> void:
 		lente._vider_file(t)
 		par_image.append(lente.ecrits.size() - avant)
 	_check(par_image == [1, 8, 0, 0, 0] and lente.ecrits.size() == 9,
-		"à 2 images par seconde, la file rattrape les créneaux de 50 ms de l'image écoulée : 9 messages en 2 images, pas en 9 (%s)" % [par_image])
+		"à 2 images par seconde, la file rattrape les créneaux de l'image écoulée (des dates espacées de 50 ms, dont le lot part d'un coup, pas des envois espacés de 50 ms en temps réel) : 9 messages en 2 images, pas en 9 (%s)" % [par_image])
 	var seaux := {}
 	for duree: int in [16, 200, 500, 1000]:
 		var cadencee := TransportWebRTCSimule.new()
@@ -3055,6 +3055,39 @@ func _tester_transport_webrtc() -> void:
 		seaux[duree] = [snappedf(plus_bas, 0.1), cadencee.ecrits.size()]
 	_check(seaux.values().all(func(v: Array) -> bool: return v[0] >= 0.0 and v[1] == 80),
 		"une image de 16, 200, 500 ou 1000 ms : les 80 messages partent, et le seau de la salle (20 jetons, 20 par seconde) n'est jamais à sec ({durée: [jetons au plus bas, envoyés]} %s)" % [seaux])
+	# Revue finale de la phase 6 : les créneaux d'une image longue sont des dates espacées de 50 ms, pas des
+	# envois espacés en temps réel : leur lot part d'un coup. Un gel de TCP retarde un lot sur le suivant, que
+	# la salle reçoit avec lui. À 1 image par seconde, un lot sur deux retardé sur le suivant (les pairs, ou
+	# les impairs) : 10 envois par image au plus (ENVOIS_PAR_IMAGE), deux lots à la fois 20 au plus, et le
+	# seau de la salle (20 jetons, 20 par seconde) n'est jamais à sec
+	var geles := {}
+	for retardes: int in [0, 1]:
+		var gelee := TransportWebRTCSimule.new()
+		gelee.rejoindre("K7Q2XM")
+		for i in range(80):
+			gelee._envoyer({"t": "candidat", "vers": 1, "media": "0", "index": i, "nom": "c"})
+		var seau := 20.0
+		var plus_bas := seau
+		var precedent := 500000
+		var en_retard := 0
+		var lots: Array[int] = []
+		for k in range(14):
+			var t := 500000 + k * 1000
+			var avant := gelee.ecrits.size()
+			gelee._vider_file(t)
+			var lot := gelee.ecrits.size() - avant
+			lots.append(lot)
+			if k % 2 == retardes:
+				en_retard += lot  # gelé : il arrive à la salle avec le lot suivant
+				continue
+			seau = minf(20.0, seau + (t - precedent) * 20.0 / 1000.0)
+			precedent = t
+			seau -= en_retard + lot
+			en_retard = 0
+			plus_bas = minf(plus_bas, seau)
+		geles[retardes] = [snappedf(plus_bas, 0.1), lots.max(), gelee.ecrits.size()]
+	_check(TransportWebRTC.ENVOIS_PAR_IMAGE == 10 and geles.values().all(func(v: Array) -> bool: return v[0] >= 0.0 and v[1] <= 10 and v[2] == 80),
+		"à 1 image par seconde, un lot sur deux gelé par TCP et reçu avec le suivant : 10 envois par image au plus, les 80 messages partent, le seau de la salle jamais à sec ({lots retardés: [jetons au plus bas, plus gros lot, envoyés]} %s)" % [geles])
 
 
 ## Attend, image après image, que `condition` soit vraie, `delai` secondes au plus ; renvoie sa dernière
