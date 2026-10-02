@@ -2430,7 +2430,9 @@ func _tester_retour_de_gel() -> void:
 	print("-- Retour d'un gel : « Tu as été déconnecté » (phase 7)")
 	var reseau: Node = root.get_node("Reseau")  # autoload : jamais nommé
 	var silence_ms := int(reseau.SILENCE_SESSION * 1000.0)
-	var maintenant := Time.get_ticks_msec()
+	# Un instant synthétique, une minute plus tard : chaque `_derniere_image` posée ci-dessous reste positive
+	# (0 veut dire « encore aucune image »), même si ce test passe dans les 11 premières secondes du processus.
+	var maintenant := Time.get_ticks_msec() + 60_000
 	var image_avant: int = reseau._derniere_image
 	var gel_avant: int = reseau._fin_du_gel
 	reseau._fin_du_gel = 0
@@ -2453,7 +2455,10 @@ func _tester_retour_de_gel() -> void:
 	var raisons: Array[String] = []
 	var sur_perte := func() -> void: raisons.append(reseau.raison_perte)
 	reseau.hote_perdu.connect(sur_perte)
-	reseau._derniere_image = Time.get_ticks_msec() - silence_ms - 1000
+	# Un gel qui vient de finir (sa première image passée à l'instant) : une `_derniere_image` reculée de
+	# plus que le silence serait négative au début du processus, lue comme « encore aucune image ».
+	reseau._derniere_image = Time.get_ticks_msec()
+	reseau._fin_du_gel = Time.get_ticks_msec()
 	reseau._decider(&"hote_perdu")
 	await process_frame
 	reseau._fin_du_gel = 0
