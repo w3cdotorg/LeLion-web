@@ -2718,6 +2718,8 @@ func _tester_transport_tardif() -> void:
 ## (`erreur`, fermeture, silence), et la file cadencée.
 func _tester_transport_webrtc() -> void:
 	print("-- Transport WebRTC (phase 4, sans navigateur)")
+	var pilote: Node = root.get_node("PiloteWeb")  # autoload : jamais nommé
+	_check(not pilote.actif and not pilote.is_processing(), "le pilote du test de bout en bout est inerte hors de l'export Web pilote")
 	_check(TransportWebRTC.url_signalisation() == "ws://localhost:8787",
 		"l'adresse du Worker vient du réglage lelion/signalisation/url (wrangler dev en local) : %s" % TransportWebRTC.url_signalisation())
 	_check(TransportWebRTC.lire_relais("?salle=K7Q2XM&relais=1") and TransportWebRTC.lire_relais("relais=1")
