@@ -261,25 +261,61 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 150_000);
 	const jeu = (await etat(mobile)).manche;
 	expect(jeu.tactile.visible).toBe(true);
-	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces
+	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces ; chaque envoi donne tous les doigts posés
 	const cdp = await contexte.newCDPSession(mobile);
 	const doigts = (type, points) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
 	const [sx, sy] = jeu.tactile.stick;
-	const pousse = jeu.tactile.rayon * 1.2;
-	// Le pouce gauche pose le stick et le pousse vers le bas aux quatre cinquièmes (le lion descend à 60 % de sa
-	// vitesse : la zone morte des actions est de 0,5) : le lion descend vers la ville, un peu sous la hauteur de
-	// peinture (l'hôte, qui fait foi, le voit un peu plus haut que sa prédiction), jamais jusqu'aux toits, 233 px
-	// plus bas, même relu 300 ms trop tard
-	await doigts("touchStart", [[sx, sy]]);
-	await doigts("touchMove", [[sx, sy + jeu.tactile.rayon * 0.8]]);
-	await attendre(mobile, (e) => e.manche?.lion.length === 2 && e.manche.lion[1] >= e.manche.cible + 20, "le stick fait descendre le lion du mobile", 150_000);
-	// Puis vers la gauche (son lion part à droite de l'écran), VOMIR tenu du pouce droit : il peint 2,5 s de jeu
 	const [vx, vy] = jeu.tactile.vomir;
-	await doigts("touchMove", [[sx - pousse, sy]]);
-	await doigts("touchStart", [[sx - pousse, sy], [vx, vy]]);
-	const debut = (await etat(mobile)).manche.temps;
-	await attendre(mobile, (e) => e.manche?.finie || e.manche?.temps >= debut + 2.5, "le mobile peint 2,5 s de jeu", 150_000);
+	// Les pouces suivent le lion, comme les yeux d'un joueur : l'état du mobile relu, le stick penché en conséquence,
+	// VOMIR tenu, jusqu'à ce que le territoire du mobile (les cellules que lui renvoie l'hôte, qui fait foi) compte
+	// une cellule à lui, ou jusqu'à la fin de la manche. La gerbe ne peint que d'une bande de hauteurs du lion : de
+	// `cible` (233 px au-dessus des toits) à `plancher` (plus bas, elle tombe sous l'écran), 181 px. Une relecture
+	// puis un toucher arrivent tard : le lion fait encore 100 px avant que le pouce ne le retienne (mesuré à 1 comme
+	// à 7 images par seconde), et la relecture elle-même tombe jusqu'à 100 px après un seuil. Descendre d'un trait
+	// jusqu'à la cible, puis lâcher le bas, laissait le lion jusqu'à 200 px plus bas : en CI, arrêté à 850,6 px (le
+	// plancher, 832, plus le rayon de la traceuse : 848), il a vomi 7 s sans rien peindre. Le stick ne descend donc
+	// vite (aux quatre cinquièmes : 60 % de la vitesse, la zone morte des actions est de 0,5) que jusqu'à 150 px
+	// au-dessus de la bande ; puis en biais, à 20 % de la vitesse sur la verticale (le lion avance, sa gerbe devant
+	// lui), jusqu'à son premier quart ; il remonte de même sous son dernier quart, et va de bord en bord.
+	const haut = jeu.cible;
+	const bas = jeu.plancher;
+	const quart = (bas - haut) / 4;
+	expect(bas - haut, `la bande où peindre, de ${haut} à ${bas} px`).toBeGreaterThan(150);
+	let sens = -1; // son lion part à droite de l'écran : d'abord vers la gauche
+	const biais = (vertical) => [sens * Math.sqrt(1 - vertical * vertical), vertical];
+	let pose = null;
+	let vomir = false;
+	const trajet = [];
+	await doigts("touchStart", [[sx, sy]]);
+	for (;;) {
+		const manche = (await etat(mobile)).manche;
+		if (manche === undefined || manche.finie || manche.territoire[2] > 0) {
+			trajet.push(manche === undefined ? "hors manche" : `${manche.finie ? "fin" : "peint"} ${manche.temps.toFixed(1)} s ${manche.lion.map(Math.round)}`);
+			break;
+		}
+		if (manche.lion.length !== 2) continue;
+		const [x, y] = manche.lion;
+		if (x < 300) sens = 1;
+		else if (x > 1500) sens = -1;
+		// La pente du stick, en rayons : le stick poussé au-delà de son bord donne toute la vitesse, dans sa direction
+		let pente;
+		if (y < haut - 150) pente = [0, 0.8];
+		else if (y < haut + quart) pente = biais(0.2).map((v) => v * 1.2);
+		else if (y > bas - quart) pente = biais(-0.2).map((v) => v * 1.2);
+		else pente = [sens * 1.2, 0];
+		const stick = [sx + pente[0] * jeu.tactile.rayon, sy + pente[1] * jeu.tactile.rayon];
+		const nouvelle = stick.join(",");
+		if (nouvelle === pose) continue;
+		pose = nouvelle;
+		trajet.push(`${manche.temps.toFixed(1)} s ${Math.round(x)},${Math.round(y)} ${pente.map((v) => v.toFixed(2)).join("/")}${manche.vomit ? " vomit" : ""}`);
+		await doigts("touchMove", vomir ? [stick, [vx, vy]] : [stick]);
+		if (!vomir && y >= haut - 150) {
+			await doigts("touchStart", [stick, [vx, vy]]);
+			vomir = true;
+		}
+	}
 	await doigts("touchEnd", []);
+	console.log(`Pouces (bande ${haut} à ${bas} px) : ${trajet.join(" ; ")}`);
 
 	const fins = [];
 	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 150_000));
@@ -288,7 +324,7 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	expect(empreintes[1]).toBe(empreintes[0]);
 	console.log(`Fin de manche : scores ${fins[0].scores} ; hôte ${fins[0].fps} i/s, mobile ${fins[1].fps} i/s`);
 	// Les scores du territoire : à l'index 0 les cellules de personne, puis l'hôte, puis le mobile
-	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores}`).toBeGreaterThan(0);
+	expect(fins[1].scores[2], `le mobile a peint au doigt : ${fins[1].scores} (pouces : ${trajet.join(" ; ")})`).toBeGreaterThan(0);
 
 	// Un téléphone verrouillé (ou un onglet caché, spec §5) : la page ne rend plus la main, plus aucune image ; 10 s
 	// plus tard, l'hôte déclare le mobile parti. À son retour, « Tu as été déconnecté », puis l'écran En ligne

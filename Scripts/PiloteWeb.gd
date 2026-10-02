@@ -27,7 +27,9 @@ extends Node
 ## l'état donne aussi, en px CSS de la page, ce qu'un toucher vise : Rejoindre, les boutons tactiles du
 ## salon et de la manche, le stick ; et la hauteur où peindre. Phase 7 : chez l'hôte, la croix d'exclusion de
 ## chaque carte (ce qu'un clic vise) ; sur chaque poste en session, la durée de vie (ms) des deux canaux non
-## fiables de sa première connexion WebRTC ; une manche finie, les étourdissements et les chocs de son bilan.
+## fiables de sa première connexion WebRTC ; une manche finie, les étourdissements et les chocs de son bilan. En
+## manche : la plus basse hauteur d'où la gerbe du lion peint encore (`plancher`), si le lion vomit, et les
+## scores du territoire tels que ce poste les tient (ceux de l'hôte, qui fait foi, chez un client).
 ##
 ## Autoload : les tests `--script` ne le nomment pas.
 
@@ -134,10 +136,13 @@ func etat() -> Dictionary:
 		var tactile: CanvasLayer = scene.get_node("ControlesTactiles")
 		var stick: Control = tactile.joystick
 		var bilan: BilanManche = manche.bilan
+		var territoire: Territoire = scene.get_node("Ville").territoire
 		e["manche"] = {"barriere": manche.barriere, "en_cours": GameState.pret and GameState.partie_en_cours, "finie": manche.finie,
 			"bilan": {} if bilan == null else {"etourdissements": Array(bilan.etourdissements), "chocs": Array(bilan.chocs)},
 			"temps": GameState.temps_ecoule, "lion": [] if scene.lion == null else [scene.lion.position.x, scene.lion.position.y],
-			"cible": _hauteur_peinture(scene),
+			"cible": _hauteur_peinture(scene), "plancher": _plancher_peinture(scene),
+			"vomit": scene.lion != null and scene.lion.est_en_train_de_vomir,
+			"territoire": [] if territoire == null else Array(territoire.scores()),
 			"tactile": {"visible": tactile.visible, "vomir": _css_bouton(tactile.bouton_vomir),
 				"stick": _css(Vector2(stick.rayon * 3.0, stick.get_viewport_rect().size.y - stick.rayon * 3.0)),
 				"rayon": _css(Vector2(stick.rayon, 0))[0] - _css(Vector2.ZERO)[0]}}
@@ -177,6 +182,17 @@ func _css_bouton(bouton: TouchScreenButton) -> Array:
 static func _hauteur_peinture(main: Node) -> float:
 	var ville: Node2D = main.get_node("Ville")
 	return ville.position.y - ville.tex_size.y / 2.0 - HAUTEUR_PEINTURE
+
+
+## L'ordonnée la plus basse d'où la gerbe du lion de la scène de jeu `main` tombe encore dans la ville : plus
+## bas, son point de chute (la traceuse, sous la bouche) passe sous le bas de l'écran, où rien ne se peint (le
+## rayon de la traceuse n'est pas compté : une marge) ; 0 sans lion.
+static func _plancher_peinture(main: Node) -> float:
+	var lion: Lion = main.lion
+	if lion == null:
+		return 0.0
+	var ville: Node2D = main.get_node("Ville")
+	return ville.position.y + ville.tex_size.y / 2.0 - lion.gerbe.traceuse.position.y
 
 
 ## L'empreinte de la manche finie de la scène de jeu `main` (la même sur chaque poste qui a tout reçu) :
