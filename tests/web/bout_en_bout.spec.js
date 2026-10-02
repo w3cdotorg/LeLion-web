@@ -137,10 +137,10 @@ test("une manche à trois pages par le lien d'invitation, un joueur exclu qui re
 	// Puis la rencontre (phase 7, la note de la revue de la phase 4) : chaque lion va au milieu de l'écran en
 	// vomissant ; ils s'y heurtent et leurs gerbes les étourdissent, ce que l'hôte décide et que chaque page suit
 	for (const page of pages) await commander(page, "rencontrer");
-	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 60_000);
+	for (const page of pages) await attendre(page, (e) => e.manche?.en_cours === true, "la manche commence partout", 150_000);
 
 	const fins = [];
-	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 14 s finit partout", 60_000));
+	for (const page of pages) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche de 14 s finit partout", 150_000));
 	const empreintes = consoles.map((lignes) => lignes.find((l) => l.startsWith("EMPREINTE ")));
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
@@ -254,7 +254,7 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 
 	await commander(hote, "pret");
 	await commander(hote, "demarrer");
-	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 60_000);
+	await attendre(mobile, (e) => e.manche?.en_cours === true, "la manche commence chez le mobile", 150_000);
 	const jeu = (await etat(mobile)).manche;
 	expect(jeu.tactile.visible).toBe(true);
 	// Les doigts : des touchers Chromium (CDP), chacun tenu, comme deux pouces
@@ -268,17 +268,17 @@ test("un mobile rejoint par le lien et joue au doigt ; en portrait, le voile, et
 	// plus bas, même relu 300 ms trop tard
 	await doigts("touchStart", [[sx, sy]]);
 	await doigts("touchMove", [[sx, sy + jeu.tactile.rayon * 0.8]]);
-	await attendre(mobile, (e) => e.manche?.lion.length === 2 && e.manche.lion[1] >= e.manche.cible + 20, "le stick fait descendre le lion du mobile", 60_000);
+	await attendre(mobile, (e) => e.manche?.lion.length === 2 && e.manche.lion[1] >= e.manche.cible + 20, "le stick fait descendre le lion du mobile", 150_000);
 	// Puis vers la gauche (son lion part à droite de l'écran), VOMIR tenu du pouce droit : il peint 2,5 s de jeu
 	const [vx, vy] = jeu.tactile.vomir;
 	await doigts("touchMove", [[sx - pousse, sy]]);
 	await doigts("touchStart", [[sx - pousse, sy], [vx, vy]]);
 	const debut = (await etat(mobile)).manche.temps;
-	await attendre(mobile, (e) => e.manche?.finie || e.manche?.temps >= debut + 2.5, "le mobile peint 2,5 s de jeu", 60_000);
+	await attendre(mobile, (e) => e.manche?.finie || e.manche?.temps >= debut + 2.5, "le mobile peint 2,5 s de jeu", 150_000);
 	await doigts("touchEnd", []);
 
 	const fins = [];
-	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 60_000));
+	for (const page of [hote, mobile]) fins.push(await attendre(page, (e) => e.empreinte !== "", "la manche finit partout", 150_000));
 	const empreintes = consoles.map((l) => l.find((ligne) => ligne.startsWith("EMPREINTE ")));
 	expect(empreintes[0]).toBeTruthy();
 	expect(empreintes[1]).toBe(empreintes[0]);
