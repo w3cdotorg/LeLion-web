@@ -2029,6 +2029,14 @@ func _tester_salon(params: Node) -> void:
 	_check(liens.size() == 1 and (liens[0].callable as Callable).get_method() == &"exclure" and (liens[0].callable as Callable).get_bound_arguments() == [1]
 		and not salon.exclure(0) and not salon.exclure(3) and not salon.exclure(1),
 		"la croix de Bob exclut le joueur de la carte 1 ; ni l'hôte, ni une place libre (ni ici Bob, simulé : pas un vrai pair) ne s'excluent")
+	# Bob exclu, pas encore parti (le délai de secours de l'hôte) : sa carte reste, sans croix
+	reseau.inscrits[5].exclu = true
+	reseau.salon_change.emit()
+	var croix_exclu: bool = croix_bob.visible
+	reseau.inscrits[5].erase("exclu")
+	reseau.salon_change.emit()
+	_check(not croix_exclu and croix_bob.visible and salon.cartes[1].pseudo.text == "Bob",
+		"la carte d'un exclu pas encore parti reste, sans croix (une 2e exclusion n'a pas lieu d'être)")
 
 	# Couleurs : la voisine libre (celle d'une place réservée est prise) ; une seule par appui
 	salon.changer_couleur(1)

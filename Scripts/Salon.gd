@@ -307,7 +307,7 @@ func _afficher() -> void:
 ## Une place libre : silhouette sombre, sans couleur ; une place prise : le lion teinté de la
 ## couleur du joueur (le même shader qu'en jeu), son pseudo dans sa couleur, Prêt ou non, le
 ## contour à sa couleur (plus épais pour ce poste) ; chez l'hôte, la croix d'exclusion sur la carte de
-## chaque autre joueur.
+## chaque autre joueur, sauf d'un exclu pas encore parti.
 func _afficher_carte(carte: Dictionary, fiche: Dictionary, id_local: int) -> void:
 	var style: StyleBoxFlat = carte.style
 	var lion: TextureRect = carte.lion
@@ -315,7 +315,8 @@ func _afficher_carte(carte: Dictionary, fiche: Dictionary, id_local: int) -> voi
 	var etat_carte: Label = carte.etat
 	var badge: Label = carte.badge
 	var croix: Button = carte.croix
-	croix.visible = multiplayer.is_server() and not _lance and not fiche.is_empty() and fiche.id != id_local
+	croix.visible = multiplayer.is_server() and not _lance and not fiche.is_empty() and fiche.id != id_local \
+		and not Reseau.est_exclu(fiche.id)
 	if fiche.is_empty():
 		badge.text = " "
 		lion.material = null

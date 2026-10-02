@@ -580,16 +580,27 @@ func exclure(id: int, par_l_hote := false) -> void:
 
 ## Chez l'hôte, depuis le salon (la croix de sa carte, spec §8.2) : exclut le joueur arrivé `id`, qui lit
 ## « L'hôte t'a exclu de la partie. » et s'en va (`exclure`). Faux, sans rien faire, chez un client, pendant
-## une manche, pour l'hôte lui-même, un inconnu ou une place seulement réservée (pas de carte). Sans compte,
-## rien n'identifie durablement un joueur (spec §13) : un exclu peut revenir avec le code, en nouvel
-## arrivant, et l'hôte l'exclut de nouveau.
+## une manche, pour l'hôte lui-même, un inconnu, une place seulement réservée (pas de carte) ou un joueur
+## déjà exclu. Jusqu'à son départ (DELAI_EXCLUSION_SALON au plus), sa fiche reste, marquée `exclu` chez
+## l'hôte seulement (`table_de` ne la copie pas : ni le fil ni l'empreinte du protocole ne changent) et plus
+## prête : ni Prêt ni couleur ne la changent, sa croix est cachée (`est_exclu`), et la manche ne démarre pas
+## (`lancer_manche`). Sans compte, rien n'identifie durablement un joueur (spec §13) : un exclu peut revenir
+## avec le code, en nouvel arrivant, et l'hôte l'exclut de nouveau.
 func exclure_du_salon(id: int) -> bool:
 	var fiche: Dictionary = inscrits.get(id, {})
 	if not multiplayer.is_server() or manche_en_cours or id == multiplayer.get_unique_id() or fiche.is_empty() \
-			or not fiche.arrive or not multiplayer.get_peers().has(id):
+			or not fiche.arrive or fiche.get("exclu", false) or not multiplayer.get_peers().has(id):
 		return false
+	fiche.exclu = true
+	fiche.pret = false
+	_diffuser_salon()
 	exclure(id, true)
 	return true
+
+
+## Chez l'hôte : vrai si le joueur `id` est exclu du salon et pas encore parti (`exclure_du_salon`).
+func est_exclu(id: int) -> bool:
+	return inscrits.get(id, {}).get("exclu", false)
 
 
 ## Chez l'hôte : libère le client `id` (muet, exclu, ou parti : son adieu), s'il est encore là dans la
@@ -803,13 +814,13 @@ func demander_pret(pret: bool) -> void:
 
 ## Chez l'hôte : le joueur `id` prend la couleur libre voisine de la sienne dans le sens `sens`
 ## (`couleur_voisine_libre`). Refusé (faux, rien ne change) pour un inconnu, un joueur pas encore
-## arrivé ou déjà prêt (sa couleur est figée tant qu'il est prêt), un `sens` autre que 1 ou -1,
+## arrivé, déjà prêt (sa couleur est figée tant qu'il est prêt) ou exclu, un `sens` autre que 1 ou -1,
 ## pendant une manche, ou s'il n'y a aucune couleur libre. Les demandes sont traitées une à une :
 ## deux joueurs qui visent la même couleur ne peuvent pas l'obtenir tous les deux.
 func changer_couleur(id: int, sens: int) -> bool:
 	var fiche: Dictionary = inscrits.get(id, {})
 	if not multiplayer.is_server() or manche_en_cours or absi(sens) != 1 or fiche.is_empty() \
-			or not fiche.arrive or fiche.pret:
+			or not fiche.arrive or fiche.pret or fiche.get("exclu", false):
 		return false
 	var couleur := couleur_voisine_libre(inscrits, id, sens)
 	if couleur == fiche.couleur:
@@ -822,10 +833,11 @@ func changer_couleur(id: int, sens: int) -> bool:
 
 
 ## Chez l'hôte : le joueur `id` est prêt ou non. Refusé (faux) pour un inconnu, un joueur pas
-## encore arrivé, pendant une manche, ou si rien ne change.
+## encore arrivé ou exclu, pendant une manche, ou si rien ne change.
 func definir_pret(id: int, pret: bool) -> bool:
 	var fiche: Dictionary = inscrits.get(id, {})
-	if not multiplayer.is_server() or manche_en_cours or fiche.is_empty() or not fiche.arrive or fiche.pret == pret:
+	if not multiplayer.is_server() or manche_en_cours or fiche.is_empty() or not fiche.arrive or fiche.get("exclu", false) \
+			or fiche.pret == pret:
 		return false
 	fiche.pret = pret
 	_diffuser_salon()
@@ -843,9 +855,11 @@ func definir_pret(id: int, pret: bool) -> bool:
 ## M1 : les fiches de la manche sont aussi revérifiées avant tout engagement (défense en profondeur) :
 ## une table que `fiches_de_manche` refuse, une fois les index compactés (l'hôte n'y serait plus,
 ## par exemple), fait refuser le lancement, sans rien changer. Le chargement commence : le silence
-## toléré devient SILENCE_CHARGEMENT, et plus aucune scène n'est chargée.
+## toléré devient SILENCE_CHARGEMENT, et plus aucune scène n'est chargée. Refusé aussi tant qu'un exclu
+## n'est pas parti (`exclure_du_salon` : sa fiche est encore dans la table).
 func lancer_manche() -> bool:
-	if not multiplayer.is_server() or manche_en_cours or not salon_pret(inscrits):
+	if not multiplayer.is_server() or manche_en_cours or not salon_pret(inscrits) \
+			or inscrits.keys().any(func(id: int) -> bool: return est_exclu(id)):
 		return false
 	return _lancer()
 

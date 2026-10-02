@@ -2404,9 +2404,34 @@ func _tester_exclusion() -> void:
 	# Un exclu qui ne s'en va pas (figé, ou qui ignore l'annonce) : l'hôte le libère au bout de son délai
 	_check(client.rejoindre("127.0.0.1", port) == OK and await _attendre(func() -> bool: return arrives.size() == 3, 3.0),
 		"(pré-condition) il revient une troisième fois")
+	var id_3: int = arrives[2] if arrives.size() == 3 else -1
+	var prets_avant: bool = hote.definir_pret(1, true) and hote.definir_pret(id_3, true)  # le salon prêt à démarrer
 	client._issue_decidee = true  # ce poste n'agira pas sur l'annonce
+	var numero_avant: int = hote.numero_table
 	exclu_a = Time.get_ticks_msec()
-	_check(arrives.size() == 3 and hote.exclure_du_salon(arrives[2]), "(pré-condition) l'hôte l'exclut encore")
+	_check(arrives.size() == 3 and hote.exclure_du_salon(id_3), "(pré-condition) l'hôte l'exclut encore")
+	# Pendant son délai de secours, la fiche de l'exclu reste (il n'est pas encore parti) : marquée chez l'hôte
+	# seulement (la table diffusée n'en dit rien : ni le fil ni l'empreinte ne changent), plus prête
+	var fiche_exclue: Dictionary = hote.inscrits.get(id_3, {})
+	var couleur_exclue: Variant = fiche_exclue.get("couleur")
+	_check(prets_avant and fiche_exclue.get("exclu", false) and not fiche_exclue.get("pret", true) and hote.numero_table > numero_avant
+		and hote.table_salon.all(func(f: Dictionary) -> bool: return not f.has("exclu")) and not hote.exclure_du_salon(id_3),
+		"pendant son délai, la fiche de l'exclu est marquée chez l'hôte (pas dans la table diffusée, rediffusée), plus prête ; une 2e exclusion est refusée")
+	client._demande_pret.rpc_id(1, true)
+	client._demande_couleur.rpc_id(1, 1)
+	var recues := await _attendre(func() -> bool: return hote._limite_salon._jetons.has(id_3), 1.0)
+	await _attendre(func() -> bool: return false, 0.2)  # la seconde, sur le même canal fiable et ordonné
+	var fiche_apres: Dictionary = hote.inscrits.get(id_3, {})
+	_check(recues and not fiche_apres.get("pret", true) and fiche_apres.get("couleur") == couleur_exclue
+		and hote._limite_salon.rejets.get(id_3, 0) == 0,
+		"un _demande_pret(true) hostile de l'exclu est ignoré, sa demande de couleur aussi (admises par le débit, refusées par l'hôte)")
+	if hote.inscrits.has(id_3):
+		hote.inscrits[id_3].pret = true  # même prête, une fiche exclue bloque le démarrage
+	var lance: bool = hote.lancer_manche()
+	if hote.inscrits.has(id_3):
+		hote.inscrits[id_3].pret = false
+	_check(not lance and not hote.manche_en_cours and Time.get_ticks_msec() - exclu_a < int(hote.DELAI_EXCLUSION_SALON * 1000.0),
+		"Démarrer refusé (lancer_manche faux) tant qu'une fiche exclue est dans la table, même prête, pendant son délai")
 	parti = await _attendre(func() -> bool: return partis.size() == 3, hote.DELAI_EXCLUSION_SALON + 2.0)
 	apres = Time.get_ticks_msec() - exclu_a
 	_check(parti and apres >= int(hote.DELAI_EXCLUSION_SALON * 1000.0) - 50 and apres <= int(hote.DELAI_EXCLUSION_SALON * 1000.0) + 1000,
