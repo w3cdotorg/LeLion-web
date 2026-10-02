@@ -333,7 +333,7 @@ func admettre_commandes(id: int) -> bool:
 	if _limite_commandes.admettre(id, Time.get_ticks_msec() / 1000.0):
 		return true
 	if _limite_commandes.rejets[id] == 1:
-		push_warning("Manche : le client %d envoie plus de %d paquets de commandes par tick, l'excédent est jeté" % [id, COMMANDES_PAR_TICK])
+		push_warning("Manche : plus de %d paquets de commandes par tick du client %d (une inondation, ou une rafale après un gel de l'hôte), l'excédent est jeté" % [COMMANDES_PAR_TICK, id])
 	return false
 
 

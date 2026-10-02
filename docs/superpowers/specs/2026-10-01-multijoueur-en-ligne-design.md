@@ -259,7 +259,7 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
 - Tel que construit (phase 7) : un seau de jetons par client chez l'hôte (`LimiteDebit`), à l'horloge
   de l'hôte (pas à ses ticks physiques : un hôte lent jetterait les paquets d'un client qui joue, vu
   sous Firefox en CI) : 2 paquets de commandes par tick (120 par seconde), 120 d'un coup (deux secondes
-  d'un client : un hôte figé ne jette rien) ; 10 demandes de salon par seconde, 10 d'un coup.
+  d'un client : un hôte figé 2 s au plus ne jette rien) ; 10 demandes de salon par seconde, 10 d'un coup.
   L'excédent est jeté sans réponse et compté, un avertissement au premier rejet ; personne n'est
   déconnecté pour autant. Pseudos : aussi les autres caractères de mise en forme (catégorie Cf
   d'Unicode : U+00AD, U+061C, U+180E, U+FFF9 à U+FFFB, les étiquettes…) et les lettres vides du coréen,

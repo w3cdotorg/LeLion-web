@@ -1040,7 +1040,7 @@ func admettre_demande_salon(id: int) -> bool:
 	if _limite_salon.admettre(id, Time.get_ticks_msec() / 1000.0):
 		return true
 	if _limite_salon.rejets[id] == 1:
-		push_warning("Reseau : le client %d fait plus de %d demandes de salon par seconde, l'excédent est jeté" % [id, DEMANDES_SALON_PAR_SECONDE])
+		push_warning("Reseau : plus de %d demandes de salon par seconde du client %d (une inondation, ou une rafale après un gel de l'hôte), l'excédent est jeté" % [DEMANDES_SALON_PAR_SECONDE, id])
 	return false
 
 
