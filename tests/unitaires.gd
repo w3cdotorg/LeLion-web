@@ -6,6 +6,8 @@ var _echecs := 0
 ## La version du protocole et son empreinte, mesurées (`_tester_protocole`).
 const PROTOCOLE_VERSION := "0.21"
 const PROTOCOLE_EMPREINTE := 1188810746
+## L'adresse du Worker déployé (phase 5), sans chemin : le réglage lelion/signalisation/url de l'export publié.
+const URL_WORKER := "wss://lelion-web.w3cdotorg.workers.dev"
 
 
 func _init() -> void:
@@ -3166,8 +3168,29 @@ func _tester_transport_webrtc() -> void:
 			return str(prereglages.get_value(section, "exclude_filter", "")).replace(" ", "").split(",", false)
 		_check(exclus.call(web).has("export/*") and exclus.call(pilote_s).has("export/*"),
 			"aucun préréglage n'emporte un export précédent (export/* exclu) (%s, %s)" % [exclus.call(web), exclus.call(pilote_s)])
-	_check(TransportWebRTC.url_signalisation() == "ws://localhost:8787",
-		"l'adresse du Worker vient du réglage lelion/signalisation/url (wrangler dev en local) : %s" % TransportWebRTC.url_signalisation())
+	# Phase 5 (spec §11) : l'export publié parle au Worker déployé ; l'export « Web pilote » (le bout en bout) à
+	# wrangler dev, par la variante `.pilote` du réglage ; le script ne connaît aucune adresse locale.
+	var projet := ConfigFile.new()
+	_check(projet.load("res://project.godot") == OK, "(pré-condition) project.godot se lit")
+	_check(TransportWebRTC.url_signalisation() == URL_WORKER and projet.get_value("lelion", "signalisation/url", "") == URL_WORKER
+		and projet.get_value("lelion", "signalisation/url.pilote", "") == "ws://localhost:8787"
+		and not FileAccess.get_file_as_string("res://Scripts/TransportWebRTC.gd").contains("localhost")
+		and FileAccess.get_file_as_string("res://Scripts/TransportWebRTC.gd").contains("ProjectSettings.get_setting_with_override(REGLAGE_URL)"),
+		"l'adresse du Worker : %s publié (lelion/signalisation/url), ws://localhost:8787 sous la fonctionnalité pilote seulement, lue avec ses variantes (%s)"
+		% [URL_WORKER, TransportWebRTC.url_signalisation()])
+	# Une signalisation qui ne s'ouvre même pas (aucune adresse ; une adresse que connect_to_url refuse d'emblée,
+	# comme le contenu mixte sur le Web) : ERR_CANT_CONNECT, rien d'ouvert ; un code mal formé reste
+	# ERR_INVALID_PARAMETER (il ne tente rien)
+	var refus: Array = []
+	var url_avant: Variant = ProjectSettings.get_setting(TransportWebRTC.REGLAGE_URL)
+	for adresse: String in ["", "ws://exemple.net:99999"]:
+		ProjectSettings.set_setting(TransportWebRTC.REGLAGE_URL, adresse)
+		var sans_service := TransportWebRTC.new()
+		refus.append([sans_service.heberger(), sans_service.pair() == null, sans_service.servir(), TransportWebRTC.new().rejoindre("K7Q2XM"),
+			TransportWebRTC.new().rejoindre("K7Q-2XM")])
+	ProjectSettings.set_setting(TransportWebRTC.REGLAGE_URL, url_avant)
+	var attendu := [ERR_CANT_CONNECT, true, false, ERR_CANT_CONNECT, ERR_INVALID_PARAMETER]
+	_check(refus == [attendu, attendu], "la signalisation qui ne s'ouvre pas : ERR_CANT_CONNECT à l'hôte comme au client, rien d'ouvert (%s)" % [refus])
 	_check(TransportWebRTC.lire_relais("?salle=K7Q2XM&relais=1") and TransportWebRTC.lire_relais("relais=1")
 		and not TransportWebRTC.lire_relais("?relais=0") and not TransportWebRTC.lire_relais("?relaisx=1")
 		and not TransportWebRTC.lire_relais(""),
@@ -3194,7 +3217,7 @@ func _tester_transport_webrtc() -> void:
 
 	# L'hôte
 	var hote := TransportWebRTCSimule.new()
-	_check(hote.heberger() == OK and hote.url == "ws://localhost:8787/v1/creer" and hote.pair() is WebRTCMultiplayerPeer
+	_check(hote.heberger() == OK and hote.url == URL_WORKER + "/v1/creer" and hote.pair() is WebRTCMultiplayerPeer
 		and hote.pair().get_unique_id() == 1 and hote.signaux.is_empty(),
 		"héberger : le pair serveur existe (identifiant 1), /v1/creer s'ouvre, rien n'est dit pendant l'appel")
 	hote.recevoir('{"t":"salle","code":"K7Q2XM","id":1,"ice":[]}')
@@ -3269,7 +3292,7 @@ func _tester_transport_webrtc() -> void:
 
 	# Le client
 	var client := TransportWebRTCSimule.new()
-	_check(client.rejoindre("K7Q2XM") == OK and client.url == "ws://localhost:8787/v1/rejoindre/K7Q2XM" and client.pair() == null
+	_check(client.rejoindre("K7Q2XM") == OK and client.url == URL_WORKER + "/v1/rejoindre/K7Q2XM" and client.pair() == null
 		and client.servir(),
 		"rejoindre : /v1/rejoindre/K7Q2XM s'ouvre, pas encore de pair (son identifiant vient de la salle)")
 	client.recevoir('{"t":"bienvenue","id":123456789,"ice":[]}')

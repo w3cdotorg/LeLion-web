@@ -1,14 +1,17 @@
 // Le test de bout en bout du jeu en ligne (spec §10) : l'export « Web pilote » servi sur
-// http://localhost:8060 (l'origine que la signalisation admet, http://localhost:* ; pas 127.0.0.1), en IPv4
+// http://localhost:8060 (l'origine que `npm run dev` admet, http://localhost:* ; pas 127.0.0.1), en IPv4
 // seulement (une page chargée par ::1, Firefox ne trouve aucun candidat ICE dans un conteneur sans IPv6),
-// la signalisation en local (`wrangler dev` sur ws://localhost:8787, l'adresse par défaut du réglage
-// lelion/signalisation/url), puis Chromium et Firefox (la manche à trois pages), WebKit (Copier le lien) et un
+// la signalisation en local (`wrangler dev` sur ws://localhost:8787, la variante lelion/signalisation/url.pilote
+// du réglage, que choisit l'export « Web pilote »), puis Chromium et Firefox (la manche à trois pages), WebKit (Copier le lien) et un
 // mobile émulé par Chromium (un Android en paysage, au doigt, face à un hôte de bureau).
 // L'export se fait avant : godot --headless --export-release "Web pilote" export/web-pilote/index.html.
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
 	testDir: ".",
+	// Le contrôle de l'export publié et la partie sur la page déployée ont leurs propres configurations
+	// (playwright.publie.config.js, playwright.en_direct.config.js).
+	testIgnore: ["export_publie.spec.js", "en_direct.spec.js"],
 	// Trois pages de 40 Mo de WebAssembly par test : un test à la fois.
 	workers: 1,
 	fullyParallel: false,

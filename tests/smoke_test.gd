@@ -1792,6 +1792,28 @@ func _tester_ecran_en_ligne(scores: Node, params: Node) -> void:
 	ecran.retour(false)  # l'écran, resté en SALON (le salon a pris la suite), revient à l'accueil, hors réseau
 	reseau.fabrique_transport = Callable()
 
+	# Phase 5 : un vrai `TransportWebRTC` dont la signalisation ne s'ouvre même pas (aucune adresse ; une adresse
+	# que connect_to_url refuse d'emblée, comme le contenu mixte sur le Web) : « Service de connexion
+	# indisponible », à la création comme à l'arrivée, rien d'ouvert ; après Rejoindre, le focus au code
+	reseau.fabrique_transport = func(_port: int) -> Transport: return TransportWebRTC.new()
+	var url_avant: Variant = ProjectSettings.get_setting(TransportWebRTC.REGLAGE_URL)
+	var codes_avant: bool = ecran.codes_de_salle
+	ecran.codes_de_salle = true
+	var sans_service: Array = []
+	for adresse: String in ["", "ws://exemple.net:99999"]:
+		ProjectSettings.set_setting(TransportWebRTC.REGLAGE_URL, adresse)
+		ecran.creer_partie()
+		sans_service.append([ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne(), ecran.message.text])
+		ecran.champ_code.text = "K7Q2XM"
+		ecran.bouton_creer.grab_focus()
+		ecran.rejoindre()
+		sans_service.append([ecran.etat == ecran.Etat.ACCUEIL and not reseau.en_ligne() and ecran.champ_code.has_focus(), ecran.message.text])
+	ProjectSettings.set_setting(TransportWebRTC.REGLAGE_URL, url_avant)
+	ecran.codes_de_salle = codes_avant
+	reseau.fabrique_transport = Callable()
+	_check(sans_service == [[true, service], [true, service], [true, service], [true, service]],
+		"la signalisation qui ne s'ouvre pas : « %s » à la création comme à l'arrivée, rien d'ouvert (%s)" % [service, sans_service])
+
 	# Port occupé, autre erreur ; changer de langue retraduit le message
 	var occupant := ENetMultiplayerPeer.new()
 	_check(occupant.create_server(17798) == OK, "(pré-condition) un autre programme occupe le port 17798")

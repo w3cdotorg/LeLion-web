@@ -1,20 +1,30 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "lelion-signalisation",
+	"name": "lelion-web",
 	"main": "src/index.js",
+	// Jamais sous 2026-04-07 : l'auto-réponse au ping après la fermeture, deleteAll qui efface l'alarme (phase 2).
 	"compatibility_date": "2026-10-01",
-	// Origines admises, séparées par des virgules ; « :* » = tout port (spec §8.1).
+	// L'adresse publique : https://lelion-web.w3cdotorg.workers.dev (phase 5) ; aucune adresse
+	// de préversion (une par version déployée : autant d'adresses à surveiller pour rien).
+	"workers_dev": true,
+	"preview_urls": false,
+	// Origines admises, séparées par des virgules ; « :* » = tout port (spec §8.1). La production n'admet que la
+	// page publiée ; `npm run dev` (wrangler dev, le bout en bout) y ajoute http://localhost:* par --var.
 	"vars": {
-		"ORIGINES": "https://w3cdotorg.github.io,http://localhost:*"
+		"ORIGINES": "https://w3cdotorg.github.io"
 	},
-	// Secrets (phase 5, jamais dans le dépôt) : TURN_KEY_ID, TURN_KEY_API_TOKEN. Absents : STUN seul.
+	// Secrets (jamais dans le dépôt) : TURN_KEY_ID, TURN_KEY_API_TOKEN. Absents (le déploiement de la phase 5) :
+	// STUN seul.
 	// Une salle par code (idFromName) ; SQLite obligatoire sur l'offre gratuite.
 	"durable_objects": {
 		"bindings": [{ "name": "SALLES", "class_name": "Salle" }]
 	},
+	// Figée : un déploiement ne réécrit jamais une migration déjà appliquée (une classe neuve = une v2).
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Salle"] }],
-	// Limitation de débit des Workers, par point de présence : 5 créations et 30 arrivées par minute et
-	// par IP. namespace_id : entier propre au compte (phase 5 : le changer s'il est déjà pris).
+	// Limitation de débit des Workers, par point de présence : 5 créations et 30 arrivées par minute et par IP.
+	// namespace_id : entier unique sur le compte. Si le premier déploiement refuse ce bloc, le retirer : sans
+	// binding, le Worker admet tout (`admis`), les plafonds de chaque salle restent ; et, dans la même PR, la
+	// phrase de « Vie privée » du README qui dit que le Worker se sert de l'IP pour limiter.
 	"ratelimits": [
 		{
 			"name": "LIMITE_CREATION",
@@ -27,9 +37,12 @@
 			"simple": { "limit": 30, "period": 60 }
 		}
 	],
+	// Workers Logs : les lignes de `journal` seulement (jamais d'IP, protocole.js). Les journaux d'invocation
+	// (la requête et ses métadonnées) et les traces sont coupés : rien ne garantit qu'ils n'écrivent pas l'IP du
+	// client, et chacun compterait sur les 200 000 événements par jour de l'offre gratuite.
 	"observability": {
 		"enabled": true,
-		"logs": { "enabled": true, "head_sampling_rate": 1 },
-		"traces": { "enabled": true, "head_sampling_rate": 0.05 }
+		"logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+		"traces": { "enabled": false }
 	}
 }

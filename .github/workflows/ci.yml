@@ -1,9 +1,23 @@
 name: CI
 
+# Sur main et sur chaque PR : les tests, l'export Web en artefact ; rien n'est mis en ligne. Sur un tag vX.Y
+# (= application/config/version, sur un commit de main, spec §11 : le job verifier-tag), les mêmes jobs, puis,
+# s'ils sont tous verts, le Worker (wrangler deploy), puis la page (GitHub Pages) : l'artefact LeLion-web de ce
+# passage, rien d'autre.
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: read
+
+# Les passages d'un tag à la file, jamais annulés (deux déploiements ne se croisent pas, un déploiement n'est
+# jamais coupé en route) ; les autres passages, chacun son groupe : rien ne les retient ni ne les annule.
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'deploiement' || github.run_id }}
+  cancel-in-progress: false
 
 env:
   GODOT_VERSION: 4.7.2
@@ -92,8 +106,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p export/web
+          touch export/.gdignore  # sinon l'éditeur importe les images de l'export et y laisse des .import
           timeout 600 godot --headless --export-release Web export/web/index.html
           test -f export/web/index.html
+
+      - name: Garder l'export publié (sans pilote, l'adresse du Worker déployé, rien que les fichiers de la page)
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 120 godot --headless --script tests/export_publie.gd -- --pck=export/web/index.pck 2>&1 | tee export_publie.log
+          if grep -nE "SCRIPT ERROR|❌" export_publie.log || ! grep -q "== 0 échec(s) ==" export_publie.log; then echo "::error::l'export Web n'est pas publiable"; exit 1; fi
+          attendus="index.apple-touch-icon.png index.audio.position.worklet.js index.audio.worklet.js index.html index.icon.png index.js index.pck index.png index.wasm"
+          trouves="$(find export/web -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+          [ "$trouves" = "$attendus" ] || { echo "::error::fichiers inattendus dans export/web : $trouves"; exit 1; }
+          if grep -q "viewport-fit" export/web/index.html; then echo "::error::la page a viewport-fit (le modèle HTML par défaut, sans lui)"; exit 1; fi
 
       - name: Publier l'export Web (artefact)
         uses: actions/upload-artifact@v4
@@ -152,12 +178,14 @@ jobs:
       - name: Importer les ressources
         run: godot --headless --import . || true
 
-      - name: Exporter en Web, avec le pilote du test (préréglage « Web pilote »)
+      - name: Exporter en Web, avec le pilote du test (préréglage « Web pilote »), et sans lui (« Web », le contrôle de l'export publié)
         shell: bash
         run: |
-          mkdir -p export/web-pilote
+          mkdir -p export/web-pilote export/web
+          touch export/.gdignore
           timeout 600 godot --headless --export-release "Web pilote" export/web-pilote/index.html
-          test -f export/web-pilote/index.html
+          timeout 600 godot --headless --export-release Web export/web/index.html
+          test -f export/web-pilote/index.html && test -f export/web/index.html
 
       - name: Installer Node
         uses: actions/setup-node@v6
@@ -177,6 +205,10 @@ jobs:
         working-directory: tests/web
         run: xvfb-run -a npx playwright test
 
+      - name: Contrôle de l'export publié (sans pilote, la signalisation du Worker de project.godot, simulée)
+        working-directory: tests/web
+        run: npx playwright test -c playwright.publie.config.js
+
       - name: Publier le rapport Playwright (en cas d'échec)
         if: failure()
         uses: actions/upload-artifact@v4
@@ -184,3 +216,141 @@ jobs:
           name: rapport-playwright
           path: tests/web/playwright-report
           retention-days: 7
+
+  verifier-tag:
+    name: Le tag (la version du jeu, sur main)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # tout l'historique et origin/main, pour merge-base
+          persist-credentials: false
+
+      - name: Le tag est la version du jeu (application/config/version)
+        shell: bash
+        run: |
+          version="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' project.godot)"
+          [ -n "$version" ] && [ "$GITHUB_REF_NAME" = "v$version" ] \
+            || { echo "::error::le tag $GITHUB_REF_NAME n'est pas v$version (config/version de project.godot)"; exit 1; }
+
+      - name: Le commit du tag est sur main (un ancêtre de origin/main)
+        shell: bash
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::le commit $GITHUB_SHA du tag $GITHUB_REF_NAME n'est pas sur main : rien n'est déployé"; exit 1; }
+
+  deploiement-worker:
+    name: Déploiement du Worker (tag vX.Y)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verifier-tag, test-et-export, signalisation, bout-en-bout]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: signalisation
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false  # le jeton de GitHub hors de .git/config : npm ci et wrangler n'en ont pas besoin
+
+      - name: Installer Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: signalisation/package-lock.json
+
+      - name: Installer les dépendances (package-lock.json)
+        run: npm ci
+
+      - name: Déployer (wrangler deploy ; sans secrets TURN, donc STUN seul)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        shell: bash
+        run: |
+          set -o pipefail
+          npx wrangler deploy 2>&1 | tee "$RUNNER_TEMP/deploiement.log"
+          url="$(sed -n 's/^signalisation\/url="\(.*\)"$/\1/p' ../project.godot)"
+          grep -qF "https://${url#wss://}" "$RUNNER_TEMP/deploiement.log" \
+            || echo "::warning::wrangler n'a pas écrit l'adresse https://${url#wss://} : la sonde tranche"
+
+      - name: Sonder le Worker déployé (une salle depuis la page publiée, STUN seul ; localhost refusé)
+        shell: bash
+        run: node outils/sonder.mjs "$(sed -n 's/^signalisation\/url="\(.*\)"$/\1/p' ../project.godot)"
+
+  deploiement-page:
+    name: Déploiement de la page (GitHub Pages, tag vX.Y)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deploiement-worker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read  # des permissions au job remplacent celles du workflow : l'extraction en a besoin
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false  # npm ci (Playwright) n'a pas à lire le jeton de GitHub
+
+      - name: Reprendre l'export Web de ce passage (artefact LeLion-web, gardé par test-et-export)
+        uses: actions/download-artifact@v4
+        with:
+          name: LeLion-web
+          path: export/web
+
+      - name: Installer Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: tests/web/package-lock.json
+
+      - name: Installer Playwright et Chromium (package-lock.json)
+        working-directory: tests/web
+        run: npm ci && npx playwright install --with-deps chromium
+
+      - name: Contrôle de l'export publié face au Worker déployé (qui refuse une page servie hors de Pages)
+        working-directory: tests/web
+        env:
+          SIGNALISATION_EN_DIRECT: "1"
+        run: npx playwright test -c playwright.publie.config.js
+
+      - name: Préparer la page (export/web seulement)
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: export/web
+
+      - name: Publier sur GitHub Pages
+        id: pages
+        uses: actions/deploy-pages@v5
+
+      - name: La page publiée répond (index.html et le paquet de cette version)
+        shell: bash
+        env:
+          PAGE_URL: ${{ steps.pages.outputs.page_url }}
+        # bash -eo pipefail : un curl en échec (404 le temps que Pages serve la version, délai dépassé) ne doit
+        # pas finir l'étape, d'où les « || true » ; le corps de la page lu en entier avant grep (un grep -q qui
+        # s'arrête tôt ferait échouer curl, donc le tuyau, sous pipefail).
+        run: |
+          attendue="$(wc -c < export/web/index.pck | tr -d ' ')"
+          for _ in $(seq 1 30); do
+            taille="$({ curl -sf --max-time 20 "${PAGE_URL}index.pck?v=${GITHUB_SHA}" || true; } | wc -c | tr -d ' ')"
+            page="$(curl -sf --max-time 20 "${PAGE_URL}?v=${GITHUB_SHA}" || true)"
+            if [ "$taille" = "$attendue" ] && grep -q "index.js" <<< "$page"; then echo "page publiée : $PAGE_URL"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::$PAGE_URL ne sert pas le paquet de cette version (taille $taille, attendue $attendue)"; exit 1
+
+      - name: Une partie de contrôle sur la page publiée (deux pages Chromium, le Worker déployé, STUN seul)
+        working-directory: tests/web
+        env:
+          LELION_PAGE: ${{ steps.pages.outputs.page_url }}
+        run: npx playwright test -c playwright.en_direct.config.js

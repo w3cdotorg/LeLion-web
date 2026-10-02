@@ -141,7 +141,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 ## Crée une partie avec le pseudo saisi : sur le Web, en WebRTC (`TransportWebRTC`), le salon s'ouvre à la
-## salle de la signalisation, qui donne son code (CREATION d'ici là, ou l'échec et son message) ; hors du
+## salle de la signalisation, qui donne son code (CREATION d'ici là, ou l'échec et son message ; une
+## signalisation qui ne s'ouvre même pas, ERR_CANT_CONNECT : « Service de connexion indisponible ») ; hors du
 ## Web, en ENet sur `port_jeu`, tout de suite.
 func creer_partie() -> void:
 	if etat != Etat.ACCUEIL:
@@ -151,6 +152,8 @@ func creer_partie() -> void:
 	var erreur: Error = Reseau.creer_partie(port_jeu)
 	if erreur == ERR_UNAVAILABLE:
 		_afficher_message("ENLIGNE_INDISPONIBLE", [], true)
+	elif erreur == ERR_CANT_CONNECT:
+		_afficher_message("ENLIGNE_SERVICE_INDISPONIBLE", [], true)
 	elif erreur == ERR_CANT_CREATE:
 		_afficher_message("RESEAU_PORT_OCCUPE", [port_jeu], true)
 	elif erreur != OK:
@@ -178,6 +181,11 @@ func rejoindre() -> void:
 	var erreur: Error = Reseau.rejoindre_partie(code)
 	if erreur == ERR_UNAVAILABLE:
 		_afficher_message("ENLIGNE_INDISPONIBLE", [], true)
+		return
+	if erreur == ERR_CANT_CONNECT:
+		# La signalisation ne s'ouvre même pas (`TransportWebRTC._ouvrir_signalisation`) : le code n'y est pour rien.
+		_afficher_message("ENLIGNE_SERVICE_INDISPONIBLE", [], true)
+		champ_code.grab_focus()
 		return
 	if erreur != OK:
 		# Le transport refuse d'emblée (un code qu'il ne sait pas lire, un pair qu'il ne peut créer) : rien

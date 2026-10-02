@@ -43,9 +43,12 @@ function salle(env, code) {
 
 /**
  * Vrai si le limiteur `limite` (binding ratelimits) admet encore `cle`. Injoignable, il laisse passer
- * (ouvert par défaut) : c'est un frein, et sa panne ne doit pas fermer le service.
+ * (ouvert par défaut) : c'est un frein, et sa panne ne doit pas fermer le service. Absent (le bloc
+ * `ratelimits` retiré de wrangler.jsonc, le repli de la phase 5 si l'offre gratuite le refusait), il laisse
+ * tout passer sans rien journaliser : une ligne par requête userait le quota de Workers Logs.
  */
 async function admis(limite, cle) {
+	if (limite === undefined) return true;
 	try {
 		return (await limite.limit({ key: cle })).success;
 	} catch (erreur) {

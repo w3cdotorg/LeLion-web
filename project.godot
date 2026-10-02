@@ -103,7 +103,8 @@ demarrer={
 [lelion]
 
 page/url="https://w3cdotorg.github.io/LeLion-web/"
-signalisation/url="ws://localhost:8787"
+signalisation/url="wss://lelion-web.w3cdotorg.workers.dev"
+signalisation/url.pilote="ws://localhost:8787"
 
 [rendering]
 
