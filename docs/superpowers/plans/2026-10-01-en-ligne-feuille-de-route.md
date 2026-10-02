@@ -142,3 +142,33 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 - Le clavier virtuel couvre le champ du code et le message.
 - La rangée d'invitation du salon touche le bas de l'écran (zone sûre).
 - Coller dans un champ Godot sur mobile est peu fiable : le lien d'invitation est le chemin principal.
+
+### Notes de la revue de la phase 4 (pour les phases 5 à 7)
+
+**Phase 5** :
+
+- `lelion/signalisation/url` devient l'adresse `wss://` déployée ; `lelion/signalisation/url.pilote="ws://localhost:8787"`
+  pour que l'e2e reste local (l'unitaire qui vérifie l'URL change).
+- La CI vérifie que le pck publié ne contient ni `pilote` (`_custom_features`) ni une URL localhost ; un
+  contrôle de bout en bout sur l'artefact publié : `window.lelionPilote === undefined`, aucun « PILOTE PRET ».
+- Un échec synchrone de `connect_to_url` (URL mal formée, contenu mixte) affiche aujourd'hui « Impossible
+  d'héberger/rejoindre (erreur N) » : sur le Web, le rapporter en « Service de connexion indisponible ».
+- Trancher si les `ORIGINES` de production gardent `http://localhost:*`.
+- Les limites de 5 créations et 30 arrivées par minute et par IP touchent les réseaux d'école (une seule IP
+  pour tous).
+- Pages ne publie que `export/web`, construit depuis une extraction propre.
+
+**Phase 6** :
+
+- Toute option changée dans le préréglage « Web » doit l'être dans « Web pilote » (l'unitaire de la phase 4
+  le vérifie) ; `experimental_virtual_keyboard` pour taper le pseudo.
+- Envisager un client e2e en viewport mobile.
+- Un onglet caché arrête `_process` : battements et pings s'arrêtent avec lui.
+- iOS n'est couvert que par l'essai réel (WebKit ne relie pas deux pages dans le conteneur).
+- La CI montre qu'un appareil lent joue au ralenti, et qu'un hôte lent ralentit tout le monde.
+
+**Phase 7** :
+
+- L'étape d'exclusion dans l'e2e.
+- « Garde cet onglet au premier plan » et « Tu as été déconnecté ».
+- La formulation du §5 (« 1 seul envoi » contre maxPacketLifetime 100 ms).
