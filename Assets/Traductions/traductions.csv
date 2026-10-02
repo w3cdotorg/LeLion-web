@@ -103,6 +103,10 @@ SALON_COPIER_LIEN,Copier le lien,Copy link
 SALON_LIEN_COPIE,Lien copié !,Link copied!
 SALON_SALLE_EXPIREE,Salle expirée : crée une nouvelle partie pour inviter,Room expired: create a new game to invite
 SALON_SALLE_FERMEE,Invitations coupées : crée une nouvelle partie pour inviter,Invitations closed: create a new game to invite
+SALON_AIDE_TACTILE,"Flèches : ta couleur   ·   PRÊT : prêt ou pas","Arrows: your color   ·   READY: ready or not"
+SALON_PLEIN_ECRAN,Plein écran,Full screen
+TACTILE_PRET,PRÊT,READY
+VOILE_PORTRAIT,Tourne ton téléphone,Turn your phone sideways
 PAUSE_RESEAU,La partie continue,The game goes on
 QUITTER_PARTIE,Quitter la partie,Leave the game
 BATAILLE_JOUEUR,Joueur %d,Player %d

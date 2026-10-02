@@ -3,7 +3,8 @@ extends Node
 ## changement ; sauvegardés via Scores (ConfigFile dans user://, IndexedDB sur le Web).
 ## Et la plateforme du jeu en ligne (spec §6) : un mobile (`mobile`) n'a pas Créer une partie, a les
 ## contrôles tactiles et des cibles agrandies pour le doigt (`agrandir`), passe en plein écran à son
-## premier toucher ; un ordinateur a le bouton Plein écran du salon (`basculer_plein_ecran`).
+## premier toucher ; un ordinateur a le bouton Plein écran du salon (`basculer_plein_ecran`). Tenu en
+## portrait, un mobile montre le voile « Tourne ton téléphone » (`voile`) par-dessus le jeu, qui continue.
 
 signal volumes_changes()
 signal langue_changee(langue: String)
@@ -28,6 +29,12 @@ var mobile := OS.has_feature("web_android") or OS.has_feature("web_ios")
 ## Vrai une fois le plein écran demandé par un premier toucher (une seule fois par page : un joueur qui
 ## en sort n'y est pas ramené au toucher suivant).
 var plein_ecran_demande := false
+## Le voile du portrait (spec §6), au-dessus de tous les écrans et sous le filtre CRT : visible sur un mobile
+## tenu en portrait (`actualiser_voile`), sans rien arrêter ni rien intercepter (le jeu continue derrière).
+var voile: CanvasLayer
+## La taille de la fenêtre à l'image précédente : le voile suit ses changements (le téléphone tourné), que la
+## racine ne signale pas (sa taille est l'écran fixe du mode, `content_scale_size`).
+var _taille_fenetre := Vector2i(-1, -1)
 
 
 func _ready() -> void:
@@ -39,9 +46,17 @@ func _ready() -> void:
 	TranslationServer.set_locale(langue)
 	crt = bool(Scores.preference("crt", false))
 	_creer_couche_crt()
+	_creer_voile()
 	# Sur le Web, le plein écran exige un geste de l'utilisateur : on ne l'applique qu'au clic.
 	if plein_ecran and not OS.has_feature("web"):
 		_appliquer_plein_ecran()
+
+
+func _process(_delta: float) -> void:
+	var taille := DisplayServer.window_get_size()
+	if taille != _taille_fenetre:
+		_taille_fenetre = taille
+		actualiser_voile(taille)
 
 
 ## Sur un mobile, le premier toucher demande le plein écran (spec §6) : le navigateur ne l'accorde que
@@ -104,6 +119,38 @@ func _creer_couche_crt() -> void:
 	couche_crt.add_child(rect)
 	add_child(couche_crt)
 	couche_crt.visible = crt
+
+
+## Le voile : un fond sombre presque opaque et « Tourne ton téléphone », sur l'écran du mode (16:9 ou celui
+## du solo, que la fenêtre montre à l'échelle).
+func _creer_voile() -> void:
+	voile = CanvasLayer.new()
+	voile.name = "VoilePortrait"
+	voile.layer = 90
+	var fond := ColorRect.new()
+	fond.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	fond.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fond.color = Color(0.06, 0.05, 0.14, 0.92)
+	var texte := Label.new()
+	texte.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	texte.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	texte.text = "VOILE_PORTRAIT"
+	texte.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	texte.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	texte.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	texte.add_theme_font_size_override("font_size", 120)
+	texte.add_theme_color_override("font_color", Color(1, 0.85, 0.2))
+	fond.add_child(texte)
+	voile.add_child(fond)
+	voile.visible = false
+	add_child(voile)
+
+
+## Montre le voile sur un mobile dont la fenêtre `taille` (par défaut, celle du jeu) est plus haute que
+## large, le cache sinon. Appelée à la première image, puis à chaque changement de taille de la fenêtre
+## (le téléphone tourné).
+func actualiser_voile(taille: Vector2i = DisplayServer.window_get_size()) -> void:
+	voile.visible = mobile and taille.y > taille.x
 
 
 func definir_crt(actif: bool) -> void:

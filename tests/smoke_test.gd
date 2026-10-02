@@ -2169,6 +2169,26 @@ func _tester_mobile(params: Node) -> void:
 	_check(bouton.custom_minimum_size == Vector2(260, params.CIBLE_TACTILE) and bouton.get_theme_font_size("font_size") == 44,
 		"agrandir : %d px de haut au moins, la police à 44 px" % params.CIBLE_TACTILE)
 	bouton.free()
+	# Le voile du portrait : sur un mobile tenu en portrait seulement, au-dessus des écrans et des contrôles
+	# tactiles, sous le filtre CRT ; il n'intercepte rien et n'arrête rien
+	var voile: CanvasLayer = params.voile
+	var vus := {}
+	for taille: Vector2i in [Vector2i(360, 640), Vector2i(844, 390), Vector2i(0, 0)]:
+		params.actualiser_voile(taille)
+		vus[taille] = voile.visible
+	params.mobile = false
+	params.actualiser_voile(Vector2i(360, 640))
+	var portrait_ordinateur: bool = voile.visible
+	params.mobile = true
+	params.actualiser_voile(Vector2i(360, 640))
+	var fond: ColorRect = voile.get_child(0)
+	var texte: Label = fond.get_child(0)
+	_check(vus == {Vector2i(360, 640): true, Vector2i(844, 390): false, Vector2i(0, 0): false} and not portrait_ordinateur,
+		"le voile ne couvre qu'un mobile en portrait (360×640) : ni en paysage (844×390), ni sans fenêtre, ni sur un ordinateur (%s)" % [vus])
+	_check(voile.layer > 9 and voile.layer < params.couche_crt.layer and fond.mouse_filter == Control.MOUSE_FILTER_IGNORE
+		and texte.mouse_filter == Control.MOUSE_FILTER_IGNORE and tr(texte.text) == "Tourne ton téléphone" and not paused,
+		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter ni mettre en pause" % voile.layer)
+	params.actualiser_voile(Vector2i(844, 390))
 	params.mobile = false
 	params.plein_ecran_demande = false
 
