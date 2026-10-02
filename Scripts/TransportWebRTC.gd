@@ -42,9 +42,12 @@ extends Transport
 ## `?relais=1` dans l'adresse de la page : le relais TURN seulement (`iceTransportPolicy: "relay"`,
 ## spec §10, diagnostic de l'essai réel).
 
-## Le réglage de projet de l'adresse du Worker (spec §11), et sa valeur sans réglage : `wrangler dev`.
+## Le réglage de projet de l'adresse du Worker (spec §11, sans chemin : les routes portent la version du
+## protocole, `/v1/…`) : le Worker déployé (`wss://`) ; dans l'export « Web pilote » du test de bout en bout,
+## `wrangler dev` sur ce poste (sa fonctionnalité `pilote` choisit `lelion/signalisation/url.pilote`).
+## Sans réglage, aucune adresse : la signalisation ne s'ouvre pas (ERR_CANT_CONNECT).
 const REGLAGE_URL := "lelion/signalisation/url"
-const URL_SIGNALISATION := "ws://localhost:8787"
+const URL_SIGNALISATION := ""
 const CHEMIN_CREER := "/v1/creer"
 const CHEMIN_REJOINDRE := "/v1/rejoindre/"
 ## L'identifiant de pair de l'hôte (`create_server`), celui que la salle donne à l'hôte.
@@ -156,9 +159,8 @@ func heberger() -> Error:
 	var erreur := pair_hote.create_server(CANAUX)
 	if erreur != OK:
 		return erreur
-	erreur = _ouvrir_socket(url_signalisation() + CHEMIN_CREER)
-	if erreur != OK:
-		return erreur
+	if _ouvrir_signalisation(CHEMIN_CREER) != OK:
+		return ERR_CANT_CONNECT
 	_hote = true
 	_poser_pair(pair_hote)
 	_demarrer()
@@ -166,13 +168,13 @@ func heberger() -> Error:
 
 
 ## Un code qui n'est pas un code de salle (`CodeSalle.valide`, déjà normalisé), l'adresse `ip:port` d'un
-## hôte ENet comprise : ERR_INVALID_PARAMETER, sans rien tenter.
+## hôte ENet comprise : ERR_INVALID_PARAMETER, sans rien tenter. Une signalisation qui ne peut même pas
+## s'ouvrir : ERR_CANT_CONNECT (`_ouvrir_signalisation`), comme pour `heberger()`.
 func rejoindre(code: String) -> Error:
 	if not CodeSalle.valide(code):
 		return ERR_INVALID_PARAMETER
-	var erreur := _ouvrir_socket(url_signalisation() + CHEMIN_REJOINDRE + code)
-	if erreur != OK:
-		return erreur
+	if _ouvrir_signalisation(CHEMIN_REJOINDRE + code) != OK:
+		return ERR_CANT_CONNECT
 	_hote = false
 	_demarrer()
 	return OK
@@ -238,9 +240,13 @@ func servir() -> bool:
 	return _actif or _pair != null
 
 
-## L'adresse du Worker (le réglage REGLAGE_URL, URL_SIGNALISATION sans lui), sans « / » final.
+## L'adresse du Worker (le réglage REGLAGE_URL, URL_SIGNALISATION sans lui), sans espaces ni « / » final. Lu
+## avec ses variantes (`get_setting_with_override`) : `get_setting` ignore `lelion/signalisation/url.pilote`, et
+## l'export « Web pilote » parlerait au Worker déployé (vu en phase 5).
 static func url_signalisation() -> String:
-	return str(ProjectSettings.get_setting(REGLAGE_URL, URL_SIGNALISATION)).trim_suffix("/")
+	if not ProjectSettings.has_setting(REGLAGE_URL):
+		return URL_SIGNALISATION
+	return str(ProjectSettings.get_setting_with_override(REGLAGE_URL)).strip_edges().trim_suffix("/")
 
 
 ## Vrai si la partie recherche d'une adresse (`location.search`) porte `relais=1`.
@@ -411,6 +417,22 @@ func _vider_file(maintenant: int) -> void:
 ## Met `message` en file (JSON, ses entiers écrits en entiers).
 func _envoyer(message: Dictionary) -> void:
 	_file.append(JSON.stringify(message))
+
+
+## Ouvre la socket de signalisation vers `chemin` du Worker (`url_signalisation`). Sans adresse, ou si la
+## socket ne peut même pas s'ouvrir (`connect_to_url` refuse d'emblée : une adresse mal formée ; sur le Web, un
+## `ws://` depuis une page `https://`, le contenu mixte) : ERR_CANT_CONNECT, que l'écran En ligne dit « Service
+## de connexion indisponible » (spec §9), rien d'ouvert, la raison au journal.
+func _ouvrir_signalisation(chemin: String) -> Error:
+	var base := url_signalisation()
+	if base.is_empty():
+		push_warning("Signalisation : aucune adresse (réglage %s)" % REGLAGE_URL)
+		return ERR_CANT_CONNECT
+	var erreur := _ouvrir_socket(base + chemin)
+	if erreur != OK:
+		push_warning("Signalisation : %s ne s'ouvre pas (erreur %d)" % [base + chemin, erreur])
+		return ERR_CANT_CONNECT
+	return OK
 
 
 func _demarrer() -> void:
