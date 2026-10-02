@@ -85,7 +85,8 @@ gamepad, with the solo controls; Esc opens a local menu that does not pause the 
 
 Online play runs in the browser (WebRTC, the host's browser being authoritative): **Create a game**
 gives a room code (`K7Q-2XM`) and **Copy link**; the others open the link, pick a name and join. It
-needs the signalling Worker (`signalisation/`, deployed with the page in a later phase); locally,
+needs the signalling Worker (`signalisation/`, deployed with the page in a later phase); locally, after
+`npm ci` in `signalisation/` (and in `tests/web/` for the end-to-end test below),
 `npm --prefix signalisation run dev` serves it on `ws://localhost:8787` (the `lelion/signalisation/url`
 project setting), and the Web export must be served from `http://localhost:<port>` (not `127.0.0.1`).
 From the editor (`godot .`), desktop builds play over ENet instead: **Multiplayer** opens the Online
