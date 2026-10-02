@@ -13,7 +13,9 @@ export default defineConfig({
 	workers: 1,
 	fullyParallel: false,
 	retries: 0,
-	timeout: 180_000,
+	// Un test : 1 min 30 à 1 min 50 mesurés pour le mobile bridé à 1,5 CPU (2 à 4 images par seconde) ; de la marge
+	// pour une CI plus lente encore.
+	timeout: 300_000,
 	expect: { timeout: 30_000 },
 	reporter: [["list"], ["html", { open: "never" }]],
 	use: {

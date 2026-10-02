@@ -2210,8 +2210,21 @@ func _tester_mobile(params: Node) -> void:
 	_check(vus == {Vector2i(360, 640): true, Vector2i(844, 390): false, Vector2i(0, 0): false} and not portrait_ordinateur,
 		"le voile ne couvre qu'un mobile en portrait (360×640) : ni en paysage (844×390), ni sans fenêtre, ni sur un ordinateur (%s)" % [vus])
 	_check(voile.layer > 9 and voile.layer < params.couche_crt.layer and fond.mouse_filter == Control.MOUSE_FILTER_IGNORE
-		and texte.mouse_filter == Control.MOUSE_FILTER_IGNORE and tr(texte.text) == "Tourne ton téléphone" and not paused,
-		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter ni mettre en pause" % voile.layer)
+		and texte.mouse_filter == Control.MOUSE_FILTER_IGNORE and tr(texte.text) == "Tourne ton téléphone",
+		"« Tourne ton téléphone » par-dessus les écrans (couche %d : contrôles tactiles 6, Résultats 8, menu 9), sous le CRT, sans rien intercepter" % voile.layer)
+	# Le voile suit la fenêtre à chaque image (`_process`) : une taille neuve le relit (ici, sans fenêtre, 0×0 :
+	# plus de voile)
+	params._taille_fenetre = Vector2i(-1, -1)
+	var avant_image: bool = voile.visible
+	await process_frame
+	_check(avant_image and not voile.visible and params._taille_fenetre == DisplayServer.window_get_size(),
+		"à l'image suivante, le voile suit la taille de la fenêtre (%s) : sans fenêtre, plus de voile" % [DisplayServer.window_get_size()])
+	# Les textes du tactile, en anglais
+	params.definir_langue("en")
+	var anglais := [tr("VOILE_PORTRAIT"), tr("TACTILE_PRET"), tr("SALON_PLEIN_ECRAN"), tr("SALON_AIDE_TACTILE")]
+	params.definir_langue("fr")
+	_check(anglais == ["Turn your phone sideways", "READY", "Full screen", "Arrows: your color   ·   READY: ready or not"],
+		"les textes du tactile en anglais (%s)" % [anglais])
 	params.actualiser_voile(Vector2i(844, 390))
 	await _tester_tactile_mobile(params)
 	await _tester_en_ligne_mobile(params)
