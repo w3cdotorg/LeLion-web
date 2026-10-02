@@ -134,11 +134,15 @@ retour au titre ne rouvre pas l'écran En ligne).
 
 ## 5. En jeu
 
-- **Canaux** : canal 0 en non fiable (commandes, états, battement : `unreliable_lifetime` d'environ
-  100 ms, 1 seul envoi), canal 1 fiable et ordonné (tampons, territoire, fin, lancement, table de
-  relance : `CANAL_ORDONNE`, inchangé), configuré à la création du pair (`create_server` /
-  `create_client` avec un canal fiable en plus des canaux par défaut). Le fiable du canal 0 (poignée
-  de main, table du salon) reste sur le canal fiable par défaut.
+- **Canaux** : canal 0 en non fiable (commandes, états, battement : partiellement fiable, un paquet
+  perdu renvoyé pendant 100 ms au plus, `unreliable_lifetime`, puis abandonné), canal 1 fiable et
+  ordonné (tampons, territoire, fin, lancement, table de relance : `CANAL_ORDONNE`, inchangé),
+  configuré à la création du pair (`create_server` / `create_client` avec un canal fiable en plus des
+  canaux par défaut). Le fiable du canal 0 (poignée de main, table du salon) reste sur le canal fiable
+  par défaut. Phase 7 : Godot 4.7.2 passe la durée de vie au navigateur sous le nom `maxPacketLifetime`,
+  que Chromium et Firefox ignorent (le standard dit `maxPacketLifeTime`) : ses canaux non fiables y
+  étaient fiables, chaque paquet perdu renvoyé jusqu'à son arrivée ; `TransportWebRTC` corrige le nom
+  (une fois par page), le test de bout en bout lit 100 ms sur chaque canal non fiable.
 - **Redondance des commandes**, prédiction du lion local, interpolation des lions distants : inchangées.
   Le banc de la prédiction gagne un **profil mobile** (150 ms de latence, 60 ms de gigue, 8 % de
   pertes) ; `InterpolationLion.RETARD` (6 ticks aujourd'hui) et les seuils de `PredictionLocale` ne
@@ -152,6 +156,11 @@ retour au titre ne rouvre pas l'écran En ligne).
   - l'hôte caché fige le jeu de tous : le salon lui affiche « Garde cet onglet au premier plan
     pendant la partie. » ; 10 s de silence de l'hôte donnent aux clients « L'hôte a quitté la
     partie » (retour à l'écran En ligne depuis le salon, au titre depuis une manche, comme au LAN).
+  - Tel que construit (phase 7) : un poste sait qu'il a gelé (plus aucune image depuis plus que le
+    silence toléré, 10 s, 30 s au chargement) ; une perte de l'hôte constatée avant sa première image
+    (la fermeture de son pair, relevée avec les paquets) ou dans les 2 s qui la suivent (le silence de
+    l'hôte) est la sienne : « Tu as été déconnecté », puis l'écran En ligne, depuis le salon comme depuis
+    une manche. La consigne de l'hôte est en haut de son salon, sur ordinateur.
 - **Départ volontaire** : un message fiable « je pars » puis fermeture du pair après son envoi (au
   plus 1 s) ; l'autre côté le voit parti tout de suite, sans attendre les 10 s.
 - **Pause** : aucune en réseau (inchangé).
@@ -247,6 +256,19 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   un joueur : un exclu peut revenir avec le code, et l'hôte l'exclut à nouveau (§13).
 - Vie privée : aucun compte, rien de stocké. Cloudflare voit les IP le temps de la signalisation ;
   hôte et client voient l'IP l'un de l'autre, sauf connexion par le TURN. Le README le dit.
+- Tel que construit (phase 7) : un seau de jetons par client chez l'hôte (`LimiteDebit`), à l'horloge
+  de l'hôte (pas à ses ticks physiques : un hôte lent jetterait les paquets d'un client qui joue, vu
+  sous Firefox en CI) : 2 paquets de commandes par tick (120 par seconde), 120 d'un coup (deux secondes
+  d'un client : un hôte figé ne jette rien) ; 10 demandes de salon par seconde, 10 d'un coup.
+  L'excédent est jeté sans réponse et compté, un avertissement au premier rejet ; personne n'est
+  déconnecté pour autant. Pseudos : aussi les autres caractères de mise en forme (catégorie Cf
+  d'Unicode : U+00AD, U+061C, U+180E, U+FFF9 à U+FFFB, les étiquettes…) et les lettres vides du coréen,
+  nettoyés avant la coupe à 12, avec les espaces Unicode au bord ; un pseudo qui ne laisse rien de visible
+  (que des espaces, des sélecteurs de variante ou des marques combinantes) devient « Joueur N » ; aucun `RichTextLabel` dans le jeu, et chaque étiquette de pseudo (cartes
+  du salon, HUD, Résultats, lion) ne se traduit jamais d'elle-même. Exclusion : la croix se clique à la
+  souris (ou au doigt), ni le clavier ni la manette ne l'atteignent ; au salon seulement ; l'annonce
+  fiable porte sa raison (`_recevoir_exclusion(par_l_hote)`, version 0.21), l'exclu part de lui-même et
+  l'hôte le libère au plus tard 2 s après (une annonce retardée par une 4G arrive avant la fermeture).
 
 ## 9. Gestion des erreurs
 
@@ -289,11 +311,16 @@ compris) et 844×390 (paysage mobile) en plus du 16:9 desktop.
   console), départ de l'hôte vu par les autres avant les 10 s de silence ; sous WebKit, *Copier le lien*
   sous un vrai clic ; un mobile émulé par Chromium (Android en paysage) rejoint un hôte de bureau par le
   lien et joue au doigt (Rejoindre, la couleur, PRÊT, le stick et VOMIR : de vrais touchers), voit le
-  voile en portrait (phase 6). L'exclusion d'un joueur s'y ajoute avec elle (phase 7). Le TURN ne se teste pas en
+  voile en portrait (phase 6). Phase 7 : l'hôte exclut un joueur d'un vrai clic sur sa croix, l'exclu lit
+  son message puis revient avec le code ; les lions se croisent (chocs, étourdissements, le même bilan
+  partout) ; le mobile gèle 12 s (la page ne rend plus la main) et lit « Tu as été déconnecté » ; chaque
+  canal non fiable a sa durée de vie de 100 ms ; une exception JavaScript d'une page (`pageerror`), ou un
+  client limité par l'hôte, fait échouer le test. Le TURN ne se teste pas en
   local.
 - **Essai réel** : `docs/essai-en-ligne.md` (hôte sur ordinateur, au moins un mobile en 4G, un joueur
   dans un autre foyer ; une manche avec le relais TURN forcé par `?relais=1`, paramètre de
-  diagnostic qui pose `iceTransportPolicy: "relay"`). Ses réponses font la phase 6 bis.
+  diagnostic qui pose `iceTransportPolicy: "relay"`). Ses réponses font la phase 7 bis (feuille de
+  route).
 
 ## 11. Build, déploiement et prérequis
 

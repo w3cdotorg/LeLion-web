@@ -93,7 +93,9 @@ Phones (Android, iOS) join only, by the link: no **Create a game**; lifting a fi
 screen, until it is granted (three tries at most; a computer has a **Full screen** button in the lobby).
 In the lobby, the arrows pick a color and **READY** gets ready; in the round, the stick and **PUKE**; the
 Results screen and the online pause menu have finger-sized buttons. Held upright, a phone shows « Turn
-your phone sideways » over the game, which keeps running.
+your phone sideways » over the game, which keeps running. The host can remove a player from the lobby (the
+cross on their card). How to host, invite and join, what to keep in mind (the host's tab, privacy) and what
+each message means: [Jouer en ligne](#jouer-en-ligne), below, in French.
 From the editor (`godot .`), desktop builds play over ENet instead: **Multiplayer** opens the Online
 screen, where one player creates a game and the others join it with the host's address as the code: the host's local IP
 address, as their system shows it (network settings, `ipconfig` on Windows, `ip a` on Linux),
@@ -101,6 +103,72 @@ followed by `:7777` (`192.168.1.20:7777`). The host's lobby shows `127.0.0.1:777
 on the host's own computer.
 Ready-made Windows, macOS and Linux builds of the LAN version are on
 [LeLion-multi's releases](https://github.com/w3cdotorg/LeLion-multi/releases/latest) (version 0.19).
+
+## Jouer en ligne
+
+Le jeu en ligne se joue dans le navigateur, sans rien installer, de 2 à 6 joueurs, chacun chez soi. Il
+sera publié sur <https://w3cdotorg.github.io/LeLion-web/> avec sa signalisation (le déploiement est la
+prochaine étape) ; d'ici là, il se joue en local, comme le décrit la section précédente.
+
+**Créer une partie** (sur un ordinateur : un téléphone ne fait que rejoindre) : *Multijoueur* sur l'écran
+titre, choisis ton pseudo (12 caractères au plus), puis *Créer une partie*. Le salon s'ouvre avec le code
+de la partie (`K7Q-2XM`) et *Copier le lien*.
+
+**Inviter** : envoie le lien (`https://w3cdotorg.github.io/LeLion-web/?salle=K7Q2XM`) par message, ou
+dicte le code. Il n'y a pas de liste des parties : seuls ceux qui ont le lien ou le code peuvent venir.
+
+**Rejoindre** : ouvre le lien ; l'écran *En ligne* s'ouvre, le code déjà rempli ; choisis ton pseudo, puis
+*Rejoindre*. Sans le lien, *Multijoueur*, puis tape le code (sans 0, O, 1, I ni L) et *Rejoindre*.
+
+**Au salon**, chacun choisit sa couleur (Gauche/Droite) et se dit prêt (Espace) ; l'hôte choisit le
+niveau (Haut/Bas) et lance la partie (*Démarrer la partie*, Tab) quand tout le monde est prêt. L'hôte peut
+exclure un joueur : la croix sur sa carte (à la souris). L'exclu lit « L'hôte t'a exclu de la partie. ».
+Sans compte, rien ne l'empêche de revenir avec le code : l'hôte l'exclut de nouveau, ou crée une nouvelle
+partie (un nouveau code) et n'envoie le lien qu'aux bons joueurs.
+
+**Hôte : garde l'onglet du jeu au premier plan.** Le navigateur fige un onglet caché ou une fenêtre
+réduite : le jeu de tout le monde s'arrête avec lui, et 10 s plus tard les autres voient « L'hôte a quitté
+la partie ». Le salon de l'hôte le rappelle en haut de l'écran.
+
+**Joueurs** : un onglet caché ou un téléphone verrouillé plus de 10 s, et l'hôte te déclare parti (ton lion
+disparaît, tes cellules restent) ; à ton retour, « Tu as été déconnecté », puis l'écran *En ligne* : rouvre
+le lien pour revenir au salon (pas en pleine manche : on attend la suivante au salon).
+
+**Sur un téléphone** (Android, iPhone) : tiens-le à l'horizontale (en portrait, « Tourne ton téléphone »
+couvre le jeu, qui continue) ; le plein écran se demande au premier doigt levé ; au salon, les flèches
+choisissent ta couleur et **PRÊT** te dit prêt ; en manche, le stick (pose le pouce sur la moitié gauche) et
+**VOMIR**. Coller un code dans un champ marche mal sur un téléphone : ouvre plutôt le lien.
+
+**Vie privée** : aucun compte, aucun serveur de jeu ; seuls ton pseudo et tes réglages sont gardés, dans
+ton navigateur. Cloudflare, qui fait tourner le service de connexion (un Worker), voit l'adresse IP de
+chaque joueur le temps d'entrer dans la partie : le service s'en sert pour limiter les créations et les
+arrivées par minute, sans l'écrire dans ses journaux. Ensuite les navigateurs se parlent directement
+(WebRTC) : l'hôte et chaque joueur voient l'adresse IP l'un de l'autre, sauf quand la
+connexion passe par le relais de Cloudflare (TURN : les réseaux trop fermés, ou `?relais=1` ajouté au
+lien, un réglage de diagnostic qui l'impose). Le pseudo des autres ne s'affiche que comme du texte : ni
+mise en forme, ni caractères invisibles.
+
+**Dépannage**, message par message :
+
+| Message | Ce qui se passe | Que faire |
+|---|---|---|
+| « Un code fait 6 caractères (ex. K7Q-2XM). » | Le code tapé n'a pas 6 caractères de l'alphabet du jeu. | Recopie-le, ou ouvre le lien. |
+| « Un code n'a ni 0, ni O, ni 1, ni I, ni L (ex. K7Q-2XM). » | Un caractère qu'on confond s'est glissé dans le code. | Relis-le : ce sont sans doute un Q, un D, un 7 ou un 2. |
+| « Aucune partie avec ce code. » | La partie n'existe pas, ou plus (l'hôte est parti, la salle a fermé). | Demande un nouveau lien à l'hôte. |
+| « Service de connexion indisponible, réessaie dans un instant. » | Le service de connexion ne répond pas, ou refuse pour un moment (trop de tentatives depuis la même adresse IP). | Réessaie dans une minute. |
+| « Trop de parties en ce moment, réessaie plus tard. » | Le quota gratuit du service de connexion est atteint pour aujourd'hui. | Réessaie plus tard (le lendemain au pire). |
+| « Connexion impossible avec l'hôte (réseau trop restrictif ?) » | Les deux navigateurs n'ont pas pu se relier en 15 s. | Réessaie ; sinon change de réseau (la 4G plutôt qu'un Wi-Fi d'entreprise ou d'école), ou ajoute `&relais=1` au lien. |
+| « Version différente de l'hôte (…) » | L'hôte et toi n'avez pas la même version du jeu. | Recharge la page (l'un des deux a une ancienne version en cache). |
+| « La partie est complète. » | Six joueurs au plus (ou les places que l'hôte a choisies). | Attends qu'une place se libère. |
+| « Une manche est en cours : réessaie à la fin. » | On n'arrive pas en pleine manche. | Rejoins quand l'hôte revient au salon. |
+| « L'hôte t'a exclu de la partie. » | L'hôte t'a retiré du salon. | Vois avec lui. |
+| « Exclu : ta partie a mis trop de temps à charger. » | Ta manche n'a pas fini de charger à temps (20 s) : la partie est partie sans toi. | Rejoins au salon suivant ; ferme les autres onglets sur un appareil lent. |
+| « L'hôte a quitté la partie » | L'hôte est parti, ou son onglet est caché depuis 10 s. | Attends son nouveau lien. |
+| « Tu as été déconnecté » | Ton onglet était caché (ou ton téléphone verrouillé) plus de 10 s : l'hôte t'a déclaré parti. | Rouvre le lien. |
+| « Salle expirée : crée une nouvelle partie pour inviter » (hôte) | Une salle vit 4 h : la partie continue, mais plus personne ne peut arriver. | Crée une nouvelle partie pour inviter. |
+| « Invitations coupées : crée une nouvelle partie pour inviter » (hôte) | Le lien avec le service de connexion s'est coupé : la partie continue, sans nouvelles arrivées. | Crée une nouvelle partie pour inviter. |
+
+Pour l'essai réel, à plusieurs foyers et sur téléphone : [docs/essai-en-ligne.md](docs/essai-en-ligne.md).
 
 ## Running the game
 
@@ -124,7 +192,8 @@ Scripts/    one script per scene; the autoloads GameState (game, players, levels
             (a networked round); PiloteWeb (the end-to-end test driver, inert outside the "Web pilote" export);
             pure logic: Joueur (a player), Commandes (inputs), Regles / ReglesSolo / ReglesBataille (rules of each
             mode), Territoire (cell ownership), Peinture (deterministic stamps), EtatLion, InterpolationLion and
-            PredictionLocale (lions over the network), BilanManche (end of a round), PlacementPseudos; the lion's
+            PredictionLocale (lions over the network), BilanManche (end of a round), PlacementPseudos, LimiteDebit
+            (the host's rate limit on each client); the lion's
             parts DeplacementLion, PareChocs, GerbeLion; Pilote (attract-mode autopilot)
 Shaders/    Ville.gdshader (paint mask on the skyline), Lion.gdshader (mane tint), Crt.gdshader (optional CRT filter)
 Assets/     Sprites (used), Sons (generated), Traductions (CSV → .translation), src (reference material, ignored by Godot)
@@ -161,8 +230,10 @@ godot --headless --fixed-fps 60 --script tests/trace_lions.gd      # the lions' 
 The network test needs GNU `timeout` (coreutils) and takes about three minutes; run one suite at
 a time (they share local ports).
 
-The end-to-end test plays a real online round in three browser pages (Chromium and Firefox; WebKit
-checks **Copy link**; an emulated Android phone, in Chromium, joins a desktop host and plays by touch),
+The end-to-end test plays a real online round in three browser pages (Chromium and Firefox: the host removes a
+player, who comes back with the code, and the lions bump into each other; WebKit checks **Copy link**; an
+emulated Android phone, in Chromium, joins a desktop host, plays by touch, then freezes for 12 s and is told
+it was disconnected),
 on the "Web pilote" export and a local Worker that it starts itself (`python3` serves the export on
 port 8060, `wrangler dev` listens on 8787):
 
