@@ -9,21 +9,33 @@ const [adresse, refusee = "http://localhost:8060"] = process.argv.slice(2);
 const PAGE = "https://w3cdotorg.github.io";
 const DELAI_MS = 10_000;
 
+/** Le premier message de la socket, en objet ; rejette (un message pour `::error::`) si la socket ne s'ouvre
+ * pas, se ferme sans rien dire, se tait `DELAI_MS` ou envoie autre chose que du JSON. La première issue
+ * l'emporte : la fermeture qui suit un message, une erreur ou le délai ne change plus rien. */
 function premierMessage(url, origine) {
 	return new Promise((resoudre, rejeter) => {
 		const ws = new WebSocket(url, { headers: { Origin: origine } });
+		const ou = `${url} (Origin ${origine})`;
 		const minuterie = setTimeout(() => {
 			ws.close();
-			rejeter(new Error(`${url} (Origin ${origine}) : aucun message en ${DELAI_MS} ms`));
+			rejeter(new Error(`${ou} : aucun message en ${DELAI_MS} ms`));
 		}, DELAI_MS);
 		ws.addEventListener("message", (evenement) => {
 			clearTimeout(minuterie);
 			ws.close(1000, "sonde");
-			resoudre(JSON.parse(evenement.data));
+			try {
+				resoudre(JSON.parse(evenement.data));
+			} catch {
+				rejeter(new Error(`${ou} : réponse illisible (pas du JSON) : ${String(evenement.data).slice(0, 200)}`));
+			}
 		});
 		ws.addEventListener("error", () => {
 			clearTimeout(minuterie);
-			rejeter(new Error(`${url} (Origin ${origine}) : connexion impossible`));
+			rejeter(new Error(`${ou} : connexion impossible`));
+		});
+		ws.addEventListener("close", (evenement) => {
+			clearTimeout(minuterie);
+			rejeter(new Error(`${ou} : fermée sans message (code ${evenement.code}${evenement.reason ? `, « ${evenement.reason} »` : ""})`));
 		});
 	});
 }
