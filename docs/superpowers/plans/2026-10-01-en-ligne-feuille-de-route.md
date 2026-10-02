@@ -192,3 +192,21 @@ Légende : ➕ création, ✏️ modification, ➖ suppression. ◉ = contrôle 
 - La phase 6 ne change ni le protocole ni la surface d'attaque.
 - Fiche de l'essai réel : plein écran Android au relâchement ; premier toucher sur le champ pseudo (clavier et plein écran en même temps) ; lisibilité des textes des Résultats (~10 px CSS) ; zone morte effective du joystick (0,5) ; appareil lent ; Retour à 24 px du coin ; contraste du libellé PRÊT/VOMIR (rose sur anneau rose) ; une tranche de la rangée du pseudo au bord haut quand le clavier est ouvert ; un hôte desktop tactile voit les flèches du salon ; le réglage Plein écran ne reflète pas le mode du téléphone ; position du joystick codée en dur dans le pilote.
 - « Tu as été déconnecté » et « Garde cet onglet au premier plan ».
+
+### Notes de la revue de la phase 7 (pour les phases 5 et 7 bis)
+
+**Phase 5** :
+
+- Déployer depuis le tag v0.21.
+- Vérifier si les journaux d'invocation de Workers Logs enregistrent l'IP du client ; les couper, ou garder le README en accord.
+- Mettre à jour l'URL et le paragraphe de vie privée du README.
+- Le correctif des canaux part aussi dans le préréglage « Web » ordinaire (il n'est pas derrière le pilote) : vérifier à la main la durée de vie d'un canal sur la page déployée.
+
+**Phase 7 bis** :
+
+- Les canaux du navigateur jettent désormais vraiment des paquets : surveiller « autres lions saccadés » et `RETARD`.
+- iOS peut recharger une page passée en arrière-plan au lieu d'afficher « Tu as été déconnecté ».
+- `_battement`, `_scene_chargee` et les paquets de poignée de main ne sont pas limités en débit (seulement bornés par le transport).
+- Signaler en amont à Godot le nom `maxPacketLifetime` (le correctif reste idempotent si Godot renomme la clé).
+- Détecter les marques combinantes de façon générique (catégories Mn/Me).
+- Mineurs reportés : seau créé pour l'id 1 chez un client ; gel de 10-30 s pendant le chargement (« L'hôte a quitté », acceptable) ; consigne visible pendant le changement de scène ; `cartes_titres` peut-être vide (vérification vide) ; pages non synchronisées avant la rencontre.
