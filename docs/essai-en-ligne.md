@@ -123,8 +123,8 @@ Sur chaque téléphone, noter Android ou iPhone, et le navigateur.
   tape s'écrit dans le champ, Entrée ferme le clavier (dans le code : *Rejoindre*), un toucher ailleurs
   aussi : oui / non : ______
 - [ ] Le code a un clavier en majuscules, sans correction automatique : oui / non
-- [ ] Premier toucher sur le champ du pseudo : le clavier s'ouvre **et** le plein écran se demande en même
-  temps (Android) ; ça se passe bien : oui / non (le clavier se ferme, le champ disparaît…) : ______
+- [ ] Android : le toucher d'un champ ouvre le clavier sans demander le plein écran ; le plein écran vient au
+  toucher suivant hors d'un champ (au salon, si l'on rejoint par Entrée) : oui / non : ______
 - [ ] Clavier ouvert : la rangée du champ remonte en haut de l'écran ; une tranche de la rangée du pseudo
   reste au bord haut : gênant / pas gênant
 - [ ] Le voile « Tourne ton téléphone » en portrait, et le jeu qui reprend en paysage : oui / non
@@ -146,7 +146,6 @@ Sur chaque téléphone, noter Android ou iPhone, et le navigateur.
 | Réponse | Ce que fera la phase 7 bis |
 |---|---|
 | Plein écran Android pas obtenu | `Parametres` (au relâchement d'un toucher, `TENTATIVES_PLEIN_ECRAN` : 3). |
-| Clavier et plein écran se gênent | Ne pas demander le plein écran sur le toucher d'un champ (`Parametres._input`). |
 | Le clavier ne s'ouvre pas, ou le champ de la page est mal placé | `SaisieWeb` (la place publiée, `zone` et `edition`, et le `touchend` de la page). |
 | Tranche du pseudo gênante | `EcranEnLigne.MARGE_CLAVIER` (40 px). |
 | Retour mal placé | Sa marge (24 px, `Scenes/Salon.tscn`, `Scenes/EcranEnLigne.tscn`) ; la zone sûre (`viewport-fit=cover`, alors revoir les marges). |

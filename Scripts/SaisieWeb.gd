@@ -2,15 +2,16 @@ class_name SaisieWeb
 extends Node
 ## La saisie au doigt d'un mobile, dans l'export Web (spec §6) : un vrai champ `<input>` de la page, posé
 ## par-dessus un LineEdit du jeu quand on le touche. Le clavier du téléphone ne s'ouvre que pour un champ
-## activé pendant le geste lui-même (Safari sur iPhone surtout) ; Godot traite ses touchers à l'image
-## suivante, trop tard : le clavier virtuel de Godot (`html/experimental_virtual_keyboard`) ne s'y ouvre pas.
+## activé pendant le geste lui-même (Safari sur iPhone surtout) ; le clavier virtuel de Godot
+## (`html/experimental_virtual_keyboard`) n'active pas le sien dans le geste, et ne s'y ouvre pas.
 ##
 ## Le partage du travail : ce nœud publie à la page, à chaque changement, la place de chaque champ branché
 ## (`brancher`) visible et permis (`actif`), en px du canevas : celle où le toucher le trouve, et celle où
 ## il sera en édition (sa rangée remontée au-dessus du clavier, `deplacement`). La page, au `touchend` d'un
 ## toucher sur un champ, montre et active son `<input>` à la place d'édition, dans le geste ; elle lui rend
 ## ce qui s'y passe (`ouvert`, `texte`, `valide` à Entrée, `ferme` quand le champ perd la main : un toucher
-## ailleurs, que Godot prend pour lui), relevé à chaque image. Le LineEdit suit le texte à chaque frappe,
+## ailleurs, que Godot prend pour lui), relevé à chaque image ; `surChamp()` dit si le doigt posé l'a été sur
+## un champ (`Parametres` n'y demande pas le plein écran). Le LineEdit suit le texte à chaque frappe,
 ## et Entrée émet son `text_submitted`, comme au clavier. Les LineEdit branchés ne s'éditent jamais
 ## eux-mêmes (`editable` faux, à l'écran qui les tient : sinon leur édition rendrait la main au canevas et
 ## fermerait le clavier) ; ils en gardent l'apparence.
@@ -71,33 +72,41 @@ const SCRIPT_PAGE := """
 		entree.enterKeyHint = c.touche_entree;
 		placer(c);
 		entree.style.display = "block";
-		entree.focus();
+		entree.focus({ preventScroll: true });
 		const fin = entree.value.length;
 		entree.setSelectionRange(fin, fin);
 		evenements.push(["ouvert", c.id, entree.value]);
 	};
 	entree.addEventListener("input", () => evenements.push(["texte", ouvert, entree.value]));
 	entree.addEventListener("keydown", (e) => {
-		if (e.key === "Enter") {
+		if (e.key === "Enter" && !e.isComposing) {
 			e.preventDefault();
 			fermer(true);
 		} else if (e.key === "Escape") {
 			fermer(false);
 		}
 	});
-	// Un toucher ailleurs : le `touchstart` de Godot rend la main au canevas.
+	// Un toucher ailleurs ferme le champ (le `touchstart` de Godot rend aussi la main au canevas : `blur`).
 	entree.addEventListener("blur", () => fermer(false));
-	canevas.addEventListener("touchend", (e) => {
-		const t = e.changedTouches[0];
-		if (!t || ouvert) return;
-		for (const c of champs) {
-			const p = css(c.zone);
-			if (t.clientX >= p.x && t.clientX <= p.x + p.l && t.clientY >= p.y && t.clientY <= p.y + p.h) {
-				ouvrir(c);
-				return;
-			}
-		}
+	// Le champ sous un toucher, s'il y en a un.
+	const sous = (t) => champs.find((c) => {
+		const p = css(c.zone);
+		return t.clientX >= p.x && t.clientX <= p.x + p.l && t.clientY >= p.y && t.clientY <= p.y + p.h;
 	});
+	// Vrai si le doigt posé l'a été sur un champ : Godot traite le relâchement avant nous (le plein écran de
+	// `Parametres` ne se demande pas pour ce toucher-là), le `touchstart` est toujours vu avant.
+	let surChamp = false;
+	window.addEventListener("touchstart", (e) => {
+		if (e.target !== canevas) return;
+		fermer(false);
+		surChamp = !!(e.changedTouches[0] && sous(e.changedTouches[0]));
+	}, { capture: true });
+	window.addEventListener("touchend", (e) => {
+		const t = e.changedTouches[0];
+		if (e.target !== canevas || !t || ouvert) return;
+		const c = sous(t);
+		if (c) ouvrir(c);
+	}, { capture: true });
 	window.lelionSaisie = {
 		publier(json) {
 			champs = JSON.parse(json);
@@ -109,6 +118,9 @@ const SCRIPT_PAGE := """
 			const e = evenements;
 			evenements = [];
 			return JSON.stringify(e);
+		},
+		surChamp() {
+			return surChamp;
 		},
 		zones() {
 			return champs.map((c) => ({ id: c.id, ...css(c.zone), ouvert: c.id === ouvert }));
